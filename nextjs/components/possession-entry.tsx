@@ -141,7 +141,7 @@ export function PossessionEntry() {
     setTask((prev) => prev.replace(/^> 以下是通过 SearXNG 搜索获取的背景信息\n\n[\s\S]*?\n\n---\n\n/gm, "").trim());
   }, []);
 
-  const canStart = task.trim().length > 0 && judgment.trim().length > 0;
+  const canStart = task.trim().length > 0;
 
   const onStart = async () => {
     if (!canStart || phase !== "input") return;
@@ -586,68 +586,6 @@ export function PossessionEntry() {
                 </div>
               )}
 
-              <div className="border-t pt-3">
-                <button
-                  type="button"
-                  onClick={() => setShowPresetsDialog(true)}
-                  className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <ChevronDown className="h-3.5 w-3.5" />
-                  {presetsTitle}
-                </button>
-              </div>
-
-              <Dialog open={showPresetsDialog} onOpenChange={setShowPresetsDialog}>
-                <DialogContent className="sm:max-w-md">
-                  <DialogHeader>
-                    <DialogTitle>使用者预设</DialogTitle>
-                  </DialogHeader>
-                  <div className="space-y-3">
-                    <div className="relative">
-                      <label className="text-xs font-medium text-muted-foreground">
-                        你的判断 <span className="text-red-500">*</span>
-                      </label>
-                      <Textarea
-                        value={judgment}
-                        onChange={(e) => setJudgment(e.target.value)}
-                        placeholder="对这个问题，你目前的基本判断是什么？"
-                        rows={2}
-                        className="mt-1 resize-none text-sm pr-6"
-                      />
-                      {judgment.trim() && (
-                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 absolute top-2 right-1" />
-                      )}
-                    </div>
-                    <div className="relative">
-                      <label className="text-xs font-medium text-muted-foreground">你的担忧</label>
-                      <Textarea
-                        value={worry}
-                        onChange={(e) => setWorry(e.target.value)}
-                        placeholder="你最担心分析中可能忽略什么？"
-                        rows={2}
-                        className="mt-1 resize-none text-sm pr-6"
-                      />
-                      {worry.trim() && (
-                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 absolute top-2 right-1" />
-                      )}
-                    </div>
-                    <div className="relative">
-                      <label className="text-xs font-medium text-muted-foreground">未知领域</label>
-                      <Textarea
-                        value={unknown}
-                        onChange={(e) => setUnknown(e.target.value)}
-                        placeholder="有哪些你不确定的关键信息或变量？"
-                        rows={2}
-                        className="mt-1 resize-none text-sm pr-6"
-                      />
-                      {unknown.trim() && (
-                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 absolute top-2 right-1" />
-                      )}
-                    </div>
-                  </div>
-                </DialogContent>
-              </Dialog>
-
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
                   <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -672,11 +610,6 @@ export function PossessionEntry() {
                     <Brain className="mr-2 h-5 w-5" />
                     我想问
                   </Button>
-                  {!canStart && task.trim() && !judgment.trim() && (
-                    <p className="text-xs text-amber-600 dark:text-amber-400">
-                      请填写你的判断后再开始
-                    </p>
-                  )}
                 </div>
               </div>
             </div>
