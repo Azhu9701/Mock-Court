@@ -1,0 +1,15 @@
+[package]
+name = "possession"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+foundation = { path = "../foundation" }
+registry = { path = "../registry" }
+ai-gateway = { path = "../ai-gateway" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }

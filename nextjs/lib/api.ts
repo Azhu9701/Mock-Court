@@ -1,0 +1,491 @@
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3096/api/v1";
+
+interface ApiError extends Error {
+  status?: number;
+  url?: string;
+  operation?: string;
+}
+
+interface ApiRequestOptions extends RequestInit {
+  operation?: string;
+}
+
+async function apiRequest<T>(
+  endpoint: string,
+  options: ApiRequestOptions = {}
+): Promise<T> {
+  const { operation, ...fetchOptions } = options;
+  const url = `${API_BASE}${endpoint}`;
+  const opName = operation || endpoint;
+
+  const res = await fetch(url, fetchOptions);
+
+  if (!res.ok) {
+    let errorDetail = res.statusText;
+    try {
+      const errorData = await res.json();
+      errorDetail = errorData.message || errorData.error || errorDetail;
+    } catch { }
+
+    const error = new Error(`API request failed: ${opName} - ${errorDetail}`) as ApiError;
+    error.status = res.status;
+    error.url = url;
+    error.operation = opName;
+    throw error;
+  }
+
+  if (res.status === 204) {
+    return undefined as T;
+  }
+
+  return res.json();
+}
+
+export interface SoulListEntry {
+  name: string;
+  ismism_code: string;
+  field: string;
+  domains: string[];
+  tags: string[];
+  summon_count: number;
+  trigger_keywords: string[];
+  self_declare: string;
+  model: string;
+  compat: string[];
+  incompat: string[];
+}
+
+export interface SoulMatch {
+  entry: SoulListEntry;
+  relevance: number;
+  matched_fields: string[];
+}
+
+export interface SoulProfile {
+  name: string;
+  ismism_code: string;
+  field: string;
+  ontology: string;
+  epistemology: string;
+  teleology: string;
+  domains: string[];
+  tags: string[];
+  exclude_scenarios: string[];
+  summon_prompt: string;
+  summon_count: number;
+  effectiveness: { effective: number; partial: number; invalid: number };
+  created_at: string;
+  updated_at: string;
+  practice_observations: PracticeObservation[];
+  title: string;
+  description: string;
+  voice: string;
+  mind: string;
+  self_declare: string;
+  skills_expertise: string[];
+  model: string;
+  tools: string;
+  trigger_keywords: string[];
+  compat: string[];
+  incompat: string[];
+}
+
+export interface PracticeObservation {
+  date: string;
+  observation: string;
+  revision_type: "Confirmed" | "Modified" | "Overturned";
+}
+
+export type ConferenceEvent =
+  | { type: "soul_token";   soul: string; token: string }
+  | { type: "soul_done";    soul: string }
+  | { type: "soul_error";   soul: string; error: string }
+  | { type: "synthesis_chunk"; content: string }
+  | { type: "synthesis_done" }
+  | { type: "collision";    from: string; to: string; content: string }
+  | { type: "synthesis_started" }
+  | { type: "cost";         llm_calls: number; tokens_used: number; estimated_cost: string }
+  | { type: "done" }
+  | { type: "session_started"; mode: string }
+  | { type: "soul_started"; soul: string }
+  | { type: "system";       message: string }
+  | { type: "error";        message: string; soul?: string }
+
+export interface FailureAlert {
+  soul_name: string;
+  alert_type: "boundary_review" | "suspension";
+}
+
+export interface KnowledgeResult {
+  soul_name: string | null;
+  content_snippet: string;
+  mode: string;
+  task_summary: string;
+  created_at: string;
+  session_id: string;
+}
+
+export async function fetchSouls(): Promise<SoulListEntry[]> {
+  return apiRequest<SoulListEntry[]>('/souls', {
+    next: { revalidate: 60 },
+    operation: 'fetchSouls',
+  });
+}
+
+export async function fetchSoul(name: string): Promise<SoulProfile> {
+  return apiRequest<SoulProfile>(
+    `/souls/${encodeURIComponent(name)}`,
+    { next: { revalidate: 60 }, operation: 'fetchSoul' }
+  );
+}
+
+export async function searchSouls(query: string): Promise<SoulMatch[]> {
+  return apiRequest<SoulMatch[]>(
+    `/souls/search?q=${encodeURIComponent(query)}`,
+    { operation: 'searchSouls' }
+  );
+}
+
+export async function deleteSoul(name: string): Promise<void> {
+  return apiRequest<void>(
+    `/souls/${encodeURIComponent(name)}`,
+    { method: 'DELETE', operation: 'deleteSoul' }
+  );
+}
+
+export async function updateSoul(
+  name: string,
+  data: Record<string, unknown>
+): Promise<void> {
+  return apiRequest<void>(
+    `/souls/${encodeURIComponent(name)}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+      operation: 'updateSoul',
+    }
+  );
+}
+
+export async function createSoul(data: Record<string, unknown>): Promise<void> {
+  return apiRequest<void>('/souls', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+    operation: 'createSoul',
+  });
+}
+
+// ── Analytics ──
+
+export async function fetchSoulEffectiveness(
+  name: string
+): Promise<EffectivenessTrend> {
+  return apiRequest<EffectivenessTrend>(
+    `/analytics/soul-effectiveness/${encodeURIComponent(name)}`,
+    { next: { revalidate: 60 }, operation: 'fetchSoulEffectiveness' }
+  );
+}
+
+export async function fetchIsmismDistribution(): Promise<IsmismStats> {
+  return apiRequest<IsmismStats>('/souls/ismism/distribution', {
+    next: { revalidate: 60 },
+    operation: 'fetchIsmismDistribution',
+  });
+}
+
+export interface SummonStatsResponse {
+  total_calls: number;
+  unique_souls_called: number;
+  total_souls_available: number;
+  by_mode: Record<string, number>;
+  by_soul: SoulCallStats[];
+}
+
+export interface SoulCallStats {
+  soul_name: string;
+  call_count: number;
+  effective_count: number;
+  partial_count: number;
+  invalid_count: number;
+}
+
+export interface SoulAlert {
+  soul_name: string;
+  alert_type: string;
+  detail: string;
+}
+
+export interface BoundaryReview {
+  soul_name: string;
+  effective_rate: number;
+  total_calls: number;
+  threshold: number;
+  recommendation: string;
+}
+
+export interface EffectivenessTrend {
+  soul_name: string;
+  total_calls: number;
+  effective: number;
+  partial: number;
+  invalid: number;
+  effective_rate: number;
+}
+
+export interface IsmismStats {
+  field_distribution: Record<number, number>;
+  ontology_distribution: Record<number, number>;
+  epistemology_distribution: Record<number, number>;
+  teleology_distribution: Record<number, number>;
+  total_souls: number;
+}
+
+export async function fetchSummonStats(): Promise<SummonStatsResponse> {
+  return apiRequest<SummonStatsResponse>('/analytics/summon-stats', {
+    next: { revalidate: 60 },
+    operation: 'fetchSummonStats',
+  });
+}
+
+export async function fetchModeDistribution(): Promise<Record<string, number>> {
+  return apiRequest<Record<string, number>>('/analytics/mode-distribution', {
+    next: { revalidate: 60 },
+    operation: 'fetchModeDistribution',
+  });
+}
+
+export async function fetchUnsummonedAlerts(days = 30): Promise<SoulAlert[]> {
+  return apiRequest<SoulAlert[]>(
+    `/analytics/unsummoned?threshold_days=${days}`,
+    { next: { revalidate: 60 }, operation: 'fetchUnsummonedAlerts' }
+  );
+}
+
+export async function fetchLowEffectiveness(threshold = 0.3): Promise<BoundaryReview[]> {
+  return apiRequest<BoundaryReview[]>(
+    `/analytics/low-effectiveness?threshold=${threshold}`,
+    { next: { revalidate: 60 }, operation: 'fetchLowEffectiveness' }
+  );
+}
+
+export async function fetchAudit(): Promise<FailureAlert[]> {
+  return apiRequest<FailureAlert[]>('/analytics/audit', {
+    next: { revalidate: 60 },
+    operation: 'fetchAudit',
+  });
+}
+
+// ── Sessions ──
+
+export interface SessionSummary {
+  id: string;
+  title: string;
+  mode: string;
+  status: string;
+  created_at: string;
+  message_count: number;
+  soul_count?: number;
+}
+
+export interface SessionDetail {
+  session: {
+    id: string;
+    title: string;
+    mode: string;
+    status: string;
+    created_at: string;
+    updated_at: string;
+  };
+  messages: Message[];
+}
+
+export interface Message {
+  id: string;
+  session_id: string;
+  role: string;
+  soul_name: string | null;
+  content: string;
+  seq: number;
+  created_at: string;
+}
+
+export async function fetchSessions(
+  limit = 50,
+  offset = 0
+): Promise<SessionSummary[]> {
+  return apiRequest<SessionSummary[]>(
+    `/sessions?limit=${limit}&offset=${offset}`,
+    { next: { revalidate: 60 }, operation: 'fetchSessions' }
+  );
+}
+
+export async function fetchSessionDetail(id: string): Promise<SessionDetail> {
+  return apiRequest<SessionDetail>(`/sessions/${id}`, {
+    next: { revalidate: 60 },
+    operation: 'fetchSessionDetail',
+  });
+}
+
+export async function deleteSession(id: string): Promise<void> {
+  return apiRequest<void>(`/sessions/${id}`, {
+    method: 'DELETE',
+    operation: 'deleteSession',
+  });
+}
+
+export async function renameSession(id: string, title: string): Promise<void> {
+  return apiRequest<void>(`/sessions/${id}/rename`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+    operation: 'renameSession',
+  });
+}
+
+// ── Possess ──
+
+export interface AnalyzeResponse {
+  entry_type: string;
+  matched_souls: { name: string; field: string; ismism_code: string; rationale: string }[];
+  recommended_mode: string;
+  review: { verdict: string; checks: string[]; notes: string; reviewer: string };
+}
+
+export async function analyzeTask(task: string): Promise<AnalyzeResponse> {
+  return apiRequest<AnalyzeResponse>('/possess/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task }),
+    operation: 'analyzeTask',
+  });
+}
+
+export interface StartPossessionResponse {
+  session_id: string;
+  ws_url: string;
+}
+
+export async function startPossession(params: {
+  task: string;
+  mode?: string;
+  souls: string[];
+}): Promise<StartPossessionResponse> {
+  return apiRequest<StartPossessionResponse>('/possess', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+    operation: 'startPossession',
+  });
+}
+
+export async function exportSessionMarkdown(id: string, title: string): Promise<void> {
+  const url = `${API_BASE}/sessions/${id}/export/markdown`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const error = new Error(`Export failed: ${res.statusText}`) as ApiError;
+    error.status = res.status;
+    error.url = url;
+    error.operation = 'exportSessionMarkdown';
+    throw error;
+  }
+  const blob = await res.blob();
+  const downloadUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = downloadUrl;
+  a.download = `${title}.md`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(downloadUrl);
+}
+
+// ── Knowledge ──
+
+export async function searchKnowledge(query: string, limit = 20): Promise<KnowledgeResult[]> {
+  return apiRequest<KnowledgeResult[]>(
+    `/knowledge/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+    { operation: 'searchKnowledge' }
+  );
+}
+
+export async function rebuildFts(): Promise<{ indexed: number }> {
+  return apiRequest<{ indexed: number }>('/knowledge/rebuild', {
+    method: 'POST',
+    operation: 'rebuildFts',
+  });
+}
+
+// ── Synthesis (structured output §9.5) ──
+
+export interface SynthesisOutput {
+  consensus: ConsensusItem[];
+  divergence: DivergenceItem[];
+  blind_spots: BlindSpotItem[];
+  principal_contradiction: Contradiction;
+  action_program: ActionItem[];
+}
+
+export interface ConsensusItem {
+  point: string;
+  shared_by: string[];
+}
+
+export interface DivergenceItem {
+  axis: string;
+  positions: Position[];
+}
+
+export interface Position {
+  soul_name: string;
+  stance: string;
+}
+
+export interface BlindSpotItem {
+  dimension: string;
+  missing_perspective: string;
+  coverable_by_existing: boolean;
+  suggested_soul: string | null;
+}
+
+export interface Contradiction {
+  description: string;
+  parties: string[];
+}
+
+export interface ActionItem {
+  direction: string;
+  rationale: string;
+  priority: number;
+}
+
+// ── DeepSeek Cache Hint ──
+// Indicates the prompt was constructed for maximum prefix cache hit rate
+
+export interface CacheHint {
+  provider: "deepseek";
+  cache_optimized: boolean;
+  estimated_discount: string; // "80-92%"
+}
+
+export interface OcrResult {
+  filename: string;
+  text: string | null;
+  error: string | null;
+}
+
+export async function ocrFiles(files: File[]): Promise<OcrResult[]> {
+  const form = new FormData();
+  files.forEach((f) => form.append("files", f));
+  const res = await fetch(`${API_BASE}/possess/ocr`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || `OCR failed: ${res.statusText}`);
+  }
+  const data = await res.json();
+  return data.results;
+}

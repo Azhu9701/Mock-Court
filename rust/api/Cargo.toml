@@ -1,0 +1,27 @@
+[package]
+name = "api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+foundation = { path = "../foundation" }
+registry = { path = "../registry" }
+possession = { path = "../possession" }
+archive = { path = "../archive" }
+ai-gateway = { path = "../ai-gateway" }
+axum = { version = "0.7", features = ["ws", "multipart"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "timeout", "catch-panic"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+chrono = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }
+tarzi = "0.1.10"
+web2llm = "0.4.0"
+lazy_static = "1.4"
+tempfile = "3"
