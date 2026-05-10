@@ -3,6 +3,9 @@
 set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Auto-detect LAN IP for mobile access
+LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || echo "")
+
 echo "========================================"
 echo "  万民幡 Wan Min Fan"
 echo "  实践与理论的反馈循环"
@@ -18,9 +21,9 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 # Start API
-echo "[1/2] 启动 API 服务 (127.0.0.1:3096)..."
+echo "[1/2] 启动 API 服务 (0.0.0.0:3096)..."
 cd "$DIR"
-cargo run -p api --release 2>&1 | sed 's/^/[API] /' &
+cargo run -p api 2>&1 | sed 's/^/[API] /' &
 API_PID=$!
 sleep 2
 
@@ -33,18 +36,21 @@ for i in $(seq 1 20); do
   sleep 1
 done
 
-# Start Frontend
+# Start Frontend (set API URL for mobile access)
 echo "[2/2] 启动前端 (http://localhost:3000)..."
 cd "$DIR/nextjs"
-pnpm dev 2>&1 | sed 's/^/[WEB] /' &
+NEXT_PUBLIC_API_URL="http://${LAN_IP:-127.0.0.1}:3096/api/v1" pnpm dev 2>&1 | sed 's/^/[WEB] /' &
 FRONT_PID=$!
 sleep 3
 
 echo ""
 echo "========================================"
-echo "  API:     http://127.0.0.1:3096"
-echo "  Front:   http://localhost:3000"
-echo "  Ctrl+C   关闭所有服务"
+echo "  电脑访问: http://localhost:3000"
+if [ -n "$LAN_IP" ]; then
+  echo "  手机访问: http://${LAN_IP}:3000"
+fi
+echo "  API:      http://0.0.0.0:3096"
+echo "  Ctrl+C    关闭所有服务"
 echo "========================================"
 
 # Open browser
