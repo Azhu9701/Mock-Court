@@ -1,0 +1,18 @@
+{
+  "name": "万民幡 Soul Banner",
+  "short_name": "万民幡",
+  "description": "多 AI 人格并行推理系统 - 24 位思想家的思维碰撞",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
