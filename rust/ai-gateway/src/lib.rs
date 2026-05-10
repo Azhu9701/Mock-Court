@@ -1,17 +1,19 @@
 mod claude;
 mod deepseek;
+pub mod cache;
 pub mod model_router;
 mod openai;
 pub mod prompt;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use foundation::{
     CallConfig, Chunk, FoundationError, LLMRequest, ModelTier, Prompt, Provider, ProviderInfo, Result,
 };
 use tokio::sync::mpsc;
 
+use crate::cache::LlMCache;
 use crate::claude::ClaudeClient;
 use crate::deepseek::DeepSeekClient;
 use crate::openai::OpenAIClient;
@@ -49,13 +51,14 @@ pub trait Gateway: Send + Sync {
         &self,
         prompt: &Prompt,
         config: &CallConfig,
-    ) -> mpsc::UnboundedReceiver<Result<Chunk>>;
+    ) -> mpsc::Receiver<Result<Chunk>>;
 }
 
 #[derive(Clone)]
 pub struct GatewayRegistry {
     providers: HashMap<Provider, Arc<dyn Gateway>>,
     all_info: Vec<ProviderInfo>,
+    cache: Arc<RwLock<Option<Arc<LlMCache>>>>,
 }
 
 impl GatewayRegistry {
@@ -105,18 +108,23 @@ impl GatewayRegistry {
             providers.insert(Provider::DeepSeek, Arc::new(deepseek));
         }
 
-        GatewayRegistry { providers, all_info }
+        GatewayRegistry { providers, all_info, cache: Arc::new(RwLock::new(None)) }
     }
 
     pub fn list_providers(&self) -> Vec<ProviderInfo> {
         self.all_info.clone()
     }
 
+    pub fn set_cache(&self, cache: Arc<LlMCache>) {
+        let mut guard = self.cache.write().expect("cache lock poisoned");
+        *guard = Some(cache);
+    }
+
     pub fn get(&self, provider: &Provider) -> Option<&Arc<dyn Gateway>> {
         self.providers.get(provider)
     }
 
-    pub fn call(&self, req: &LLMRequest) -> Result<mpsc::UnboundedReceiver<Result<Chunk>>> {
+    pub fn call(&self, req: &LLMRequest) -> Result<mpsc::Receiver<Result<Chunk>>> {
         let gateway = self
             .providers
             .get(&req.provider)
@@ -124,13 +132,42 @@ impl GatewayRegistry {
                 "Provider {:?} not available",
                 req.provider
             )))?;
+
+        if let Some(ref cache) = *self.cache.read().expect("cache lock poisoned") {
+            let model = req.config.model.as_deref().unwrap_or("unknown");
+            let (system_prompt, user_prompt) = extract_prompts(&req.prompt);
+            if let Some((cached_content, cached_usage)) = cache.get(
+                &format!("{:?}", req.provider).to_lowercase(),
+                model,
+                &system_prompt,
+                &user_prompt,
+            ) {
+                tracing::info!(
+                    "Cache hit for provider={:?} model={} ({} chars)",
+                    req.provider,
+                    model,
+                    cached_content.len()
+                );
+                let (tx, rx) = mpsc::channel::<Result<Chunk>>(1);
+                let _ = tx.try_send(Ok(Chunk {
+                    content: cached_content,
+                    reasoning_content: None,
+                    finish_reason: Some("stop".to_string()),
+                    index: 0,
+                    usage: Some(cached_usage),
+                    tool_calls: Vec::new(),
+                }));
+                return Ok(rx);
+            }
+        }
+
         Ok(gateway.call(&req.prompt, &req.config))
     }
 
     pub fn call_parallel(
         &self,
         requests: &[LLMRequest],
-    ) -> Vec<(Provider, mpsc::UnboundedReceiver<Result<Chunk>>)> {
+    ) -> Vec<(Provider, mpsc::Receiver<Result<Chunk>>)> {
         requests
             .iter()
             .filter_map(|req| {
@@ -140,4 +177,46 @@ impl GatewayRegistry {
             })
             .collect()
     }
+
+    pub fn get_cache(&self) -> Option<Arc<LlMCache>> {
+        self.cache.read().expect("cache lock poisoned").clone()
+    }
+
+    pub fn try_store_cache(&self, req: &LLMRequest, content: &str, usage: &foundation::UsageStats) {
+        if let Some(ref cache) = *self.cache.read().expect("cache lock poisoned") {
+            let model = req.config.model.as_deref().unwrap_or("unknown");
+            let (system_prompt, user_prompt) = extract_prompts(&req.prompt);
+            let _ = cache.set(
+                &format!("{:?}", req.provider).to_lowercase(),
+                model,
+                &system_prompt,
+                &user_prompt,
+                content,
+                usage,
+            );
+        }
+    }
+}
+
+fn extract_prompts(prompt: &Prompt) -> (String, String) {
+    let mut system = String::new();
+    let mut user = String::new();
+    for msg in &prompt.messages {
+        match msg.role.as_str() {
+            "system" => {
+                if !system.is_empty() {
+                    system.push('\n');
+                }
+                system.push_str(&msg.content);
+            }
+            "user" => {
+                if !user.is_empty() {
+                    user.push('\n');
+                }
+                user.push_str(&msg.content);
+            }
+            _ => {}
+        }
+    }
+    (system, user)
 }

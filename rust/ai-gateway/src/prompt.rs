@@ -123,8 +123,8 @@ impl PromptBuilder {
         user_content.push_str(&format!("任务：{}", task));
         Prompt {
             messages: vec![
-                PromptMessage { role: "system".into(), content: system_content, reasoning_content: None },
-                PromptMessage { role: "user".into(), content: user_content, reasoning_content: None },
+                PromptMessage { role: "system".into(), content: system_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
+                PromptMessage { role: "user".into(), content: user_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
             ],
         }
     }
@@ -142,9 +142,9 @@ impl PromptBuilder {
         let soul_specific = Self::build_soul_specific_prompt(soul, task, None);
         Prompt {
             messages: vec![
-                PromptMessage { role: "system".into(), content: system_content, reasoning_content: None },
-                PromptMessage { role: "user".into(), content: shared, reasoning_content: None },
-                PromptMessage { role: "user".into(), content: soul_specific, reasoning_content: None },
+                PromptMessage { role: "system".into(), content: system_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
+                PromptMessage { role: "user".into(), content: shared, reasoning_content: None, tool_call_id: None, tool_calls: None },
+                PromptMessage { role: "user".into(), content: soul_specific, reasoning_content: None, tool_call_id: None, tool_calls: None },
             ],
         }
     }
@@ -164,9 +164,9 @@ impl PromptBuilder {
         let soul_specific = Self::build_soul_specific_prompt(soul, shared_task, Some(task_card));
         Prompt {
             messages: vec![
-                PromptMessage { role: "system".into(), content: system_content, reasoning_content: None },
-                PromptMessage { role: "user".into(), content: shared, reasoning_content: None },
-                PromptMessage { role: "user".into(), content: soul_specific, reasoning_content: None },
+                PromptMessage { role: "system".into(), content: system_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
+                PromptMessage { role: "user".into(), content: shared, reasoning_content: None, tool_call_id: None, tool_calls: None },
+                PromptMessage { role: "user".into(), content: soul_specific, reasoning_content: None, tool_call_id: None, tool_calls: None },
             ],
         }
     }
@@ -302,8 +302,8 @@ impl PromptBuilder {
 
         Prompt {
             messages: vec![
-                PromptMessage { role: "system".into(), content: system_content, reasoning_content: None },
-                PromptMessage { role: "user".into(), content: user_content, reasoning_content: None },
+                PromptMessage { role: "system".into(), content: system_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
+                PromptMessage { role: "user".into(), content: user_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
             ],
         }
     }
@@ -323,9 +323,9 @@ impl PromptBuilder {
                 PromptMessage {
                     role: "system".into(),
                     content: SYNTHESIS_SYSTEM_PROMPT.into(),
-                    reasoning_content: None,
+                    reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
-                PromptMessage { role: "user".into(), content: user_content, reasoning_content: None },
+                PromptMessage { role: "user".into(), content: user_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
             ],
         }
     }
@@ -346,9 +346,9 @@ impl PromptBuilder {
                 PromptMessage {
                     role: "system".into(),
                     content: format!("{}\n\n## JSON 输出格式\n严格按以下 JSON 格式输出（不要 markdown 包裹）：\n{{\n  \"consensus\": [{{\"point\": \"共识内容\", \"shared_by\": [\"魂名1\", \"魂名2\"], \"depth\": \"独立抵达/表面共识\"}}],\n  \"divergence\": [{{\"axis\": \"分歧轴描述\", \"divergence_type\": \"事实/价值/前提\", \"positions\": [{{\"soul_name\": \"魂名\", \"stance\": \"立场\"}}]}}],\n  \"blind_spots\": [{{\"dimension\": \"盲区维度\", \"missing_perspective\": \"缺失的视角\", \"coverable_by_existing\": true/false, \"suggested_soul\": \"可选魂名\", \"is_structural\": true/false}}],\n  \"principal_contradiction\": {{\"description\": \"主要矛盾描述\", \"parties\": [\"相关方1\", \"相关方2\"]}},\n  \"action_program\": [{{\"direction\": \"行动方向\", \"rationale\": \"理由\", \"priority\": 1-3, \"timeline\": \"立即/一周/一月/长期\"}}],\n  \"synthesis_self_audit\": {{\"missing_perspectives\": [\"本综合可能遗漏的视角\"], \"synthesizer_bias\": \"综合官自身的潜在偏向\"}}\n}}\n\n规则：\n- divergence_type 必须是 事实/价值/前提 三者之一\n- is_structural=true 表示所有参与魂结构性地看不到这个维度（本体论/认识论限制）\n- priority 1=最高 3=最低\n- synthesis_self_audit 必须诚实标注——综合官也是站在某个立场上进行综合的", SYNTHESIS_SYSTEM_PROMPT),
-                    reasoning_content: None,
+                    reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
-                PromptMessage { role: "user".into(), content: user_content, reasoning_content: None },
+                PromptMessage { role: "user".into(), content: user_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
             ],
         }
     }
@@ -372,9 +372,9 @@ impl PromptBuilder {
                 PromptMessage {
                     role: "system".into(),
                     content: SYNTHESIS_SYSTEM_PROMPT.into(),
-                    reasoning_content: None,
+                    reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
-                PromptMessage { role: "user".into(), content: user_content, reasoning_content: None },
+                PromptMessage { role: "user".into(), content: user_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
             ],
         }
     }
@@ -397,8 +397,8 @@ impl PromptBuilder {
         user.push_str("请发表你的观点。");
         Prompt {
             messages: vec![
-                PromptMessage { role: "system".into(), content: system, reasoning_content: None },
-                PromptMessage { role: "user".into(), content: user, reasoning_content: None },
+                PromptMessage { role: "system".into(), content: system, reasoning_content: None, tool_call_id: None, tool_calls: None },
+                PromptMessage { role: "user".into(), content: user, reasoning_content: None, tool_call_id: None, tool_calls: None },
             ],
         }
     }
@@ -421,8 +421,8 @@ impl PromptBuilder {
         }
         Prompt {
             messages: vec![
-                PromptMessage { role: "system".into(), content: system, reasoning_content: None },
-                PromptMessage { role: "user".into(), content: user, reasoning_content: None },
+                PromptMessage { role: "system".into(), content: system, reasoning_content: None, tool_call_id: None, tool_calls: None },
+                PromptMessage { role: "user".into(), content: user, reasoning_content: None, tool_call_id: None, tool_calls: None },
             ],
         }
     }
@@ -430,14 +430,14 @@ impl PromptBuilder {
     pub fn build_review_prompt(&self, soul: &SoulProfile, output: &str) -> Prompt {
         Prompt {
             messages: vec![
-                PromptMessage { role: "system".into(), content: "你是一个魂审查官。请审查以下魂的召唤效果和角色一致性。".into(), reasoning_content: None },
+                PromptMessage { role: "system".into(), content: "你是一个魂审查官。请审查以下魂的召唤效果和角色一致性。".into(), reasoning_content: None, tool_call_id: None, tool_calls: None },
                 PromptMessage {
                     role: "user".into(),
                     content: format!(
                         "魂名：{}\nismism：{}\n召唤提示：{}\n输出：{}\n\n请评价该魂是否保持了角色一致性，是否符合其 ismism 坐标所描述的立场。如有偏差请指出。",
                         soul.name, soul.ismism_code, soul.summon_prompt, output
                     ),
-                    reasoning_content: None,
+                    reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
             ],
         }
@@ -456,7 +456,7 @@ impl PromptBuilder {
                         "你是 {}，ismism 坐标 {}。你现在以实践开口模式运行。一个实践者（在场者）提供了其实践现场数据，需要你从自己的立场和理论视角进行消化分析。记住：你的分析要服务于实践者的行动改进。",
                         soul.name, soul.ismism_code
                     ),
-                    reasoning_content: None,
+                    reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
                 PromptMessage {
                     role: "user".into(),
@@ -464,7 +464,7 @@ impl PromptBuilder {
                         "实践者数据：\n{}\n\n请从你的理论视角对该实践数据进行消化分析，指出：\n1. 你看到了什么（描述）\n2. 这说明了什么（判断）\n3. 建议什么行动（输出）",
                         practitioner_data
                     ),
-                    reasoning_content: None,
+                    reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
             ],
         }
@@ -476,7 +476,7 @@ impl PromptBuilder {
                 PromptMessage {
                     role: "system".into(),
                     content: "你是一个人物研究助手。你的任务是对指定人物进行收魂（信息收集），输出结构化的 raw 素材。请基于你的知识提供以下6个维度的信息：".into(),
-                    reasoning_content: None,
+                    reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
                 PromptMessage {
                     role: "user".into(),
@@ -488,7 +488,7 @@ impl PromptBuilder {
                         "认识论(1-4)：1=同一性/实证/循环, 2=分裂/建构/二元, 3=中心化/历史/辩证, 4=虚无/解构/敞开",
                         "目的论(1-4)：1=保守/秩序/同一, 2=多元/分裂/循环, 3=进步/中心化/调和, 4=革命/虚无/敞开",
                     ),
-                    reasoning_content: None,
+                    reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
             ],
         }
@@ -500,7 +500,7 @@ impl PromptBuilder {
                 PromptMessage {
                     role: "system".into(),
                     content: "你是一个魂档案炼化师。请根据 raw 素材，生成结构化的 Soul Profile。ismism 编码必须基于素材中的实际内容，不可凭空编造。宁可标注不确定，不强行填入。".into(),
-                    reasoning_content: None,
+                    reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
                 PromptMessage {
                     role: "user".into(),
@@ -508,7 +508,7 @@ impl PromptBuilder {
                         "## Raw 素材\n{}\n\n## 主义主义 256 目录参考\n场域：1=形而下学(气学) 2=形而上学(道学) 3=观念论(心学) 4=实践·辩证唯物主义\n本体论/认识论/目的论：1=同一/循环 2=分裂/冲突 3=中心/调和 4=虚无/敞开\n\n## 输出格式\n请返回 JSON（不要 markdown 包裹）：\n{{\n  \"name\": \"\",\n  \"ismism_code\": \"f-o-e-t\",\n  \"field\": \"所属领域名\",\n  \"ontology\": \"本体论立场描述\",\n  \"epistemology\": \"认识论立场描述\",\n  \"teleology\": \"目的论立场描述\",\n  \"domains\": [\"领域1\",\"领域2\"],\n  \"tags\": [\"标签1\",\"标签2\"],\n  \"summon_prompt\": \"详细的召唤词（200-500字），包含角色设定、语言风格、思维方法指导、与使用者的互动方式。用中文输出。\",\n  \"rationale\": \"ismism 编码的理据（各维度为什么是这个值，参考256目录）\"\n}}\n\n规则：ismism 编码基于素材实际内容，不可凭空编造。宁可标近似，不强行塞入。",
                         raw_material
                     ),
-                    reasoning_content: None,
+                    reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
             ],
         }

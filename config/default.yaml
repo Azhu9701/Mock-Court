@@ -8,3 +8,10 @@ call_records_path: "./data/call-records.yaml"
 server_host: "127.0.0.1"
 server_port: 3001
 nextjs_port: 3000
+
+searxng_url: "http://127.0.0.1:8080"
+
+rate_limit:
+  enabled: true
+  requests_per_second: 30
+  burst_size: 60

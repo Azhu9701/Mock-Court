@@ -1,4 +1,4 @@
-import { KnowledgeSearch } from "@/components/knowledge-search";
+import { KnowledgeBrowser } from "@/components/knowledge-browser";
 
 export default function KnowledgePage() {
   return (
@@ -6,10 +6,10 @@ export default function KnowledgePage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">知识库</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          全文检索所有魂分析输出、辩证综合和会话记录
+          以问题为单位的分析报告、知识卡片和全文检索
         </p>
       </div>
-      <KnowledgeSearch />
+      <KnowledgeBrowser />
     </div>
   );
 }

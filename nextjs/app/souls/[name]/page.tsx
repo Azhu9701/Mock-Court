@@ -5,6 +5,7 @@ import { SoulPrompt } from "@/components/soul-prompt";
 import { PracticeObservations } from "@/components/practice-observations";
 import { SummonButton } from "@/components/summon-button";
 import { SoulModelConfig } from "@/components/soul-model-config";
+import { DeleteSoulButton } from "@/components/delete-soul-button";
 import { Calendar } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +31,10 @@ export default async function SoulDetailPage({ params }: SoulDetailPageProps) {
         <div className="min-w-0">
           <h1 className="text-2xl font-bold truncate">{profile.name}</h1>
         </div>
-        <SummonButton soulName={profile.name} />
+        <div className="flex items-center gap-2 shrink-0">
+          <SummonButton soulName={profile.name} />
+          <DeleteSoulButton soulName={profile.name} variant="text" />
+        </div>
       </div>
 
       <div className="flex items-center gap-1 text-xs text-muted-foreground">

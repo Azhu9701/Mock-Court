@@ -495,6 +495,36 @@ pub struct ProviderInfo {
     pub tier: ModelTier,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolDefinition {
+    #[serde(rename = "type")]
+    pub r#type: String,
+    pub function: FunctionDef,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionDef {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub r#type: String,
+    pub function: ToolCallFunction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallFunction {
+    pub name: String,
+    pub arguments: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct Prompt {
     pub messages: Vec<PromptMessage>,
@@ -506,6 +536,10 @@ pub struct PromptMessage {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 /// DeepSeek 推理强度
@@ -573,6 +607,10 @@ pub struct CallConfig {
     pub structured_output: Option<StructuredOutputConfig>,
     /// 思考模式开关（DeepSeek v4专用）
     pub thinking_enabled: Option<bool>,
+    /// 工具定义
+    pub tools: Option<Vec<ToolDefinition>>,
+    /// 工具选择策略：auto/none/required 或指定函数名
+    pub tool_choice: Option<String>,
 }
 
 impl Default for CallConfig {
@@ -585,6 +623,8 @@ impl Default for CallConfig {
             reasoning_effort: None,
             structured_output: None,
             thinking_enabled: None,
+            tools: None,
+            tool_choice: None,
         }
     }
 }
@@ -602,15 +642,39 @@ impl CallConfig {
         });
         self
     }
+
+    pub fn with_tools(mut self, tools: Vec<ToolDefinition>) -> Self {
+        self.tools = Some(tools);
+        self
+    }
+
+    pub fn with_tool_choice(mut self, choice: &str) -> Self {
+        self.tool_choice = Some(choice.to_string());
+        self
+    }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Chunk {
     pub content: String,
     pub reasoning_content: Option<String>,
     pub finish_reason: Option<String>,
     pub index: u32,
     pub usage: Option<UsageStats>,
+    pub tool_calls: Vec<ToolCall>,
+}
+
+impl Default for Chunk {
+    fn default() -> Self {
+        Chunk {
+            content: String::new(),
+            reasoning_content: None,
+            finish_reason: None,
+            index: 0,
+            usage: None,
+            tool_calls: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -627,7 +691,7 @@ pub struct LLMResponse {
     pub usage: UsageStats,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UsageStats {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,

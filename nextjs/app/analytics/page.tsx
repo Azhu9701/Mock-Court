@@ -7,8 +7,7 @@ import {
   fetchSessions,
 } from "@/lib/api";
 import { StatCard } from "@/components/stat-card";
-import { ModeBarChart } from "@/components/mode-bar-chart";
-import { SoulEffectivenessTable } from "@/components/soul-effectiveness-table";
+import { ModeBarChart, SoulEffectivenessTable } from "@/components/dashboard-charts";
 import { AlertPanel } from "@/components/alert-panel";
 import { SessionTimeline } from "@/components/session-timeline";
 import { Skeleton } from "@/components/ui/skeleton";

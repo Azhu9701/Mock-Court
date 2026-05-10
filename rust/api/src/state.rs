@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use archive::ArchiveSystem;
+use foundation::Config;
 use possession::PossessionEngine;
 use registry::SoulRegistry;
 
@@ -12,4 +13,5 @@ pub struct AppState {
     pub engine: Arc<PossessionEngine>,
     pub archive: Arc<ArchiveSystem>,
     pub collector: Arc<SoulCollector>,
+    pub config: Arc<Config>,
 }

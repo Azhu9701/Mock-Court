@@ -8,8 +8,10 @@ foundation = { path = "../foundation" }
 registry = { path = "../registry" }
 ai-gateway = { path = "../ai-gateway" }
 tokio = { workspace = true }
+async-trait = "0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+dashmap = { workspace = true }

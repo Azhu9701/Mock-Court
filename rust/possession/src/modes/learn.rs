@@ -2,9 +2,10 @@ use ai_gateway::prompt::PromptBuilder;
 use ai_gateway::GatewayRegistry;
 use foundation::{CallConfig, LLMRequest, Result, Storage};
 use registry::SoulRegistry;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc;
 
 use crate::stream;
+use crate::tools::ToolRegistry;
 use crate::{SoulOutput, UserPresets, WsEvent, WsSessionManager};
 
 pub async fn run(
@@ -16,7 +17,8 @@ pub async fn run(
     soul_name: &str,
     task: &str,
     presets: &UserPresets,
-    _system_tx: &UnboundedSender<WsEvent>,
+    _system_tx: &mpsc::Sender<WsEvent>,
+    _tool_registry: &ToolRegistry,
 ) -> Result<SoulOutput> {
     let profile = registry.get_soul(soul_name)?;
     let learn_task = format!("{}。请作为学习伙伴，在回应中解释你的思考过程和分析方法。", task);

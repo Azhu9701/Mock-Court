@@ -25,3 +25,7 @@ tarzi = "0.1.10"
 web2llm = "0.4.0"
 lazy_static = "1.4"
 tempfile = "3"
+dashmap = "6"
+config = "0.14"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+url = "2"

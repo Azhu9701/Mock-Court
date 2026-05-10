@@ -224,7 +224,7 @@ async fn collect_soul(
     let provider = gateway.list_providers().into_iter().find(|i| i.available).map(|i| i.provider)
         .ok_or_else(|| (axum::http::StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "No LLM provider".into() })))?;
 
-    let req = LLMRequest { provider, prompt, config: CallConfig { temperature: 0.5, max_tokens: 4096, stream: false, model: None, reasoning_effort: None, structured_output: None, thinking_enabled: None } };
+    let req = LLMRequest { provider, prompt, config: CallConfig { temperature: 0.5, max_tokens: 4096, stream: false, model: None, reasoning_effort: None, structured_output: None, thinking_enabled: None, tools: None, tool_choice: None } };
     let mut rx = gateway.call(&req).map_err(|e| {
         (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() }))
     })?;
@@ -260,7 +260,7 @@ async fn refine_soul(
     let provider = gateway.list_providers().into_iter().find(|i| i.available).map(|i| i.provider)
         .ok_or_else(|| (axum::http::StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "No LLM provider".into() })))?;
 
-    let req = LLMRequest { provider, prompt, config: CallConfig { temperature: 0.3, max_tokens: 4096, stream: false, model: None, reasoning_effort: None, structured_output: None, thinking_enabled: None } };
+    let req = LLMRequest { provider, prompt, config: CallConfig { temperature: 0.3, max_tokens: 4096, stream: false, model: None, reasoning_effort: None, structured_output: None, thinking_enabled: None, tools: None, tool_choice: None } };
     let mut rx = gateway.call(&req).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() })))?;
 
     let mut resp = String::new();

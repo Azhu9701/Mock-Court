@@ -7,12 +7,13 @@ use foundation::{
     CallConfig, KnowledgeCard, LLMRequest, Message, Prompt, PromptMessage, ReasoningEffort, Result, Storage,
 };
 use registry::SoulRegistry;
-use tokio::sync::mpsc::{UnboundedSender, UnboundedReceiver};
+use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio::sync::broadcast;
 use crate::cross_detector::{CrossDetector, CollisionEvent};
 
 use crate::stream;
+use crate::tools::ToolRegistry;
 use crate::{SoulOutput, UserPresets, WsEvent, WsEventType, WsSessionManager};
 
 const MAX_PARALLEL_SOULS: usize = 10;
@@ -38,7 +39,8 @@ pub async fn run(
     souls: &[String],
     task_cards: &std::collections::HashMap<String, String>,
     presets: &UserPresets,
-    system_tx: &UnboundedSender<WsEvent>,
+    system_tx: &mpsc::Sender<WsEvent>,
+    tool_registry: &ToolRegistry,
 ) -> Result<Vec<SoulOutput>> {
     let limited: Vec<String> = souls.iter().take(MAX_PARALLEL_SOULS).cloned().collect();
     let providers = gateway.list_providers();
@@ -53,13 +55,13 @@ pub async fn run(
 
     let mut requests: Vec<(String, LLMRequest)> = Vec::with_capacity(limited.len());
     for soul_name in &limited {
-        let _ = system_tx.send(WsEvent {
+        let _ = system_tx.try_send(WsEvent {
             event_type: WsEventType::SoulStarted,
             payload: format!("正在召唤 {} ...", soul_name),
             reasoning_content: None,
             soul_name: Some(soul_name.clone()),
             seq: 0,
-        });
+        }).ok();
 
         // 注册魂到检测器
         cross_detector.register_soul(soul_name.clone());
@@ -68,13 +70,21 @@ pub async fn run(
             Ok(profile) => {
                 // 使用模型路由器选择合适的配置
                 let soul_decision = ModelRouter::route(&providers, RoutingRole::Soul);
-                let (use_cache, config) = if let Some(decision) = &soul_decision {
+                let (use_cache, mut config) = if let Some(decision) = &soul_decision {
                     (decision.use_cache_hint, ModelRouter::create_call_config(decision))
                 } else {
                     (false, CallConfig::default())
                 };
                 let provider = soul_decision.as_ref().map(|d| d.provider.clone()).unwrap_or_else(|| stream::pick_provider_info(gateway).provider);
                 let tier = soul_decision.as_ref().map(|d| d.tier.clone()).unwrap_or_else(|| stream::pick_provider_info(gateway).tier);
+
+                let tool_names = crate::tools::parse_soul_tools(&profile.tools);
+                if !tool_names.is_empty() {
+                    let definitions = tool_registry.filter_definitions(&tool_names);
+                    if !definitions.is_empty() {
+                        config = config.with_tools(definitions);
+                    }
+                }
 
                 let prompt = if let Some(card) = task_cards.get(soul_name) {
                     // 有差异化子任务——使用专属 task card
@@ -110,13 +120,13 @@ pub async fn run(
                 }));
             }
             Err(e) => {
-                let _ = system_tx.send(WsEvent {
+                let _ = system_tx.try_send(WsEvent {
                     event_type: WsEventType::SoulError,
                     payload: e.to_string(),
                     reasoning_content: None,
                     soul_name: Some(soul_name.clone()),
                     seq: 0,
-                });
+                }).ok();
             }
         }
     }
@@ -140,23 +150,15 @@ pub async fn run(
         let ws_c = ws.clone();
         let gw = gateway_owned.clone();
         let chunk_tx_clone = chunk_tx.clone();
+        let tr = tool_registry.clone();
+        let provider = req.provider.clone();
+        let prompt = req.prompt.clone();
+        let config = req.config.clone();
         set.spawn(async move {
-            let rx = match gw.call(&req) {
-                Ok(rx) => rx,
-                Err(e) => {
-                    let _ = chunk_tx_clone.send(SoulStreamMessage::Error { 
-                        soul_name: soul_name.clone(), 
-                        error: e.to_string() 
-                    });
-                    return SoulOutput::error(soul_name.clone(), e.to_string());
-                }
-            };
-            stream_single_soul_with_detection(
-                rx, 
-                &s_id, 
-                &soul_name, 
-                &ws_c, 
-                chunk_tx_clone
+            run_soul_with_tools(
+                &gw, &provider, &prompt, &config,
+                &s_id, &soul_name, &ws_c, &tr,
+                chunk_tx_clone,
             ).await
         });
     }
@@ -177,6 +179,13 @@ pub async fn run(
         Err(_) => {
             set.abort_all();
             tracing::warn!("Conference timed out after {}s", SOUL_TIMEOUT_SECS);
+            let _ = system_tx.send(WsEvent {
+                event_type: WsEventType::SystemMessage,
+                payload: format!("⚠️ 合议超时（{}秒），{} 个魂的回应可能不完整", SOUL_TIMEOUT_SECS, limited.len()),
+                reasoning_content: None,
+                soul_name: None,
+                seq: 0,
+            });
             vec![]
         }
     };
@@ -194,13 +203,13 @@ pub async fn run(
         .collect();
 
     if !synthesis_outputs.is_empty() {
-        let _ = system_tx.send(WsEvent {
+        let _ = system_tx.try_send(WsEvent {
             event_type: WsEventType::SynthesisStarted,
             payload: "辩证综合开始...".into(),
             reasoning_content: None,
             soul_name: None,
             seq: 0,
-        });
+        }).ok();
 
         // 收集碰撞检测结果
         let collisions = cross_detector.get_collisions();
@@ -241,7 +250,7 @@ pub async fn run(
                 let total_tokens: u32 = outputs.iter().map(|o| o.usage.total_tokens).sum::<u32>() + synth_usage.total_tokens;
                 let llm_calls = limited.len() as u32 + 1; // N souls + 1 synthesis
                 let cost_estimate = estimate_cost(card_decision.as_ref().map(|d| d.provider.clone()).unwrap_or(synthesis_provider.clone()), total_tokens, true);
-                let _ = system_tx.send(WsEvent {
+                let _ = system_tx.try_send(WsEvent {
                     event_type: WsEventType::Cost,
                     payload: serde_json::json!({
                         "llm_calls": llm_calls,
@@ -252,7 +261,7 @@ pub async fn run(
                     reasoning_content: None,
                     soul_name: None,
                     seq: 0,
-                });
+                }).ok();
 
                 if let Err(e) = store.archive_synthesis(session_id, &content).await {
                     tracing::error!("Failed to archive synthesis: {}", e);
@@ -276,6 +285,7 @@ pub async fn run(
                         role: "user".into(),
                         content: format!("从以下辩证综合报告中提取最核心的 ≤500 字的卡片：\n\n{}", if card_content.len() > 3000 { &card_content[..3000] } else { &card_content }),
                         reasoning_content: None,
+                        ..Default::default()
                     }],
                 };
                 let mut card_config = CallConfig { temperature: 0.3, max_tokens: 256, stream: false, ..Default::default() };
@@ -290,17 +300,6 @@ pub async fn run(
                         if let Ok(c) = r { card.push_str(&c.content); }
                     }
                     if !card.is_empty() {
-                        let card_msg = Message {
-                            id: uuid::Uuid::new_v4().to_string(),
-                            session_id: session_id.to_string(),
-                            role: foundation::MessageRole::System,
-                            soul_name: Some("知识卡片".into()),
-                            content: format!("📇 知识卡片\n{}", card),
-                            seq: 1,
-                            created_at: chrono::Utc::now(),
-                        };
-                        let _ = store.append_message(&card_msg).await;
-
                         let card_entity = KnowledgeCard {
                             id: uuid::Uuid::new_v4().to_string(),
                             title: task.to_string(),
@@ -328,21 +327,128 @@ pub async fn run(
             created_at: chrono::Utc::now(),
         };
         let _ = store.append_message(&verify_msg).await;
-        let _ = system_tx.send(WsEvent {
+        let _ = system_tx.try_send(WsEvent {
             event_type: WsEventType::SystemMessage,
             payload: "⏳ 请设定一个24小时内可检验的具体行动，验证本次分析的结论。".into(),
             reasoning_content: None,
             soul_name: None,
             seq: 0,
-        });
+        }).ok();
     }
 
     Ok(outputs)
 }
 
+async fn run_soul_with_tools(
+    gw: &GatewayRegistry,
+    provider: &foundation::Provider,
+    prompt: &foundation::Prompt,
+    config: &foundation::CallConfig,
+    session_id: &str,
+    soul_name: &str,
+    ws: &WsSessionManager,
+    tool_registry: &crate::tools::ToolRegistry,
+    chunk_tx: broadcast::Sender<SoulStreamMessage>,
+) -> SoulOutput {
+    let max_rounds = crate::tools::max_tool_rounds();
+    let mut history: Vec<foundation::PromptMessage> = prompt.messages.clone();
+    let name = soul_name.to_string();
+
+    for _round in 0..max_rounds {
+        let req = foundation::LLMRequest {
+            provider: provider.clone(),
+            prompt: foundation::Prompt { messages: history.clone() },
+            config: config.clone(),
+        };
+
+        let rx = match gw.call(&req) {
+            Ok(rx) => rx,
+            Err(e) => {
+                let _ = chunk_tx.send(SoulStreamMessage::Error {
+                    soul_name: name.clone(),
+                    error: e.to_string(),
+                });
+                return SoulOutput::error(name, e.to_string());
+            }
+        };
+
+        let output = stream_single_soul_with_detection(rx, session_id, &name, ws, chunk_tx.clone()).await;
+
+        if output.error.is_some() {
+            return output;
+        }
+
+        if output.tool_calls.is_empty() {
+            return output;
+        }
+
+        for tc in &output.tool_calls {
+            let payload = crate::ToolCallPayload {
+                tool_call_id: tc.id.clone(),
+                tool_name: tc.function.name.clone(),
+                arguments: tc.function.arguments.clone(),
+                soul_name: name.clone(),
+            };
+            let json = serde_json::to_string(&payload).unwrap_or_default();
+            ws.broadcast_soul(session_id, &name, &WsEvent {
+                event_type: WsEventType::ToolCallStarted,
+                payload: json,
+                reasoning_content: None,
+                soul_name: Some(name.clone()),
+                seq: 0,
+            });
+
+            match tool_registry.execute(tc).await {
+                Ok(result) => {
+                    let result_payload = crate::ToolResultPayload {
+                        tool_call_id: tc.id.clone(),
+                        tool_name: tc.function.name.clone(),
+                        result: result.clone(),
+                        soul_name: name.clone(),
+                    };
+                    let result_json = serde_json::to_string(&result_payload).unwrap_or_default();
+                    ws.broadcast_soul(session_id, &name, &WsEvent {
+                        event_type: WsEventType::ToolResult,
+                        payload: result_json,
+                        reasoning_content: None,
+                        soul_name: Some(name.clone()),
+                        seq: 0,
+                    });
+
+                    history.push(foundation::PromptMessage {
+                        role: "assistant".to_string(),
+                        content: String::new(),
+                        reasoning_content: None,
+                        tool_calls: Some(output.tool_calls.clone()),
+                        tool_call_id: None,
+                    });
+                    history.push(foundation::PromptMessage {
+                        role: "tool".to_string(),
+                        content: result,
+                        reasoning_content: None,
+                        tool_calls: None,
+                        tool_call_id: Some(tc.id.clone()),
+                    });
+                }
+                Err(e) => {
+                    return SoulOutput::error(name, format!("Tool {} failed: {}", tc.function.name, e));
+                }
+            }
+        }
+    }
+
+    SoulOutput {
+        soul_name: name,
+        content: String::new(),
+        usage: foundation::UsageStats::default(),
+        error: Some(format!("Tool call loop exceeded {} rounds", max_rounds)),
+        tool_calls: Vec::new(),
+    }
+}
+
 /// 流式输出单个魂，同时发送给交叉检测器
 async fn stream_single_soul_with_detection(
-    mut rx: UnboundedReceiver<foundation::Result<foundation::Chunk>>,
+    mut rx: mpsc::Receiver<foundation::Result<foundation::Chunk>>,
     session_id: &str,
     soul_name: &str,
     ws: &WsSessionManager,
@@ -352,12 +458,16 @@ async fn stream_single_soul_with_detection(
     let mut usage = foundation::UsageStats::default();
     let mut seq: u32 = 0;
     let name = soul_name.to_string();
+    let mut tool_calls: Vec<foundation::ToolCall> = Vec::new();
 
     while let Some(result) = rx.recv().await {
         match result {
             Ok(chunk) => {
                 if let Some(u) = chunk.usage {
                     usage = u;
+                }
+                if !chunk.tool_calls.is_empty() {
+                    tool_calls.extend(chunk.tool_calls);
                 }
                 if !chunk.content.is_empty() {
                     content.push_str(&chunk.content);
@@ -417,7 +527,7 @@ async fn stream_single_soul_with_detection(
         },
     );
 
-    let output = SoulOutput { soul_name: name.clone(), content, usage, error: None };
+    let output = SoulOutput { soul_name: name.clone(), content, usage, error: None, tool_calls };
     let _ = chunk_tx.send(SoulStreamMessage::Done {
         soul_name: name,
         output: output.clone(),
@@ -432,7 +542,7 @@ async fn detect_collisions_async(
     mut chunk_rx: broadcast::Receiver<SoulStreamMessage>,
     ws: WsSessionManager,
     session_id: String,
-    system_tx: UnboundedSender<WsEvent>,
+    system_tx: mpsc::Sender<WsEvent>,
 ) {
     loop {
         match chunk_rx.recv().await {
@@ -466,7 +576,7 @@ fn broadcast_collision(
     ws: &WsSessionManager,
     session_id: &str,
     collision: &CollisionEvent,
-    system_tx: &UnboundedSender<WsEvent>,
+    system_tx: &mpsc::Sender<WsEvent>,
 ) {
     let payload = serde_json::json!({
         "collision_type": collision.collision_type,
@@ -486,7 +596,7 @@ fn broadcast_collision(
     };
     
     ws.broadcast_system(session_id, &event);
-    let _ = system_tx.send(event);
+    let _ = system_tx.try_send(event).ok();
     
     tracing::info!("Broadcast collision: {} -> {} ({:?})", collision.from_soul, collision.to_soul, collision.collision_type);
 }

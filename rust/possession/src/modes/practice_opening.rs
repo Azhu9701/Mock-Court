@@ -4,10 +4,11 @@ use ai_gateway::prompt::PromptBuilder;
 use ai_gateway::GatewayRegistry;
 use foundation::{CallConfig, LLMRequest, Result, Storage};
 use registry::SoulRegistry;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
 use crate::stream;
+use crate::tools::ToolRegistry;
 use crate::{SoulOutput, UserPresets, WsEvent, WsEventType, WsSessionManager};
 
 const SOUL_TIMEOUT_SECS: u64 = 300;
@@ -20,7 +21,8 @@ pub async fn run(
     session_id: &str,
     task: &str,
     _presets: &UserPresets,
-    _system_tx: &UnboundedSender<WsEvent>,
+    _system_tx: &mpsc::Sender<WsEvent>,
+    _tool_registry: &ToolRegistry,
 ) -> Result<()> {
     let info = stream::pick_provider_info(gateway);
     let prompt_builder = PromptBuilder::new();

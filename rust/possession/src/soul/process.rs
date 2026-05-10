@@ -111,6 +111,7 @@ impl SoulContext {
             role: "system".to_string(),
             content: self.profile.summon_prompt.clone(),
             reasoning_content: None,
+            ..Default::default()
         }];
 
         // 添加历史消息
@@ -119,6 +120,7 @@ impl SoulContext {
                 role: msg.role.clone(),
                 content: msg.content.clone(),
                 reasoning_content: msg.reasoning_content.clone(),
+                ..Default::default()
             });
         }
 
@@ -139,6 +141,7 @@ impl SoulContext {
             role: "user".to_string(),
             content: user_prompt,
             reasoning_content: None,
+            ..Default::default()
         });
 
         Prompt { messages }
@@ -216,7 +219,7 @@ impl SoulProcess {
         self: Arc<Self>,
         mut rx: mpsc::Receiver<SoulProcessEvent>,
         gateway: Arc<GatewayRegistry>,
-        output_tx: mpsc::UnboundedSender<SoulProcessOutput>,
+        output_tx: mpsc::Sender<SoulProcessOutput>,
     ) {
         let soul_name = self.soul_name.clone();
         tracing::info!("Soul process started: {}", soul_name);
@@ -263,7 +266,7 @@ impl SoulProcess {
         task: String,
         presets: UserPresets,
         gateway: &GatewayRegistry,
-        output_tx: &mpsc::UnboundedSender<SoulProcessOutput>,
+        output_tx: &mpsc::Sender<SoulProcessOutput>,
     ) {
         let (profile, prompt) = {
             let ctx = self.context.read().await;
@@ -283,6 +286,8 @@ impl SoulProcess {
             max_tokens: 8192,
             stream: true,
             model: if profile.model.is_empty() { None } else { Some(profile.model.clone()) },
+            tools: None,
+            tool_choice: None,
             reasoning_effort: Some(foundation::ReasoningEffort::Think),
             structured_output: None,
             thinking_enabled: None,
@@ -306,7 +311,7 @@ impl SoulProcess {
                             // 收集最终回答内容
                             if !chunk.content.is_empty() && chunk.reasoning_content.is_none() {
                                 full_content.push_str(&chunk.content);
-                                let _ = output_tx.send(SoulProcessOutput::Chunk(chunk.content));
+                                let _ = output_tx.send(SoulProcessOutput::Chunk(chunk.content)).await;
                             }
                             // 收集思维链内容（用于多轮对话）
                             if let Some(reasoning) = &chunk.reasoning_content {
@@ -329,7 +334,7 @@ impl SoulProcess {
                                     let _ = output_tx.send(SoulProcessOutput::Done {
                                         content: full_content,
                                         usage: final_usage,
-                                    });
+                                    }).await;
                                     break;
                                 }
                             }
@@ -337,7 +342,7 @@ impl SoulProcess {
                         Err(e) => {
                             let err_msg = format!("Error calling LLM: {}", e);
                             tracing::error!("{}", err_msg);
-                            let _ = output_tx.send(SoulProcessOutput::Error(err_msg));
+                            let _ = output_tx.send(SoulProcessOutput::Error(err_msg)).await;
                             break;
                         }
                     }
@@ -346,7 +351,7 @@ impl SoulProcess {
             Err(e) => {
                 let err_msg = format!("Failed to start LLM call: {}", e);
                 tracing::error!("{}", err_msg);
-                let _ = output_tx.send(SoulProcessOutput::Error(err_msg));
+                let _ = output_tx.send(SoulProcessOutput::Error(err_msg)).await;
             }
         }
     }
@@ -357,7 +362,7 @@ pub struct SoulProcessManager {
     /// 活跃进程
     processes: RwLock<std::collections::HashMap<String, Arc<SoulProcess>>>,
     /// 进程输出通道
-    output_channels: RwLock<std::collections::HashMap<String, mpsc::UnboundedSender<SoulProcessOutput>>>,
+    output_channels: RwLock<std::collections::HashMap<String, mpsc::Sender<SoulProcessOutput>>>,
     /// 网关
     gateway: Arc<GatewayRegistry>,
 }
@@ -376,7 +381,7 @@ impl SoulProcessManager {
     pub async fn start_process(
         &self,
         profile: SoulProfile,
-    ) -> Result<(Arc<SoulProcess>, mpsc::UnboundedReceiver<SoulProcessOutput>)> {
+    ) -> Result<(Arc<SoulProcess>, mpsc::Receiver<SoulProcessOutput>)> {
         let soul_name = profile.name.clone();
         
         // 检查是否已存在
@@ -390,7 +395,7 @@ impl SoulProcessManager {
         }
 
         let (process, rx) = SoulProcess::new(profile);
-        let (output_tx, output_rx) = mpsc::unbounded_channel();
+        let (output_tx, output_rx) = mpsc::channel(256);
         let arc_process = Arc::new(process);
         
         // 保存进程和输出通道

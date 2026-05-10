@@ -212,13 +212,13 @@ impl CrossDetector {
 
     /// 注册一个魂的缓冲区
     pub fn register_soul(&self, soul_name: String) {
-        let mut buffers = self.buffers.lock().unwrap();
+        let Ok(mut buffers) = self.buffers.lock() else { return; };
         buffers.insert(soul_name.clone(), SoulTokenBuffer::new(soul_name));
     }
 
     /// 为特定魂添加 token
     pub fn add_token(&self, soul_name: &str, token: &str) {
-        let mut buffers = self.buffers.lock().unwrap();
+        let Ok(mut buffers) = self.buffers.lock() else { return; };
         if let Some(buffer) = buffers.get_mut(soul_name) {
             buffer.add_token(token);
         }
@@ -231,9 +231,9 @@ impl CrossDetector {
 
     /// 执行交叉检测
     pub fn detect_collisions(&self) -> Vec<CollisionEvent> {
-        let buffers = self.buffers.lock().unwrap();
+        let Ok(buffers) = self.buffers.lock() else { return Vec::new(); };
         let mut new_collisions = Vec::new();
-        let mut processed = self.processed_pairs.lock().unwrap();
+        let Ok(mut processed) = self.processed_pairs.lock() else { return Vec::new(); };
         
         let soul_names: Vec<String> = buffers.keys().cloned().collect();
         
@@ -257,13 +257,13 @@ impl CrossDetector {
                     // 双向检测
                     if let Some(collision) = self.detect_between(soul_a, soul_b, &context_a, &context_b) {
                         new_collisions.push(collision.clone());
-                        self.collisions.lock().unwrap().push(collision);
+                        if let Ok(mut c) = self.collisions.lock() { c.push(collision); }
                         processed.insert(pair.clone());
                     }
                     
                     if let Some(collision) = self.detect_between(soul_b, soul_a, &context_b, &context_a) {
                         new_collisions.push(collision.clone());
-                        self.collisions.lock().unwrap().push(collision);
+                        if let Ok(mut c) = self.collisions.lock() { c.push(collision); }
                         processed.insert((soul_b.clone(), soul_a.clone()));
                     }
                 }
@@ -304,12 +304,12 @@ impl CrossDetector {
 
     /// 获取所有碰撞事件
     pub fn get_collisions(&self) -> Vec<CollisionEvent> {
-        self.collisions.lock().unwrap().clone()
+        self.collisions.lock().map(|c| c.clone()).unwrap_or_default()
     }
 
     /// 标记碰撞为已注入
     pub fn mark_injected(&self, index: usize) {
-        let mut collisions = self.collisions.lock().unwrap();
+        let Ok(mut collisions) = self.collisions.lock() else { return; };
         if let Some(collision) = collisions.get_mut(index) {
             collision.injected = true;
         }
@@ -317,18 +317,18 @@ impl CrossDetector {
 
     /// 获取特定魂的缓冲区上下文
     pub fn get_soul_context(&self, soul_name: &str) -> Option<String> {
-        let buffers = self.buffers.lock().unwrap();
+        let Ok(buffers) = self.buffers.lock() else { return None; };
         buffers.get(soul_name).map(|b| b.get_context())
     }
 
     /// 清空所有缓冲区和碰撞记录
     pub fn clear(&self) {
-        let mut buffers = self.buffers.lock().unwrap();
+        let Ok(mut buffers) = self.buffers.lock() else { return; };
         for buffer in buffers.values_mut() {
             buffer.clear();
         }
-        self.collisions.lock().unwrap().clear();
-        self.processed_pairs.lock().unwrap().clear();
+        if let Ok(mut c) = self.collisions.lock() { c.clear(); }
+        if let Ok(mut p) = self.processed_pairs.lock() { p.clear(); }
     }
 }
 

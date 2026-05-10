@@ -4,7 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use foundation::{
     BlindSpot, BlindSpotFilter, CallFilter, CallRecord, HealthStatus, KnowledgeCard,
-    KnowledgeCardFilter, KnowledgeResult, Message, Registry, Result, RevisionProposal,
+    KnowledgeCardFilter, KnowledgeResult, KnowledgeTopic, Message, Registry, Result, RevisionProposal,
     Session, SessionFilter, SessionSummary, SoulProfile, SoulRevision, SoulRevisionFilter,
     Storage, ProposalStatus,
 };
@@ -28,6 +28,10 @@ impl AppStore {
         std::fs::create_dir_all(base.join("db"))?;
         let db = Arc::new(SqliteDb::open(&base.join("db/app.db"))?);
         Ok(AppStore { fs, db })
+    }
+
+    pub fn db(&self) -> Arc<SqliteDb> {
+        self.db.clone()
     }
 }
 
@@ -117,7 +121,7 @@ impl Storage for AppStore {
     }
 
     async fn health_check(&self) -> Result<HealthStatus> {
-        let sqlite_ok = self.db.with_write(|_| Ok(())).is_ok();
+        let sqlite_ok = self.db.with_conn(|_| Ok(())).is_ok();
         let sqlite_record_count = self.db.count_call_records().unwrap_or(0);
         Ok(HealthStatus {
             ok: sqlite_ok,
@@ -163,6 +167,10 @@ impl Storage for AppStore {
 
     async fn get_knowledge_cards(&self, filter: &KnowledgeCardFilter) -> Result<Vec<KnowledgeCard>> {
         self.db.get_knowledge_cards(filter)
+    }
+
+    async fn list_knowledge_topics(&self, mode: Option<&str>, limit: usize, offset: usize) -> Result<Vec<KnowledgeTopic>> {
+        self.db.list_knowledge_topics(mode, limit, offset)
     }
 
     // Revision Proposals

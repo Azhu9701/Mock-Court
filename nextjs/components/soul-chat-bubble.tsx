@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
 import type { SoulMessage } from "@/hooks/use-websocket";
+import { useCleanContent } from "@/hooks/use-clean-content";
 
 interface SoulChatBubbleProps {
   message: SoulMessage;
@@ -27,6 +28,7 @@ export const SoulChatBubble = memo(function SoulChatBubble({
     bottomRef.current.scrollIntoView({ behavior: "smooth" });
   }, [message.content, autoScroll, message.isStreaming]);
 
+  const cleanedContent = useCleanContent(message.content);
   const initial = message.soulName.charAt(0).toUpperCase();
 
   return (
@@ -60,7 +62,7 @@ export const SoulChatBubble = memo(function SoulChatBubble({
         >
           <div className="prose prose-slate prose-sm max-w-none [&_p]:my-1 [&_p]:leading-relaxed [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_blockquote]:my-1.5 [&_blockquote]:pl-3 [&_blockquote]:border-l-2 [&_blockquote]:border-primary/30 [&_strong]:font-semibold [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mt-2 [&_h3]:mb-1">
             {message.content ? (
-              <ReactMarkdown remarkPlugins={[remarkGfm]} children={message.content.replace(/<[^>]+>/g, "")} />
+              <ReactMarkdown remarkPlugins={[remarkGfm]} children={cleanedContent} />
             ) : null}
           </div>
           {message.isStreaming && (

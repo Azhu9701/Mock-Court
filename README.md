@@ -62,7 +62,17 @@
 
 ## 快速开始
 
-### 前置条件
+### Windows 用户（MSI 安装包）
+
+1. 从 [GitHub Releases](https://github.com/Azhu9701/soul-banner-lite/releases) 下载 `万民幡-Setup.msi`
+2. 双击安装，按向导操作
+3. 安装完成后，从开始菜单启动「万民幡」
+4. 首次启动前，编辑安装目录下的 `data/apikeys.json`，填入 API Key
+5. 浏览器自动打开 http://localhost:3000
+
+### macOS / Linux 用户
+
+#### 前置条件
 
 - Rust 工具链（1.75+）
 - Node.js 18+ 和 pnpm

@@ -40,12 +40,12 @@ impl Gateway for OpenAIClient {
         &self,
         prompt: &Prompt,
         config: &CallConfig,
-    ) -> mpsc::UnboundedReceiver<Result<Chunk>> {
-        let (tx, rx) = mpsc::unbounded_channel();
+    ) -> mpsc::Receiver<Result<Chunk>> {
+        let (tx, rx) = mpsc::channel(256);
         let api_key = match &self.api_key {
             Some(k) => k.clone(),
             None => {
-                let _ = tx.send(Err(FoundationError::Validation(
+                let _ = tx.try_send(Err(FoundationError::Validation(
                     "OpenAI API key not configured".into(),
                 )));
                 return rx;
@@ -82,7 +82,7 @@ impl Gateway for OpenAIClient {
             let response = match result {
                 Ok(r) => r,
                 Err(e) => {
-                    let _ = tx.send(Err(FoundationError::Io(std::io::Error::other(e.to_string()))));
+                    let _ = tx.send(Err(FoundationError::Io(std::io::Error::other(e.to_string())))).await;
                     return;
                 }
             };
@@ -93,7 +93,7 @@ impl Gateway for OpenAIClient {
                 let _ = tx.send(Err(FoundationError::Validation(format!(
                     "OpenAI API error {}: {}",
                     status, body
-                ))));
+                )))).await;
                 return;
             }
 
@@ -119,7 +119,8 @@ impl Gateway for OpenAIClient {
                                         finish_reason: Some("stop".into()),
                                         index: chunk_index,
                                         usage: None,
-                                    }));
+                                        tool_calls: Vec::new(),
+                                    })).await;
                                     return;
                                 }
                                 if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
@@ -132,7 +133,8 @@ impl Gateway for OpenAIClient {
                                                     finish_reason: choice["finish_reason"].as_str().map(|s| s.to_string()),
                                                     index: chunk_index,
                                                     usage: None,
-                                                }));
+                                                    tool_calls: Vec::new(),
+                                                })).await;
                                                 chunk_index += 1;
                                             }
                                         }
@@ -150,14 +152,15 @@ impl Gateway for OpenAIClient {
                                             finish_reason: None,
                                             index: chunk_index,
                                             usage: Some(usage),
-                                        }));
+                                            tool_calls: Vec::new(),
+                                        })).await;
                                     }
                                 }
                             }
                         }
                     }
                     Err(e) => {
-                        let _ = tx.send(Err(FoundationError::Io(std::io::Error::other(e.to_string()))));
+                        let _ = tx.send(Err(FoundationError::Io(std::io::Error::other(e.to_string())))).await;
                         return;
                     }
                 }

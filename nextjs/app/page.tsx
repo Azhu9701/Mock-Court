@@ -3,8 +3,8 @@ import { Brain, History, Search, BarChart3, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const QUICK_LINKS = [
-  { href: "/possess", label: "讨论", desc: "召唤思想家之魂，进行多视角分析", icon: Brain },
-  { href: "/souls", label: "魂览", desc: "浏览思想家的魂档案", icon: Search },
+  { href: "/possess", label: "讨论", desc: "向历史与现在还有未来提问", icon: Brain },
+  { href: "/souls", label: "魂览", desc: "魂档案", icon: Search },
   { href: "/sessions", label: "会话历史", desc: "回顾过去的附体会话", icon: History },
   { href: "/analytics", label: "仪表盘", desc: "万民幡运行数据概览", icon: BarChart3 },
 ];
@@ -15,7 +15,7 @@ export default function Home() {
       <div className="text-center space-y-4">
         <h1 className="text-4xl font-bold tracking-tight">万民幡</h1>
         <p className="text-lg text-muted-foreground max-w-md mx-auto">
-          24 位思想家的 AI 对话实验室。召唤、合议、辩论——知识不在魂里，在实践里。
+          社会实践是检验真理的唯一标准
         </p>
         <Link href="/possess">
           <Button size="lg" className="mt-4">

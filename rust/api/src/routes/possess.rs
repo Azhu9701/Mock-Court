@@ -45,16 +45,16 @@ async fn start_possession(
     }
     tracing::info!("Starting possession with {} souls, search_topic={}", body.souls.len(), body.search_topic);
     
-    // 议题搜索：在召唤魂之前，用任务关键词实时搜索 Web 获取背景信息
+    // 议题搜索：在召唤魂之前，通过 SearXNG 实时搜索 Web 获取背景信息
     let search_results = if body.search_topic {
-        tracing::info!("Running topic search for: {}", &body.task[..body.task.len().min(80)]);
-        match state.collector.search_topic(&body.task, None, 3).await {
+        tracing::info!("Running SearXNG topic search for: {}", &body.task[..body.task.len().min(80)]);
+        match state.collector.search_topic_searxng(&body.task, 3).await {
             Ok(md) => {
-                tracing::info!("Topic search returned {} bytes", md.len());
+                tracing::info!("SearXNG topic search returned {} bytes", md.len());
                 Some(md)
             }
             Err(e) => {
-                tracing::warn!("Topic search failed: {}", e);
+                tracing::warn!("SearXNG topic search failed: {}", e);
                 None
             }
         }
@@ -70,7 +70,7 @@ async fn start_possession(
         search_topic: body.search_topic,
         search_results,
     };
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, rx) = tokio::sync::mpsc::channel::<possession::WsEvent>(256);
     let session_id = state.engine.start_possession(input, tx).await.map_err(map_api_error)?;
     tracing::info!("Possession session created: {}", session_id);
 
@@ -93,7 +93,7 @@ async fn start_possession(
 // ── AI Analyze: Matching + Review as separate sub-agent calls ──
 
 #[derive(Debug, Deserialize)]
-struct AnalyzeRequest { task: String, #[serde(default)] judgment: Option<String>, #[serde(default)] worry: Option<String>, #[serde(default)] unknown: Option<String> }
+struct AnalyzeRequest { task: String, #[serde(default)] judgment: Option<String>, #[serde(default)] worry: Option<String>, #[serde(default)] unknown: Option<String>, #[serde(default)] reviewer: Option<String> }
 
 #[derive(Debug, Serialize)]
 struct AnalyzeResponse { entry_type: String, matched_souls: Vec<SoulMatch>, recommended_mode: String, review: ReviewResult, #[serde(default)] task_cards: std::collections::HashMap<String, String> }
@@ -137,11 +137,11 @@ fn build_soul_match(js: &serde_json::Value, all_souls: &[SoulListEntry]) -> Opti
 async fn llm_call_json(state: &AppState, provider: Provider, system_prompt: Option<&str>, user_prompt: &str, temp: f64, max_tokens: u32, model: Option<&str>) -> Result<serde_json::Value, (axum::http::StatusCode, Json<ApiError>)> {
     let mut messages = Vec::new();
     if let Some(sys) = system_prompt {
-        messages.push(PromptMessage { role: "system".into(), content: sys.into(), reasoning_content: None });
+        messages.push(PromptMessage { role: "system".into(), content: sys.into(), reasoning_content: None, tool_call_id: None, tool_calls: None });
     }
-    messages.push(PromptMessage { role: "user".into(), content: user_prompt.into(), reasoning_content: None });
+    messages.push(PromptMessage { role: "user".into(), content: user_prompt.into(), reasoning_content: None, tool_call_id: None, tool_calls: None });
 
-    let req = LLMRequest { provider, prompt: Prompt { messages }, config: CallConfig { temperature: temp, max_tokens, stream: false, model: model.map(String::from), reasoning_effort: None, structured_output: None, thinking_enabled: None } };
+    let req = LLMRequest { provider, prompt: Prompt { messages }, config: CallConfig { temperature: temp, max_tokens, stream: false, model: model.map(String::from), reasoning_effort: None, structured_output: None, thinking_enabled: None, tools: None, tool_choice: None } };
     let mut rx = state.engine.gateway().call(&req).map_err(|e| {
         tracing::error!("LLM call failed: {}", e);
         (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() }))
@@ -161,6 +161,116 @@ async fn llm_call_json(state: &AppState, provider: Provider, system_prompt: Opti
         tracing::warn!("llm_call_json parse failed: {} | raw[..{}]={}", e, safe_idx, &resp[..safe_idx]);
         serde_json::Value::default()
     }))
+}
+
+fn spawn_banner_lord_review(
+    gateway: Arc<ai_gateway::GatewayRegistry>,
+    banner_lord: SoulProfile,
+    task: String,
+    candidate_profiles: Vec<SoulProfile>,
+    judgment: String,
+    worry: String,
+    unknown: String,
+) -> tokio::task::JoinHandle<Result<serde_json::Value, String>> {
+    tokio::spawn(async move {
+        let provider = gateway
+            .list_providers()
+            .into_iter()
+            .find(|i| i.available)
+            .map(|i| i.provider)
+            .ok_or_else(|| "No LLM provider available".to_string())?;
+
+        let review_system = format!(
+            "{}你是{}，ismism坐标{}。你作为幡主审查官，需要完成两项任务：\n\
+             1. 审查候选魂是否适合这个任务——不适合的要去掉或替换\n\
+             2. 为每个确定使用的魂分派一个**差异化的子问题**——不是所有人分析同一个问题，\
+             而是把你的总任务拆解成每个魂最擅长回答的那一个侧面\n\n\
+             不读取文件——所有上下文已在 prompt 中。",
+            banner_lord.summon_prompt, banner_lord.name, banner_lord.ismism_code
+        );
+
+        let mut candidates_info = String::new();
+        for p in &candidate_profiles {
+            let exclude_str = p.exclude_scenarios.join("、");
+            candidates_info.push_str(&format!(
+                "- **{}** [{}] ismism={} self_declare=\"{}\" exclude_scenarios=\"{}\"\n",
+                p.name, p.field, p.ismism_code,
+                if p.self_declare.is_empty() { "无" } else { &p.self_declare },
+                if p.exclude_scenarios.is_empty() { "无" } else { &exclude_str }
+            ));
+        }
+
+        let review_user = format!(
+            "## 总任务\n{}\n\n## 使用者预设\n判断：{}\n担忧：{}\n未知：{}\n\n## 候选魂\n{}\n\n\
+             ## 你的两阶段任务\n\n\
+             ### 第一阶段：审查魂组合\n\
+             逐魂检查：领域覆盖、场域定位、魂间互补、视角缺失。裁决：pass / conditional / reject\n\n\
+             ### 第二阶段：差异化任务分派\n\
+             为每个确认使用的魂分配一个**只有他能回答好的子问题**。原则：\n\
+             - 利用场域差异——场域1做地基（\"这是什么\"），场域2做边界（\"这看不到什么\"），\
+             场域3做自反（\"这个问法本身有什么问题\"），场域4做实践（\"怎么落地\"）\n\
+             - 每个子问题要具体（\"请回答：X在Y条件下的Z\"），不要\"请分析\"这种空指令\n\n\
+             返回JSON：\n\
+             {{\"verdict\":\"pass|conditional|reject\",\
+             \"verified_souls\":[\"魂名\"],\
+             \"task_cards\":{{\"魂名\":\"专属子问题\"}},\
+             \"checks\":[\"审查结果\"],\
+             \"notes\":\"审查备注\",\
+             \"missing_perspectives\":[\"缺失视角\"],\
+             \"boundary_risks\":[\"边界风险\"]}}",
+            task,
+            &judgment,
+            &worry,
+            &unknown,
+            candidates_info
+        );
+
+        let messages = vec![
+            PromptMessage {
+                role: "system".into(),
+                content: review_system,
+                reasoning_content: None,
+                tool_call_id: None,
+                tool_calls: None,
+            },
+            PromptMessage {
+                role: "user".into(),
+                content: review_user,
+                reasoning_content: None,
+                tool_call_id: None,
+                tool_calls: None,
+            },
+        ];
+
+        let req = LLMRequest {
+            provider,
+            prompt: Prompt { messages },
+            config: CallConfig {
+                temperature: 0.3,
+                max_tokens: 4096,
+                stream: false,
+                model: None,
+                reasoning_effort: None,
+                structured_output: None,
+                thinking_enabled: None,
+                tools: None,
+                tool_choice: None,
+            },
+        };
+
+        let mut rx = gateway
+            .call(&req)
+            .map_err(|e| format!("LLM call failed: {}", e))?;
+        let mut resp = String::new();
+        while let Some(result) = rx.recv().await {
+            if let Ok(chunk) = result {
+                resp.push_str(&chunk.content);
+            }
+        }
+
+        let json_str = extract_json(&resp).unwrap_or(&resp);
+        Ok(serde_json::from_str(json_str).unwrap_or_default())
+    })
 }
 
 async fn analyze_task(
@@ -211,15 +321,12 @@ async fn analyze_task(
             s.name, s.field, s.ismism_code, kw_hits, kws.join(","), declare_short)
     }).collect();
 
-    let provider2 = provider.clone();
     let provider3 = provider.clone();
 
     // ── Step 1: Match (matcher agent) ──
     tracing::info!("Step 1: Matching souls");
     let match_prompt = format!("## 任务\n{}\n\n## 魂列表（含触发关键词命中数和 self_declare 边界声明）\n{}\n\n## 指令\n根据任务和魂的触发关键词命中数、边界声明，选择最匹配的2-5个魂。优先选 kw_hits 高的。每个魂的 self_declare 声明了该魂的能力边界——如果任务超出边界则不应选择。返回JSON：{{\"souls\":[{{\"name\":\"魂名\",\"rationale\":\"理由\"}}],\"mode\":\"single|conference|debate\"}}", body.task, soul_list.join("\n"));
     let matched = llm_call_json(&state, provider.clone(), None, &match_prompt, 0.3, 4096, None).await?;
-
-    let provider = provider2;
 
     let souls: Vec<SoulMatch> = matched["souls"].as_array()
         .map(|arr| arr.iter().filter_map(|s| build_soul_match(s, &all_souls)).collect())
@@ -228,64 +335,38 @@ async fn analyze_task(
     
     tracing::info!("Matched {} souls, mode: {}", souls.len(), mode);
 
-    // ── Step 2: 幡主审查 + 差异化任务分派 ──
-    tracing::info!("Step 2: Banner lord review + task card assignment");
-    let reviewer_name = std::env::var("AIONUI_REVIEWER_SOUL").unwrap_or_else(|_| "未明子".to_string());
+    // ── Step 2: 幡主审查 + 差异化任务分派 (independent sub-agent via tokio::spawn) ──
+    tracing::info!("Step 2: Spawning banner lord review sub-agent");
+    let reviewer_name = body.reviewer.clone()
+        .unwrap_or_else(|| std::env::var("AIONUI_REVIEWER_SOUL").unwrap_or_else(|_| "未明子".to_string()));
     let mut task_cards: std::collections::HashMap<String, String> = Default::default();
-    let mut missing_perspectives: Vec<String> = Vec::new();
-    let mut boundary_risks: Vec<String> = Vec::new();
 
     let (verdict, checks, notes) = if let Ok(banner_lord) = state.registry.get_soul(&reviewer_name) {
         let candidate_profiles: Vec<SoulProfile> = souls.iter()
             .filter_map(|s| state.registry.get_soul(&s.name).ok())
             .collect();
-        
-        let review_system = format!(
-            "{}你是{}，ismism坐标{}。你作为幡主审查官，需要完成两项任务：\n\
-             1. 审查候选魂是否适合这个任务——不适合的要去掉或替换\n\
-             2. 为每个确定使用的魂分派一个**差异化的子问题**——不是所有人分析同一个问题，\
-             而是把你的总任务拆解成每个魂最擅长回答的那一个侧面\n\n\
-             不读取文件——所有上下文已在 prompt 中。",
-            banner_lord.summon_prompt, banner_lord.name, banner_lord.ismism_code
+
+        let review_handle = spawn_banner_lord_review(
+            state.engine.gateway().clone(),
+            banner_lord,
+            body.task.clone(),
+            candidate_profiles,
+            body.judgment.clone().unwrap_or_default(),
+            body.worry.clone().unwrap_or_default(),
+            body.unknown.clone().unwrap_or_default(),
         );
 
-        let mut candidates_info = String::new();
-        for p in &candidate_profiles {
-            let exclude_str = p.exclude_scenarios.join("、");
-            candidates_info.push_str(&format!(
-                "- **{}** [{}] ismism={} self_declare=\"{}\" exclude_scenarios=\"{}\"\n",
-                p.name, p.field, p.ismism_code,
-                if p.self_declare.is_empty() { "无" } else { &p.self_declare },
-                if p.exclude_scenarios.is_empty() { "无" } else { &exclude_str }
-            ));
-        }
-
-        let review_user = format!(
-            "## 总任务\n{}\n\n## 使用者预设\n判断：{}\n担忧：{}\n未知：{}\n\n## 候选魂\n{}\n\n\
-             ## 你的两阶段任务\n\n\
-             ### 第一阶段：审查魂组合\n\
-             逐魂检查：领域覆盖、场域定位、魂间互补、视角缺失。裁决：pass / conditional / reject\n\n\
-             ### 第二阶段：差异化任务分派\n\
-             为每个确认使用的魂分配一个**只有他能回答好的子问题**。原则：\n\
-             - 利用场域差异——场域1做地基（\"这是什么\"），场域2做边界（\"这看不到什么\"），\
-             场域3做自反（\"这个问法本身有什么问题\"），场域4做实践（\"怎么落地\"）\n\
-             - 每个子问题要具体（\"请回答：X在Y条件下的Z\"），不要\"请分析\"这种空指令\n\n\
-             返回JSON：\n\
-             {{\"verdict\":\"pass|conditional|reject\",\
-             \"verified_souls\":[\"魂名\"],\
-             \"task_cards\":{{\"魂名\":\"专属子问题\"}},\
-             \"checks\":[\"审查结果\"],\
-             \"notes\":\"审查备注\",\
-             \"missing_perspectives\":[\"缺失视角\"],\
-             \"boundary_risks\":[\"边界风险\"]}}",
-            body.task,
-            body.judgment.as_deref().unwrap_or("无"),
-            body.worry.as_deref().unwrap_or("无"),
-            body.unknown.as_deref().unwrap_or("无"),
-            candidates_info
-        );
-        
-        let result = llm_call_json(&state, provider, Some(&review_system), &review_user, 0.3, 4096, None).await?;
+        let result = match review_handle.await {
+            Ok(Ok(json)) => json,
+            Ok(Err(e)) => {
+                tracing::error!("Banner lord review sub-agent failed: {}", e);
+                serde_json::Value::default()
+            }
+            Err(e) => {
+                tracing::error!("Banner lord review sub-agent panicked: {}", e);
+                serde_json::Value::default()
+            }
+        };
 
         // Parse task cards
         if let Some(cards) = result["task_cards"].as_object() {
@@ -295,10 +376,10 @@ async fn analyze_task(
                 }
             }
         }
-        missing_perspectives = result["missing_perspectives"].as_array()
+        let missing_perspectives: Vec<String> = result["missing_perspectives"].as_array()
             .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
             .unwrap_or_default();
-        boundary_risks = result["boundary_risks"].as_array()
+        let boundary_risks: Vec<String> = result["boundary_risks"].as_array()
             .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
             .unwrap_or_default();
 
@@ -392,6 +473,129 @@ async fn analyze_task(
     }))
 }
 
+fn spawn_follow_up_agent(
+    gateway: Arc<ai_gateway::GatewayRegistry>,
+    banner_lord: SoulProfile,
+    question: String,
+    history: Vec<String>,
+    ws: possession::WsSessionManager,
+    session_id: String,
+    archive: Arc<archive::ArchiveSystem>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let provider = gateway
+            .list_providers()
+            .into_iter()
+            .find(|i| i.available)
+            .map(|i| i.provider)
+            .unwrap_or(foundation::Provider::Claude);
+
+        let system_prompt = banner_lord.summon_prompt;
+        let user_prompt = if history.is_empty() {
+            format!(
+                "## 新问题\n{}\n\n根据这个新问题，以你的立场和视角回应。你是{}，ismism坐标{}。",
+                question, banner_lord.name, banner_lord.ismism_code
+            )
+        } else {
+            format!(
+                "## 历史对话\n{}\n\n## 新问题\n{}\n\n以上是之前的多魂附体会话。作为{}（ismism={}），请以你的立场和视角回应这个追问。",
+                history.join("\n\n"), question, banner_lord.name, banner_lord.ismism_code
+            )
+        };
+
+        let q_msg = foundation::Message {
+            id: uuid::Uuid::new_v4().to_string(),
+            session_id: session_id.clone(),
+            role: foundation::MessageRole::User,
+            soul_name: None,
+            content: question.clone(),
+            seq: 990,
+            created_at: chrono::Utc::now(),
+        };
+        let _ = archive.append_message(&q_msg).await;
+
+        let config = CallConfig {
+            temperature: 0.7,
+            max_tokens: 8192,
+            stream: true,
+            model: None,
+            reasoning_effort: Some(foundation::ReasoningEffort::Think),
+            structured_output: None,
+            thinking_enabled: None,
+            tools: None,
+            tool_choice: None,
+        };
+
+        let req = LLMRequest {
+            provider,
+            prompt: Prompt {
+                messages: vec![
+                    PromptMessage {
+                        role: "system".into(),
+                        content: system_prompt,
+                        reasoning_content: None,
+                        tool_call_id: None,
+                        tool_calls: None,
+                    },
+                    PromptMessage {
+                        role: "user".into(),
+                        content: user_prompt,
+                        reasoning_content: None,
+                        tool_call_id: None,
+                        tool_calls: None,
+                    },
+                ],
+            },
+            config,
+        };
+
+        match gateway.call(&req) {
+            Ok(rx) => {
+                match possession::stream::stream_synthesis(rx, &session_id, &ws).await {
+                    Ok((content, _)) => {
+                        let msg = foundation::Message {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            session_id,
+                            role: foundation::MessageRole::Synthesis,
+                            soul_name: Some(banner_lord.name),
+                            content,
+                            seq: 991,
+                            created_at: chrono::Utc::now(),
+                        };
+                        let _ = archive.append_message(&msg).await;
+                    }
+                    Err(e) => {
+                        tracing::error!("Follow-up agent stream error: {}", e);
+                        let _ = ws.broadcast_system(
+                            &session_id,
+                            &possession::WsEvent {
+                                event_type: possession::WsEventType::Error,
+                                payload: format!("流式响应错误: {}", e),
+                                reasoning_content: None,
+                                soul_name: None,
+                                seq: 0,
+                            },
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!("Follow-up agent LLM call failed: {}", e);
+                let _ = ws.broadcast_system(
+                    &session_id,
+                    &possession::WsEvent {
+                        event_type: possession::WsEventType::Error,
+                        payload: format!("启动 LLM 失败: {}", e),
+                        reasoning_content: None,
+                        soul_name: None,
+                        seq: 0,
+                    },
+                );
+            }
+        }
+    })
+}
+
 // ── Follow-up ──
 
 #[derive(Debug, Deserialize)]
@@ -403,109 +607,42 @@ async fn follow_up(
     Json(body): Json<FollowUpRequest>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<ApiError>)> {
     tracing::info!("Received follow-up request for session: {}", session_id);
-    
-    // 尝试获取会话，如果不存在，不会直接返回错误，而是使用空历史记录
-    let history = match state.archive.get_session_detail(&session_id).await {
+
+    let ws = state.engine.ws_manager().clone();
+    let sid = session_id.clone();
+    ws.create_session(&sid);
+
+    let history: Vec<String> = match state.archive.get_session_detail(&session_id).await {
         Ok(session) => {
-            tracing::info!("Session found, have {} messages", session.messages.len());
-            session.messages.iter().map(|m| format!("[{:?}] {}: {}", m.role, m.soul_name.as_deref().unwrap_or("系统"), m.content)).collect::<Vec<_>>()
+            session.messages.iter().map(|m| format!("[{:?}] {}: {}", m.role, m.soul_name.as_deref().unwrap_or("系统"), m.content)).collect()
         }
         Err(e) => {
-            tracing::warn!("Session not found or error: {}, will proceed with basic prompt", e);
-            // 即使没有会话历史，也可以进行简单的 follow-up
+            tracing::warn!("Session not found: {}, proceeding with basic prompt", e);
             vec![]
         }
     };
-    
-    // 构建 prompt - 即使没有历史记录也可以工作
-    let prompt_str = if history.is_empty() {
-        format!("## 新问题\n{}\n\n根据这个问题，以你的立场和视角回应。", body.question)
-    } else {
-        format!("## 历史对话\n{}\n\n## 新问题\n{}\n\n根据历史对话上下文，以你的立场和视角回应。", history.join("\n\n"), body.question)
-    };
+
+    let reviewer_name = std::env::var("AIONUI_REVIEWER_SOUL").unwrap_or_else(|_| "未明子".to_string());
+    let banner_lord = state.registry.get_soul(&reviewer_name).map_err(|e| {
+        tracing::error!("Reviewer soul not found: {}", e);
+        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("审查官 {} 不可用", reviewer_name) }))
+    })?;
 
     let question = body.question.clone();
     let gateway = state.engine.gateway().clone();
-    let provider = pick_provider(&state)?;
-    let ws = state.engine.ws_manager().clone();
     let archive = state.archive.clone();
-    let sid = session_id.clone();
 
-    // Ensure session exists in WS manager (for follow-up after main session has completed)
-    tracing::info!("Creating/ensuring WS session exists");
-    ws.create_session(&sid);
+    let _ = spawn_follow_up_agent(
+        gateway,
+        banner_lord,
+        question,
+        history,
+        ws,
+        sid,
+        archive,
+    );
 
-    // 如果会话存在，持久化用户的问题
-    if state.archive.get_session_detail(&session_id).await.is_ok() {
-        let q_msg = foundation::Message {
-            id: uuid::Uuid::new_v4().to_string(),
-            session_id: sid.clone(),
-            role: foundation::MessageRole::User,
-            soul_name: None,
-            content: question.clone(),
-            seq: 990,
-            created_at: chrono::Utc::now(),
-        };
-        if let Err(e) = archive.append_message(&q_msg).await {
-            tracing::error!("Failed to store user question: {}", e);
-        }
-    }
-
-    // Start LLM call immediately, don't wait for WS connection - messages will buffer
-    tokio::spawn(async move {
-        tracing::info!("Starting LLM call for follow-up immediately");
-        
-        let config = CallConfig::default().with_reasoning_effort(foundation::ReasoningEffort::ThinkMax);
-        let req = LLMRequest { provider, prompt: Prompt { messages: vec![PromptMessage { role: "user".into(), content: prompt_str, reasoning_content: None }] }, config };
-        
-        match gateway.call(&req) {
-            Ok(mut rx) => {
-                tracing::info!("LLM call started successfully, streaming synthesis");
-                match possession::stream::stream_synthesis(rx, &sid, &ws).await {
-                    Ok((content, _)) => {
-                        tracing::info!("Follow-up synthesis complete, content length: {}", content.len());
-                        // 只有当会话存在时才持久化
-                        if state.archive.get_session_detail(&session_id).await.is_ok() {
-                            let msg = foundation::Message {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                session_id: sid,
-                                role: foundation::MessageRole::Synthesis,
-                                soul_name: None,
-                                content,
-                                seq: 991,
-                                created_at: chrono::Utc::now(),
-                            };
-                            if let Err(e) = archive.append_message(&msg).await {
-                                tracing::error!("Failed to store follow-up: {}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Follow-up stream error: {}", e);
-                        ws.broadcast_system(&sid, &possession::WsEvent {
-                            event_type: possession::WsEventType::Error,
-                            payload: format!("流式响应错误: {}", e),
-                            reasoning_content: None,
-                            soul_name: None,
-                            seq: 0,
-                        });
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::error!("Failed to start LLM call: {}", e);
-                ws.broadcast_system(&sid, &possession::WsEvent {
-                    event_type: possession::WsEventType::Error,
-                    payload: format!("启动 LLM 失败: {}", e),
-                    reasoning_content: None,
-                    soul_name: None,
-                    seq: 0,
-                });
-            }
-        }
-    });
-    
-    tracing::info!("Follow-up request accepted, returning response");
+    tracing::info!("Follow-up sub-agent spawned, returning immediately");
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

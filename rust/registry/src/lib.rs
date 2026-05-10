@@ -3,7 +3,9 @@ mod search;
 pub mod fulltext_search;
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use dashmap::DashMap;
 
 use foundation::{
     FoundationError, IsmismFilter, IsmismStats, Result, SoulListEntry, SoulMatch, SoulProfile,
@@ -15,16 +17,16 @@ use crate::search::{build_inverted_index, fulltext_search, nearest_search};
 
 pub struct SoulRegistry {
     store: Arc<dyn Storage>,
-    souls: RwLock<HashMap<String, SoulProfile>>,
-    inverted_index: RwLock<HashMap<String, Vec<String>>>,
+    souls: DashMap<String, SoulProfile>,
+    inverted_index: DashMap<String, Vec<String>>,
 }
 
 impl SoulRegistry {
     pub async fn new(store: Arc<dyn Storage>) -> Result<Self> {
         let registry = SoulRegistry {
             store,
-            souls: RwLock::new(HashMap::new()),
-            inverted_index: RwLock::new(HashMap::new()),
+            souls: DashMap::new(),
+            inverted_index: DashMap::new(),
         };
         registry.reload().await?;
         Ok(registry)
@@ -54,28 +56,25 @@ impl SoulRegistry {
 
         let index = build_inverted_index(&souls);
 
-        let mut souls_lock = self
-            .souls
-            .write()
-            .map_err(|e| FoundationError::InvalidState(e.to_string()))?;
-        *souls_lock = souls;
-
-        let mut index_lock = self
-            .inverted_index
-            .write()
-            .map_err(|e| FoundationError::InvalidState(e.to_string()))?;
-        *index_lock = index;
+        self.souls.clear();
+        for (k, v) in souls {
+            self.souls.insert(k, v);
+        }
+        self.inverted_index.clear();
+        for (k, v) in index {
+            self.inverted_index.insert(k, v);
+        }
 
         Ok(())
     }
 
     pub fn list_souls(&self, filter: &IsmismFilter) -> Result<Vec<SoulListEntry>> {
-        let souls = self
-            .souls
-            .read()
-            .map_err(|e| FoundationError::InvalidState(e.to_string()))?;
-
         if let Some(ref nearest) = filter.nearest {
+            let souls: HashMap<String, SoulProfile> = self
+                .souls
+                .iter()
+                .map(|r| (r.key().clone(), r.value().clone()))
+                .collect();
             let results = nearest_search(&nearest.target, &souls, nearest.limit);
             let entries: Vec<SoulListEntry> = results
                 .into_iter()
@@ -84,9 +83,10 @@ impl SoulRegistry {
             return Ok(entries);
         }
 
-        let mut entries: Vec<SoulListEntry> = souls
-            .values()
-            .map(SoulListEntry::from)
+        let mut entries: Vec<SoulListEntry> = self
+            .souls
+            .iter()
+            .map(|r| SoulListEntry::from(r.value()))
             .collect();
 
         entries.sort_by_key(|e| std::cmp::Reverse(e.summon_count));
@@ -94,13 +94,9 @@ impl SoulRegistry {
     }
 
     pub fn get_soul(&self, name: &str) -> Result<SoulProfile> {
-        let souls = self
-            .souls
-            .read()
-            .map_err(|e| FoundationError::InvalidState(e.to_string()))?;
-        souls
+        self.souls
             .get(name)
-            .cloned()
+            .map(|r| r.clone())
             .ok_or_else(|| FoundationError::SoulNotFound(name.to_string()))
     }
 
@@ -108,23 +104,25 @@ impl SoulRegistry {
         if query.trim().is_empty() {
             return Ok(vec![]);
         }
-        let souls = self
+        let souls: HashMap<String, SoulProfile> = self
             .souls
-            .read()
-            .map_err(|e| FoundationError::InvalidState(e.to_string()))?;
-        let index = self
+            .iter()
+            .map(|r| (r.key().clone(), r.value().clone()))
+            .collect();
+        let index: HashMap<String, Vec<String>> = self
             .inverted_index
-            .read()
-            .map_err(|e| FoundationError::InvalidState(e.to_string()))?;
+            .iter()
+            .map(|r| (r.key().clone(), r.value().clone()))
+            .collect();
         Ok(fulltext_search(query, &souls, &index))
     }
 
     pub fn get_ismism_distribution(&self) -> Result<IsmismStats> {
-        let souls = self
+        let entries: Vec<SoulListEntry> = self
             .souls
-            .read()
-            .map_err(|e| FoundationError::InvalidState(e.to_string()))?;
-        let entries: Vec<SoulListEntry> = souls.values().map(SoulListEntry::from).collect();
+            .iter()
+            .map(|r| SoulListEntry::from(r.value()))
+            .collect();
         Ok(compute_distribution(&entries))
     }
 
@@ -134,12 +132,13 @@ impl SoulRegistry {
         let name = profile.name.clone();
         self.store.write_soul(&profile).await?;
 
-        let mut souls = self
+        self.souls.insert(name, profile);
+        let souls_map: HashMap<String, SoulProfile> = self
             .souls
-            .write()
-            .map_err(|e| FoundationError::InvalidState(e.to_string()))?;
-        souls.insert(name, profile);
-        self.rebuild_index(&souls)?;
+            .iter()
+            .map(|r| (r.key().clone(), r.value().clone()))
+            .collect();
+        self.rebuild_index(&souls_map)?;
         Ok(())
     }
 
@@ -147,34 +146,35 @@ impl SoulRegistry {
         let name = profile.name.clone();
         self.store.write_soul(&profile).await?;
 
-        let mut souls = self
+        self.souls.insert(name, profile);
+        let souls_map: HashMap<String, SoulProfile> = self
             .souls
-            .write()
-            .map_err(|e| FoundationError::InvalidState(e.to_string()))?;
-        souls.insert(name, profile);
-        self.rebuild_index(&souls)?;
+            .iter()
+            .map(|r| (r.key().clone(), r.value().clone()))
+            .collect();
+        self.rebuild_index(&souls_map)?;
         Ok(())
     }
 
     pub async fn delete_soul(&self, name: &str) -> Result<()> {
         self.store.delete_soul(name).await?;
 
-        let mut souls = self
+        self.souls.remove(name);
+        let souls_map: HashMap<String, SoulProfile> = self
             .souls
-            .write()
-            .map_err(|e| FoundationError::InvalidState(e.to_string()))?;
-        souls.remove(name);
-        self.rebuild_index(&souls)?;
+            .iter()
+            .map(|r| (r.key().clone(), r.value().clone()))
+            .collect();
+        self.rebuild_index(&souls_map)?;
         Ok(())
     }
 
     fn rebuild_index(&self, souls: &HashMap<String, SoulProfile>) -> Result<()> {
         let index = build_inverted_index(souls);
-        let mut index_lock = self
-            .inverted_index
-            .write()
-            .map_err(|e| FoundationError::InvalidState(e.to_string()))?;
-        *index_lock = index;
+        self.inverted_index.clear();
+        for (k, v) in index {
+            self.inverted_index.insert(k, v);
+        }
         Ok(())
     }
 }

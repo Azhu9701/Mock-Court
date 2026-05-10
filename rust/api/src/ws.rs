@@ -18,20 +18,26 @@ pub async fn ws_handler(
 
 async fn handle_ws(socket: WebSocket, state: Arc<AppState>, session_id: String, channel: String) {
     let (mut ws_tx, mut ws_rx) = socket.split();
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<possession::WsEvent>(256);
 
     state.engine.ws_manager().subscribe(&session_id, &channel, tx);
     tracing::info!("WS connected: session={} channel={}", session_id, channel);
 
     let mut send_task = tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
-            let json = serde_json::to_string(&event).unwrap();
-            if ws_tx
-                .send(Message::Text(json.into()))
-                .await
-                .is_err()
-            {
-                break;
+            match serde_json::to_string(&event) {
+                Ok(json) => {
+                    if ws_tx
+                        .send(Message::Text(json.into()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to serialize WsEvent: {} — event_type={:?}", e, event.event_type);
+                }
             }
         }
     });

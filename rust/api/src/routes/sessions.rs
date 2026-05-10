@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
-use axum::routing::{get, put};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use axum::http::{header, StatusCode};
 use archive::SessionDetail;
@@ -19,6 +19,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/:id/rename", put(rename_session))
         .route("/:id/fork", put(fork_session))
         .route("/:id/export/markdown", get(export_session_markdown))
+        .route("/:id/review", post(save_review))
 }
 
 #[derive(Debug, Deserialize)]
@@ -167,4 +168,43 @@ fn format_session_as_markdown(detail: &SessionDetail) -> String {
     }
 
     md
+}
+
+#[derive(Debug, Deserialize)]
+struct ReviewRequest {
+    most_unexpected: Option<String>,
+    already_known: Option<String>,
+    self_negation: Option<String>,
+    empty_chair: Option<String>,
+    effectiveness: Option<String>,
+    effectiveness_note: Option<String>,
+}
+
+async fn save_review(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(body): Json<ReviewRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let review_content = serde_json::json!({
+        "type": "review",
+        "most_unexpected": body.most_unexpected.unwrap_or_default(),
+        "already_known": body.already_known.unwrap_or_default(),
+        "self_negation": body.self_negation.unwrap_or_default(),
+        "empty_chair": body.empty_chair.unwrap_or_default(),
+        "effectiveness": body.effectiveness.unwrap_or_default(),
+        "effectiveness_note": body.effectiveness_note.unwrap_or_default(),
+    });
+
+    let msg = foundation::Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        session_id: id,
+        role: MessageRole::System,
+        soul_name: None,
+        content: format!("[REVIEW]{}", review_content),
+        seq: 999,
+        created_at: chrono::Utc::now(),
+    };
+
+    state.archive.append_message(&msg).await.map_err(map_api_error)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }

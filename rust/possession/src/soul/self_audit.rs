@@ -320,7 +320,7 @@ impl SelfAudit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use foundation::{SoulGrade, EffectivenessStats};
+    use foundation::{EffectivenessStats};
 
     fn create_test_profile() -> SoulProfile {
         SoulProfile {
@@ -330,7 +330,6 @@ mod tests {
             ontology: "".to_string(),
             epistemology: "".to_string(),
             teleology: "".to_string(),
-            grade: SoulGrade::B,
             domains: vec!["技术".to_string()],
             exclude_scenarios: vec!["军事".to_string(), "医疗".to_string()],
             summon_count: 0,

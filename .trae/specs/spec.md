@@ -1,335 +1,116 @@
-# 万民幡 Rust 版 - 完整 UI 升级产品需求文档
+# 性能优化 Spec
 
-## Overview
-- **Summary**: 基于 ui-design.md 设计文档，对万民幡 Rust 版本进行完整 UI/UX 升级，实现三区制布局、多列并行魂面板、实时碰撞通知、辩证综合面板、辩论/接力模式、以及完整的知识库和魂状态管理系统。
-- **Purpose**: 从基础可用版本升级到符合设计文档要求的完整产品，提供沉浸式的多视角思维碰撞体验。
-- **Target Users**: 深度思考者、决策者、学习者，需要多视角思维碰撞的用户。
+## Why
+当前万民幡系统在运行时存在多个可量化的性能瓶颈：SQLite 并发写入能力受限、无界 Channel 存在内存泄漏风险、RwLock 争用影响吞吐、前端缺少虚拟列表导致长列表渲染卡顿、recharts 同步导入增大首屏包体积。本次优化旨在消除这些瓶颈，全面提升运行时性能和用户体验。
 
-## Goals
-1. 实现三区制布局 - 魂面板区 + 碰撞通知栏 + 辩证综合面板
-2. 实现桌面端三列并行魂面板 - 每个魂独立显示 token 流、进度条、状态
-3. 实现移动端标签页切换 + 碰撞 badge - 不是简单缩放，而是移动端优化的信息架构
-4. 完善辩论模式 - 两列对立 + 中间裁决栏
-5. 完善接力模式 - 横向时间轴 + 阶段卡片
-6. 实现魂的状态可见性 - 修正时间线、活跃修正提案、已知盲区
-7. 实现完整的知识库检索 - 多维浏览 + 盲区热力图
-8. 保留 TUI 作为辅助界面 - 使用 ratatui 实现
-9. 实现流式合议（Streaming Conference）- 魂在输出过程中实时交叉检测
-10. 实现魂的长驻进程与自我审计 - 魂有记忆连续性，自动发现问题并提出修正
-11. DeepSeek V4 深度优化 - 充分利用上下文缓存、1M 窗口、跨轮思考保留特性
-12. 模型智能路由 - 根据任务类型自动选择合适的模型和推理强度
-13. 成本透明化 - 实时显示 LLM 调用次数、token 消耗、预估费用
+## What Changes
+- Rust 后端：SQLite WAL 模式 + 连接池、有界 Channel、DashMap 替换 RwLock、LLM 语义缓存、归档分页导出、请求限流
+- **BREAKING**: Channel 从 `unbounded` 改为 `bounded`，需在创建 channel 时指定容量并处理发送失败的情况
+- Next.js 前端：虚拟列表、recharts 懒加载、打包优化配置、轮询改 WebSocket 推送、Markdown 清洗结果缓存
 
-## Non-Goals (Out of Scope)
-1. 完全重写现有架构 - 在现有基础上渐进式优化
-2. 添加新的附体模式 - 专注于优化现有模式
-3. 移动端原生应用 - 保持响应式 Web 界面
-4. 多用户协作功能 - MVP 阶段暂不实现
-5. 飞书 Bot 集成 - 文档提到但暂不实现
+## Impact
+- Affected specs: 万民幡完整 UI 升级、万民幡深度优化（NFR-1 性能指标）
+- Affected code: `rust/foundation/src/sqlite.rs`, `rust/possession/src/ws.rs`, `rust/possession/src/stream.rs`, `rust/ai-gateway/src/model_router.rs`, `rust/archive/src/lib.rs`, `rust/api/src/main.rs`, `nextjs/app/sessions/[id]/page.tsx`, `nextjs/app/analytics/page.tsx`, `nextjs/next.config.ts`, `nextjs/hooks/use-websocket.ts`, `nextjs/components/soul-chat-bubble.tsx`
 
-## Background & Context
-当前项目已有基础架构：
-- Rust 后端：Axum WebSocket API + 多个子 crate
-- Next.js 前端：完整的 UI 组件和路由
-- 支持单魂、合议、辩论、接力、学习、实践开口模式
-- 支持 Claude、OpenAI、DeepSeek 多个提供商
+## ADDED Requirements
 
-已有部分功能基础：
-- 流式输出
-- 基础的合议模式
-- 魂管理
+### Requirement: SQLite 并发性能优化
+系统 SHALL 启用 SQLite WAL 模式以允许并发读写，并引入连接池以支持高并发数据库操作。
 
-但缺少设计文档中描述的完整 UI/UX：
-- 三区制布局
-- 多列并行魂面板
-- 碰撞通知栏
-- 辩证综合面板（持续更新）
-- 完善的辩论/接力模式 UI
-- 魂状态详情页（修正时间线等）
-- 知识库检索界面
+#### Scenario: 合议期间多个魂同时写入数据库
+- **WHEN** 合议会话中多个魂完成输出并同时写入数据库
+- **THEN** 写入操作不会因锁争用而串行等待，数据库查询响应时间 < 50ms
+- **AND** 不会出现 "database is locked" 错误
 
-## Functional Requirements
+### Requirement: 有界 Channel 防止内存泄漏
+系统 SHALL 将 WebSocket 广播和流式传输中使用的 `unbounded_channel` 替换为 `bounded_channel`，防止消费者断开或变慢时消息无限积压。
 
-### FR-1: 三区制布局实现
-- 桌面端：魂面板区（三列并行）+ 碰撞通知栏 + 辩证综合面板
-- 移动端：标签页切换 + 碰撞 badge + 折叠式综合面板
-- 响应式设计，根据屏幕尺寸自动切换布局
+#### Scenario: WebSocket 客户端断开连接
+- **WHEN** 前端 WebSocket 连接断开但 LLM 仍在输出
+- **THEN** Channel 缓冲区满后 LLM 输出侧收到 back-pressure，可被及时取消
+- **AND** 不会因消息无限积压导致内存持续增长
 
-### FR-2: 魂面板组件（多列并行）
-- 每个魂独立面板，显示头像/名称、主义主义坐标、进度条
-- 实时 token 流显示，打字机效果
-- 鼠标悬停显示领域标签和审查概要
-- 收到碰撞追问时高亮显示 badge
-- 魂完成状态标识
+### Requirement: RwLock 争用优化
+系统 SHALL 将 `WsSessionManager` 和 `Registry` 中的 `RwLock<HashMap>` 替换为 `DashMap`，消除读写锁争用。
 
-### FR-3: 碰撞通知栏
-- 实时显示魂之间的碰撞事件（费曼→马克思等）
-- 显示碰撞内容摘要
-- 点击查看详细追问内容
-- 显示追问注入状态
-- 支持展开/收起历史碰撞
+#### Scenario: 高并发广播
+- **WHEN** 多个魂同时广播 token 到 WebSocket
+- **THEN** 广播操作不会因单个写锁而串行化
+- **AND** 吞吐量相比 RwLock 版本有可测量的提升
 
-### FR-4: 辩证综合面板（持续更新）
-- 实时显示共识点（带进度条）
-- 显示分歧点（可展开查看详细）
-- 显示盲区点（可展开查看详细）
-- 显示矛盾点
-- 显示建议行动
-- 持续更新，无需等待所有魂完成
+### Requirement: LLM 语义缓存
+系统 SHALL 对相同 input + system prompt 的 LLM 调用实现语义缓存（基于 prompt hash），避免重复调用消耗费用和时间。
 
-### FR-5: 辩论模式 UI
-- 两列对立布局（正方 vs 反方）
-- 中间裁决栏
-- 阶段性结论显示
-- 双方论点对比
-- 核心分歧高亮
+#### Scenario: 连续召唤同一魂处理相同任务
+- **WHEN** 用户在短时间内用相同 input 连续召唤同一魂
+- **THEN** 第二次调用命中缓存，直接返回缓存结果
+- **AND** 不产生额外的 LLM API 调用费用
 
-### FR-6: 接力模式 UI
-- 横向时间轴
-- 阶段卡片（每个魂一个阶段）
-- 衔接审查标注（风险点高亮）
-- 点击阶段卡片展开完整输出
+### Requirement: 归档导出分页
+系统 SHALL 对归档导出功能实现分页加载，避免一次性加载所有数据导致 OOM。
 
-### FR-7: 魂状态详情页
-- 主义主义坐标雷达图
-- 审查日期、最近召唤、累计召唤
-- 有效性统计（有效/部分有效/无效）
-- 修正历史时间线（可展开查看每次修正）
-- 活跃修正提案列表（可查看/审查）
-- 已知盲区列表（标注发现者）
+#### Scenario: 导出大量历史会话
+- **WHEN** 用户导出包含大量会话的归档
+- **THEN** 数据按批次加载和输出，内存使用量保持稳定
+- **AND** 导出功能不会因数据量大而崩溃
 
-### FR-8: 知识库检索界面
-- 搜索框支持关键词搜索
-- 多维筛选（模式/魂/时间范围）
-- 结果列表显示：参与魂、核心分歧、知识卡片
-- 盲区热力图（高频盲区可视化）
-- 自动提示补全盲区建议
+### Requirement: 前端虚拟列表
+系统 SHALL 在历史会话详情页使用虚拟滚动渲染消息列表，仅渲染可视区域内的消息卡片。
 
-### FR-9: TUI 界面（ratatui）
-- 终端实时魂 token 流显示
-- 碰撞通知
-- 辩证综合显示
-- 键盘快捷键操作
-- 零浏览器开销，适合重度本地使用
+#### Scenario: 查看包含大量消息的历史会话
+- **WHEN** 用户打开包含 100+ 条消息的历史会话详情页
+- **THEN** DOM 中仅存在可视区域内的约 10-20 条消息卡片
+- **AND** 页面滚动流畅，无卡顿
+- **AND** 初始渲染时间 < 200ms
 
-### FR-10: 流式合议与实时交叉检测
-- 魂并行输出 token 流
-- 实时检测器监控所有魂的输出
-- 检测到矛盾、互补、盲区时自动生成追问
-- 动态将追问注入相关魂的推理上下文
-- 碰撞事件实时推送到前端 UI
+### Requirement: recharts 懒加载
+系统 SHALL 使用 `next/dynamic` 对 analytics 页面的 recharts 图表组件进行懒加载，避免同步导入增大主 bundle。
 
-### FR-11: 魂长驻进程与记忆连续性
-- 每个魂作为独立 tokio task 运行
-- 内存中维护魂的状态（最近输出、活跃提案等）
-- 利用 DeepSeek V4 跨轮思考保留特性
-- 多次召唤间保持思维连续性
+#### Scenario: 访问非 analytics 页面
+- **WHEN** 用户访问首页或附体页面
+- **THEN** recharts 代码不会被打包到当前页面的 JS bundle 中
+- **AND** 首屏 JS 体积减少约 200KB+
 
-### FR-12: 魂自我审计与修正提案
-- 每次输出后自动执行审计
-- 检测自我矛盾、触及盲区、前提动摇
-- 自动生成修正提案
-- 提案提交幡主审查流程
-- 审查通过后自动更新魂的 summon prompt
+### Requirement: Next.js 打包优化配置
+系统 SHALL 在 `next.config.ts` 中配置 `optimizePackageImports` 优化常用库的导入。
 
-### FR-13: DeepSeek V4 深度优化
-- 上下文缓存优化（静态前缀优先）
-- 1M 窗口支持完整历史注入
-- 跨轮思考保留（无需重复发送 system prompt）
-- 结构化输出（综合报告直接 JSON）
+#### Scenario: 生产构建
+- **WHEN** 执行 `next build`
+- **THEN** lucide-react 图标按需导入，不会全量打包
+- **AND** 各页面 bundle 大小在合理范围
 
-### FR-14: 模型智能路由
-- 根据任务类型选择模型（Flash/Pro/Pro Think High）
-- 根据魂重要性分配推理强度
-- 成本感知路由（权衡质量与费用）
-- 自动降级策略（主模型不可用时切换备用）
+### Requirement: SidebarSessions 轮询替换
+系统 SHALL 将 SidebarSessions 的 5 秒轮询替换为 WebSocket 或 BroadcastChannel 推送，减少不必要的 HTTP 请求。
 
-### FR-15: 成本透明化
-- 实时 token 消耗统计
-- LLM 调用次数计数
-- 预估费用显示（考虑缓存折扣）
-- 历史成本分析
+#### Scenario: 侧边栏会话列表更新
+- **WHEN** 新的附体会话被创建或完成
+- **THEN** 侧边栏自动收到通知并更新
+- **AND** 不再每 5 秒发起 HTTP 请求
 
-## Non-Functional Requirements
+### Requirement: Markdown 渲染优化
+系统 SHALL 对 Markdown 渲染前的 HTML 标签清洗做缓存，避免每次渲染都重复执行字符串替换。
 
-### NFR-1: 性能
-- 合议启动时间 < 3 秒
-- Token 流延迟 < 100ms
-- 支持同时 10+ 魂并行输出
-- 数据库查询响应 < 50ms
-- 页面切换响应 < 200ms
+#### Scenario: 魂流式输出过程中
+- **WHEN** 魂以 50ms 间隔持续输出 token
+- **THEN** 已渲染内容的 HTML 清洗结果被缓存
+- **AND** 只对新增加的 content 部分进行清洗
 
-### NFR-2: 可靠性
-- 会话失败自动恢复
-- 魂输出超时保护（5 分钟）
-- 数据库事务一致性
-- WebSocket 断线重连
-- 组件降级渲染（错误边界）
+### Requirement: 请求限流
+系统 SHALL 在后端 API 层添加请求速率限制，防止滥用导致系统过载。
 
-### NFR-3: 可维护性
-- 模块化设计，清晰的职责分离
-- 完善的日志系统
-- 类型安全的 API
-- 代码注释完整
-- 组件可复用性
+#### Scenario: 短时间内大量 API 请求
+- **WHEN** 同一 IP 在短时间内发起大量 API 调用
+- **THEN** 超出限制的请求返回 429 Too Many Requests
+- **AND** 正常用户不受影响
 
-### NFR-4: 成本优化
-- 相比当前版本降低 50%+ 的 LLM 费用
-- 充分利用 DeepSeek 缓存折扣
-- 智能路由选择性价比最高的模型
+## MODIFIED Requirements
 
-### NFR-5: 用户体验
-- 流畅的动画效果
-- 清晰的加载状态
-- 友好的错误提示
-- 直观的交互设计
-- 符合无障碍标准
-
-## Constraints
-- **Technical**: 必须使用 Rust + Next.js 技术栈
-- **Business**: 保持开源友好，不引入商业限制库
-- **Dependencies**: DeepSeek API 可用性（主要优化目标）
-- **UI Framework**: 保持使用 shadcn/ui + Tailwind CSS
-
-## Assumptions
-1. DeepSeek V4 API 正常可用且稳定
-2. 用户有有效的 DeepSeek API Key
-3. 现有基础架构足够支撑新增功能
-4. 用户接受渐进式功能发布
-5. shadcn/ui 组件库能满足 UI 需求
-
-## Acceptance Criteria
-
-### AC-1: 三区制布局正常工作
-- **Given**: 用户在桌面浏览器访问合议页面
-- **When**: 发起合议会话
-- **Then**: 
-  - 显示三列魂面板并行布局
-  - 底部显示碰撞通知栏
-  - 下方显示辩证综合面板
-- **Verification**: human-judgment
-- **Notes**: 验证布局符合设计文档
-
-### AC-2: 魂面板实时显示 token 流
-- **Given**: 正在进行的合议会话
-- **When**: 魂开始输出
-- **Then**: 
-  - 每个魂独立显示打字机效果的 token 流
-  - 进度条实时更新
-  - 头像/名称/坐标显示正确
-- **Verification**: human-judgment
-
-### AC-3: 碰撞通知实时显示
-- **Given**: 正在进行的合议会话
-- **When**: 交叉检测器发现碰撞
-- **Then**: 
-  - 碰撞通知实时出现在通知栏
-  - 显示碰撞双方和内容摘要
-  - 相关魂面板显示 badge 提示
-- **Verification**: programmatic + human-judgment
-
-### AC-4: 辩证综合面板持续更新
-- **Given**: 正在进行的合议会话
-- **When**: 魂输出进行中
-- **Then**: 
-  - 综合面板持续更新共识/分歧/盲区
-  - 无需等待所有魂完成
-  - 显示进度条标识共识达成度
-- **Verification**: human-judgment
-
-### AC-5: 移动端标签页布局正常
-- **Given**: 用户在移动端访问合议页面
-- **When**: 发起合议会话
-- **Then**: 
-  - 显示标签页切换界面（不是三列缩放）
-  - 碰撞 badge 显示在标签上
-  - 综合面板可折叠/展开
-- **Verification**: human-judgment
-
-### AC-6: 辩论模式两列对立布局
-- **Given**: 用户发起辩论模式
-- **When**: 会话开始
-- **Then**: 
-  - 显示两列对立布局（正方/反方）
-  - 中间显示裁决栏
-  - 阶段性结论正确显示
-- **Verification**: human-judgment
-
-### AC-7: 接力模式时间轴布局
-- **Given**: 用户发起接力模式
-- **When**: 会话进行中
-- **Then**: 
-  - 显示横向时间轴
-  - 每个阶段卡片正确显示
-  - 衔接风险点高亮标注
-- **Verification**: human-judgment
-
-### AC-8: 魂状态详情页信息完整
-- **Given**: 访问魂详情页
-- **When**: 魂有历史记录
-- **Then**: 
-  - 显示修正历史时间线
-  - 显示活跃修正提案
-  - 显示已知盲区列表
-  - 显示召唤统计和有效性
-- **Verification**: human-judgment
-
-### AC-9: 知识库检索返回相关结果
-- **Given**: 有历史合议记录
-- **When**: 用户搜索关键词
-- **Then**: 
-  - 返回相关的历史记录
-  - 结果按相关性排序
-  - 显示参与魂、核心分歧等元数据
-  - 盲区热力图正确显示
-- **Verification**: human-judgment
-
-### AC-10: DeepSeek 缓存优化生效
-- **Given**: 使用 DeepSeek 提供商
-- **When**: 连续召唤同一魂或使用相同任务上下文
-- **Then**: 
-  - API 响应时间明显降低（首次 vs 后续）
-  - 成本统计显示缓存折扣应用
-- **Verification**: programmatic
-
-### AC-11: 自我审计能够发现问题
-- **Given**: 魂有历史输出记录
-- **When**: 新输出与历史明显矛盾
-- **Then**: 
-  - 自动生成修正提案
-  - 提案显示在魂详情页
-- **Verification**: programmatic + human-judgment
-
-### AC-12: 模型路由按预期工作
-- **Given**: 不同类型的任务
-- **When**: 发起附体/合议
-- **Then**: 
-  - 简单任务使用 Flash 模型
-  - 复杂分析使用 Pro Think High
-  - 辩证综合使用最大推理能力
-- **Verification**: programmatic
-
-### AC-13: 成本信息实时显示
-- **Given**: 正在进行的会话
-- **When**: 魂输出和综合完成
-- **Then**: 
-  - 实时显示 token 消耗
-  - 显示 LLM 调用次数
-  - 显示预估费用
-- **Verification**: programmatic
-
-### AC-14: TUI 界面基本可用
-- **Given**: 在终端启动 TUI
-- **When**: 发起合议会话
-- **Then**: 
-  - 显示魂 token 流
-  - 显示碰撞通知
-  - 键盘快捷键可操作
-- **Verification**: human-judgment
-
-## Open Questions
-1. 修正提案的审查流程是完全自动化还是需要人工干预？
-2. 向量检索使用什么实现（pgvector vs qdrant vs 其他）？
-3. 魂的长驻进程是否需要持久化到磁盘（重启后恢复）？
-4. TUI 界面的优先级是多少（是否 MVP 必须）？
-5. 盲区热力图的具体可视化方案是什么？
+### Requirement: NFR-1 性能指标（来自深度优化/UI 升级 Spec）
+系统 SHALL 满足以下增强的性能指标：
+- 合议启动时间 < 3 秒（不变）
+- Token 流延迟 < 100ms（不变）
+- 支持同时 10+ 魂并行输出（不变）
+- 数据库查询响应 < 30ms（从 50ms 优化）
+- 页面切换响应 < 150ms（从 200ms 优化）
+- 前端首屏 JS bundle < 300KB gzipped（新增）
+- 长历史会话详情页渲染 < 200ms（新增）

@@ -14,6 +14,7 @@ pub struct Config {
     pub server_host: String,
     pub server_port: u16,
     pub nextjs_port: u16,
+    pub searxng_url: String,
 }
 
 impl Config {
@@ -37,6 +38,7 @@ impl Config {
             server_host: cfg.get_string("server_host").unwrap_or_else(|_| "127.0.0.1".into()),
             server_port: cfg.get_int("server_port").map(|p| p as u16).unwrap_or(3001),
             nextjs_port: cfg.get_int("nextjs_port").map(|p| p as u16).unwrap_or(3000),
+            searxng_url: cfg.get_string("searxng_url").unwrap_or_else(|_| "http://127.0.0.1:8080".into()),
         })
     }
 }

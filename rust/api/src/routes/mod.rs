@@ -4,6 +4,7 @@ mod archive;
 mod config;
 mod knowledge;
 mod possess;
+mod searxng;
 mod sessions;
 mod souls;
 
@@ -25,6 +26,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .nest("/apikey", apikey::router())
         .nest("/knowledge", knowledge::router())
         .nest("/config", config::router())
+        .nest("/searxng", searxng::router())
 }
 
 async fn health_check() -> axum::Json<serde_json::Value> {

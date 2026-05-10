@@ -125,6 +125,27 @@ export interface KnowledgeResult {
   session_id: string;
 }
 
+export interface KnowledgeTopic {
+  session_id: string;
+  title: string;
+  mode: string;
+  created_at: string;
+  soul_names: string[];
+  card_summary: string | null;
+  synthesis_preview: string | null;
+}
+
+export interface KnowledgeCardItem {
+  id: string;
+  title: string;
+  content: string;
+  source_soul: string | null;
+  source_session: string | null;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
 export async function fetchSouls(): Promise<SoulListEntry[]> {
   return apiRequest<SoulListEntry[]>('/souls', {
     next: { revalidate: 60 },
@@ -351,13 +372,14 @@ export interface AnalyzeResponse {
   matched_souls: { name: string; field: string; ismism_code: string; rationale: string }[];
   recommended_mode: string;
   review: { verdict: string; checks: string[]; notes: string; reviewer: string };
+  task_cards?: Record<string, string>;
 }
 
-export async function analyzeTask(task: string): Promise<AnalyzeResponse> {
+export async function analyzeTask(task: string, reviewer?: string): Promise<AnalyzeResponse> {
   return apiRequest<AnalyzeResponse>('/possess/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ task }),
+    body: JSON.stringify({ task, reviewer }),
     operation: 'analyzeTask',
   });
 }
@@ -371,6 +393,11 @@ export async function startPossession(params: {
   task: string;
   mode?: string;
   souls: string[];
+  task_cards?: Record<string, string>;
+  search_topic?: boolean;
+  judgment?: string;
+  worry?: string;
+  unknown?: string;
 }): Promise<StartPossessionResponse> {
   return apiRequest<StartPossessionResponse>('/possess', {
     method: 'POST',
@@ -401,6 +428,26 @@ export async function exportSessionMarkdown(id: string, title: string): Promise<
   URL.revokeObjectURL(downloadUrl);
 }
 
+// ── Review ──
+
+export interface ReviewData {
+  most_unexpected?: string;
+  already_known?: string;
+  self_negation?: string;
+  empty_chair?: string;
+  effectiveness?: string;
+  effectiveness_note?: string;
+}
+
+export async function saveReview(sessionId: string, data: ReviewData): Promise<void> {
+  return apiRequest(`/sessions/${sessionId}/review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+    operation: "saveReview",
+  });
+}
+
 // ── Knowledge ──
 
 export async function searchKnowledge(query: string, limit = 20): Promise<KnowledgeResult[]> {
@@ -415,6 +462,38 @@ export async function rebuildFts(): Promise<{ indexed: number }> {
     method: 'POST',
     operation: 'rebuildFts',
   });
+}
+
+export async function fetchKnowledgeTopics(params?: {
+  mode?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<KnowledgeTopic[]> {
+  const searchParams = new URLSearchParams();
+  if (params?.mode) searchParams.set('mode', params.mode);
+  if (params?.limit) searchParams.set('limit', String(params.limit));
+  if (params?.offset) searchParams.set('offset', String(params.offset));
+  const qs = searchParams.toString();
+  return apiRequest<KnowledgeTopic[]>(
+    `/knowledge/topics${qs ? `?${qs}` : ''}`,
+    { operation: 'fetchKnowledgeTopics' }
+  );
+}
+
+export async function fetchKnowledgeCards(params?: {
+  soul?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<KnowledgeCardItem[]> {
+  const searchParams = new URLSearchParams();
+  if (params?.soul) searchParams.set('soul', params.soul);
+  if (params?.limit) searchParams.set('limit', String(params.limit));
+  if (params?.offset) searchParams.set('offset', String(params.offset));
+  const qs = searchParams.toString();
+  return apiRequest<KnowledgeCardItem[]>(
+    `/knowledge/cards${qs ? `?${qs}` : ''}`,
+    { operation: 'fetchKnowledgeCards' }
+  );
 }
 
 // ── Synthesis (structured output §9.5) ──
@@ -488,4 +567,41 @@ export async function ocrFiles(files: File[]): Promise<OcrResult[]> {
   }
   const data = await res.json();
   return data.results;
+}
+
+// ── SearXNG ──
+
+export interface SearxngResultItem {
+  title: string;
+  url: string;
+  content: string;
+  engine: string;
+  engines: string[];
+  score: number;
+  category: string;
+}
+
+export interface SearxngSearchResponse {
+  query: string;
+  number_of_results: number;
+  results: SearxngResultItem[];
+  suggestions: string[];
+  unresponsive_engines: string[][];
+}
+
+export async function searchWeb(params: {
+  q: string;
+  pageno?: number;
+  language?: string;
+  categories?: string;
+}): Promise<SearxngSearchResponse> {
+  const searchParams = new URLSearchParams();
+  searchParams.set('q', params.q);
+  if (params.pageno) searchParams.set('pageno', String(params.pageno));
+  if (params.language) searchParams.set('language', params.language);
+  if (params.categories) searchParams.set('categories', params.categories);
+  return apiRequest<SearxngSearchResponse>(
+    `/searxng/search?${searchParams.toString()}`,
+    { operation: 'searchWeb' }
+  );
 }

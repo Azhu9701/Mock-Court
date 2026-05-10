@@ -1,19 +1,21 @@
 "use client";
 
 import { useState } from "react";
-import type { SoulMessage, CollisionEvent, CostInfo } from "@/hooks/use-websocket";
+import type { SoulMessage, CollisionEvent, CostInfo, ToolCallEvent } from "@/hooks/use-websocket";
 import { SoulPanel } from "@/components/soul-panel";
 import { SynthesisPanel } from "@/components/synthesis-panel";
 import { CollisionNotification } from "@/components/collision-notification";
+import { ToolCallList } from "@/components/tool-call-indicator";
 
 interface ConferenceViewProps {
   messages: Record<string, SoulMessage>;
   synthesis: string;
   collisions: CollisionEvent[];
   cost: CostInfo | null;
+  toolCalls: ToolCallEvent[];
 }
 
-export function ConferenceView({ messages, synthesis, collisions, cost }: ConferenceViewProps) {
+export function ConferenceView({ messages, synthesis, collisions, cost, toolCalls }: ConferenceViewProps) {
   const names = Object.keys(messages);
   const [expandedSoul, setExpandedSoul] = useState<string | null>(null);
 
@@ -41,6 +43,13 @@ export function ConferenceView({ messages, synthesis, collisions, cost }: Confer
           )}
         </div>
       </div>
+
+      {/* 工具调用通知 */}
+      {toolCalls.length > 0 && (
+        <div className="px-4 pt-3">
+          <ToolCallList toolCalls={toolCalls} />
+        </div>
+      )}
 
       {/* 魂面板区 - 多列并行 */}
       <div className="flex-1 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 p-3 overflow-hidden">

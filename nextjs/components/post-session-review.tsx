@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { CheckCircle, Lightbulb, AlertCircle, Users } from "lucide-react";
+import { CheckCircle, Lightbulb, AlertCircle, Users, Loader2 } from "lucide-react";
+import { saveReview } from "@/lib/api";
 
 interface PostSessionReviewProps {
   sessionId: string;
@@ -18,6 +19,28 @@ export function PostSessionReview({ sessionId, onComplete }: PostSessionReviewPr
   const [emptyChair, setEmptyChair] = useState("");
   const [effectiveness, setEffectiveness] = useState<"effective" | "partial" | "invalid" | null>(null);
   const [effectivenessNote, setEffectivenessNote] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const handleComplete = async () => {
+    if (!effectiveness) return;
+    setSaving(true);
+    try {
+      await saveReview(sessionId, {
+        most_unexpected: mostUnexpected,
+        already_known: alreadyKnown,
+        self_negation: selfNegation,
+        empty_chair: emptyChair,
+        effectiveness,
+        effectiveness_note: effectivenessNote,
+      });
+      setStep("done");
+    } catch {
+      // Still mark as done even if save fails
+      setStep("done");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="max-w-2xl mx-auto space-y-6 p-4" data-testid="post-session-review">
@@ -183,11 +206,12 @@ export function PostSessionReview({ sessionId, onComplete }: PostSessionReviewPr
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => setStep("chair")}>上一步</Button>
             <Button
-              onClick={() => setStep("done")}
-              disabled={!effectiveness}
+              onClick={handleComplete}
+              disabled={!effectiveness || saving}
               className="flex-1"
               data-testid="effectiveness-done-btn"
             >
+              {saving ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
               完成反馈
             </Button>
           </div>

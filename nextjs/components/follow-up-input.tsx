@@ -24,7 +24,10 @@ interface LocalMsg {
 
 export default function FollowUpInput({ sessionId }: { sessionId: string }) {
   const router = useRouter();
-  const [followUp, setFollowUp] = useState("");
+  const [followUp, setFollowUp] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem(`followup-draft-${sessionId}`) || "";
+  });
   const [sending, setSending] = useState(false);
   const [localMsgs, setLocalMsgs] = useState<LocalMsg[]>([]);
   const [error, setError] = useState("");
@@ -211,6 +214,14 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
       cleanup();
     };
   }, [cleanup]);
+
+  useEffect(() => {
+    if (followUp) {
+      localStorage.setItem(`followup-draft-${sessionId}`, followUp);
+    } else {
+      localStorage.removeItem(`followup-draft-${sessionId}`);
+    }
+  }, [followUp, sessionId]);
 
   const dismissError = () => setError("");
 

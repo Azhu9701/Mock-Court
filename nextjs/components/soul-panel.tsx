@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Brain, AlertCircle, CheckCircle2, Zap, ChevronRight, ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { useCleanContent } from "@/hooks/use-clean-content";
 
 interface SoulPanelProps {
   name: string;
@@ -29,6 +30,7 @@ export function SoulPanel({
 }: SoulPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showTooltip, setShowTooltip] = useState(false);
+  const cleanedContent = useCleanContent(content);
 
   useEffect(() => {
     if (scrollRef.current && isStreaming && isExpanded) {
@@ -130,7 +132,7 @@ export function SoulPanel({
               <p className="line-clamp-2 text-muted-foreground">{firstParagraph}...</p>
             ) : (
               <>
-                <ReactMarkdown remarkPlugins={[remarkGfm]} children={content.replace(/<[^>]+>/g, "")} />
+                <ReactMarkdown remarkPlugins={[remarkGfm]} children={cleanedContent} />
                 {isStreaming && <span className="inline-block w-2 h-4 bg-primary animate-pulse ml-0.5 align-middle" />}
               </>
             )}

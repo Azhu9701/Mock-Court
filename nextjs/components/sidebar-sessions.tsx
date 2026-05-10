@@ -42,19 +42,11 @@ export function SidebarSessions() {
       });
   }, []);
 
-  // 初始加载和轮询
   useEffect(() => {
-    // 使用 setTimeout 避免直接在 useEffect 中调用 setState 的警告
     const timer = setTimeout(() => {
       refreshSessions();
     }, 0);
 
-    // 每 5 秒轮询一次
-    const interval = setInterval(() => {
-      refreshSessions();
-    }, 5000);
-
-    // 监听手动触发的更新事件
     const handleSessionsUpdated = () => {
       refreshSessions();
     };
@@ -62,7 +54,6 @@ export function SidebarSessions() {
 
     return () => {
       clearTimeout(timer);
-      clearInterval(interval);
       window.removeEventListener(SESSIONS_UPDATED_EVENT, handleSessionsUpdated);
     };
   }, [refreshSessions]);

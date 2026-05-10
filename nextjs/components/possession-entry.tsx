@@ -7,12 +7,14 @@ import { SessionRunner } from "@/components/session-runner";
 import FollowUpInput from "@/components/follow-up-input";
 import { 
   Brain, Loader2, Sparkles, ShieldCheck, Zap, Play, User, ChevronDown, ChevronUp,
-  CheckCircle2, AlertCircle, ArrowRightCircle
+  CheckCircle2, AlertCircle, ArrowRightCircle, Globe, Search
 } from "lucide-react";
-import { analyzeTask, startPossession } from "@/lib/api";
+import { analyzeTask, startPossession, searchWeb, type SearxngResultItem } from "@/lib/api";
 import { MODE_LABELS_LONG } from "@/config/possession-modes";
 import { triggerSessionsUpdate } from "@/components/sidebar-sessions";
 import { AttachmentUpload } from "@/components/attachment-upload";
+import { PostSessionReview } from "@/components/post-session-review";
+import { SoulCarousel } from "@/components/soul-carousel";
 
 type Phase = "input" | "classifying" | "matching" | "reviewing" | "adjusting" | "starting" | "running" | "practice_opening";
 
@@ -48,9 +50,26 @@ export function PossessionEntry() {
   const [mode, setMode] = useState("conference");
   const [matchedSouls, setMatchedSouls] = useState<MatchedSoul[]>([]);
   const [review, setReview] = useState<ReviewResult | null>(null);
-  const [showDetail, setShowDetail] = useState(false);
+  const [showDetail, setShowDetail] = useState(true);
   const [sessionDone, setSessionDone] = useState(false);
+  const [reviewDone, setReviewDone] = useState(false);
   const [isCancelled, setIsCancelled] = useState(false);
+  const [searchTopic, setSearchTopic] = useState(true);
+  const [taskCards, setTaskCards] = useState<Record<string, string>>({});
+  const [judgment, setJudgment] = useState("");
+  const [worry, setWorry] = useState("");
+  const [unknown, setUnknown] = useState("");
+  const [showPresets, setShowPresets] = useState(false);
+  const [progressLine, setProgressLine] = useState("");
+
+  // SearXNG 搜索状态
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchResults, setSearchResults] = useState<SearxngResultItem[]>([]);
+  const [searchContext, setSearchContext] = useState("");
+  const [showSearch, setShowSearch] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
   const logEndRef = useRef<HTMLDivElement>(null);
 
   const addLog = useCallback((msg: string) => {
@@ -76,6 +95,38 @@ export function PossessionEntry() {
     });
   }, []);
 
+  // SearXNG 搜索
+  const handleSearch = useCallback(async () => {
+    if (!searchQuery.trim()) return;
+    setSearchLoading(true);
+    setSearchResults([]);
+    try {
+      const data = await searchWeb({ q: searchQuery, language: "zh" });
+      setSearchResults(data.results);
+    } catch (e) {
+      console.error("搜索失败:", e);
+    } finally {
+      setSearchLoading(false);
+    }
+  }, [searchQuery]);
+
+  const applyResultContext = useCallback((result: SearxngResultItem) => {
+    const ctx = `## ${result.title}\n${result.content || ""}\n来源: ${result.url}`;
+    setSearchContext(ctx);
+    setTask((prev) => {
+      const header = "> 以下是通过 SearXNG 搜索获取的背景信息\n\n";
+      const trimmed = prev.replace(/^> 以下是通过 SearXNG 搜索获取的背景信息\n\n[\s\S]*?\n\n---\n\n/gm, "").trim();
+      return `${header}${ctx}\n\n---\n\n${trimmed}`;
+    });
+    setShowSearch(false);
+    setSearchResults([]);
+  }, []);
+
+  const clearSearchContext = useCallback(() => {
+    setSearchContext("");
+    setTask((prev) => prev.replace(/^> 以下是通过 SearXNG 搜索获取的背景信息\n\n[\s\S]*?\n\n---\n\n/gm, "").trim());
+  }, []);
+
   const onStart = async () => {
     if (!task.trim() || phase !== "input") return;
     
@@ -90,9 +141,11 @@ export function PossessionEntry() {
 
     try {
       addLog("开始分析任务...");
+      setProgressLine("正在分析任务，入口分流中…");
       setPhase("matching");
       console.log("=== 调用 analyzeTask API...");
-      const data = await analyzeTask(task);
+      const reviewer = localStorage.getItem("aionui-banner-lord") || undefined;
+      const data = await analyzeTask(task, reviewer);
       console.log("=== analyzeTask 完成:", data);
       addLog("✅ analyzeTask 完成");
 
@@ -105,21 +158,26 @@ export function PossessionEntry() {
       if (data.entry_type === "practice_opening") {
         setPhase("practice_opening");
         addLog("✨ 检测到实践者在场 → 进入实践开口流程");
+        setProgressLine("检测到实践者在场，进入实践开口流程");
         return;
       }
 
       const souls = data.matched_souls || [];
       const matchedMode = data.recommended_mode || "conference";
       const reviewData = data.review || {};
+      const cards = data.task_cards || {};
       setMatchedSouls(souls);
       setMode(matchedMode);
       setReview(reviewData);
+      setTaskCards(cards);
       
       addLog(`✅ 匹配完成: ${souls.length} 个魂`);
       addLog(`推荐模式: ${getModeLabel(matchedMode)}`);
+      setProgressLine(`已匹配 ${souls.length} 个魂：${souls.map((s: any) => s.name).join("、")}`);
       setPhase("reviewing");
 
       if (reviewData.reviewer) {
+        setProgressLine(`审查官 ${reviewData.reviewer} 正在审查魂组合…`);
         addLog(`🔍 审查官: ${reviewData.reviewer} | 裁决: ${getVerdictLabel(reviewData.verdict)}`);
         (reviewData.checks || []).forEach((c: string) => addLog(`   - ${c}`));
         if (reviewData.notes) {
@@ -130,6 +188,7 @@ export function PossessionEntry() {
       if (reviewData.verdict === "reject") {
         setPhase("adjusting");
         addLog("🔄 审查未通过 → 重新调整魂组合...");
+        setProgressLine("审查未通过，正在调整魂组合…");
       }
 
       if (isCancelled) {
@@ -140,10 +199,16 @@ export function PossessionEntry() {
 
       setPhase("starting");
       addLog("🚀 启动附体会话...");
+      setProgressLine("正在启动附体会话…");
 
       console.log("=== 调用 startPossession API...");
       const { session_id } = await startPossession({
         mode: matchedMode, task, souls: souls.map((s: any) => s.name),
+        task_cards: Object.keys(cards).length > 0 ? cards : undefined,
+        search_topic: searchTopic,
+        judgment: judgment || undefined,
+        worry: worry || undefined,
+        unknown: unknown || undefined,
       });
       console.log("=== startPossession 完成, session_id:", session_id);
       
@@ -156,6 +221,7 @@ export function PossessionEntry() {
       setSessionId(session_id);
       setPhase("running");
       addLog("🎉 附体会话已启动");
+      setProgressLine("附体会话已启动，魂正在思考…");
       triggerSessionsUpdate();
     } catch (e: any) {
       console.error("=== 发生错误:", e);
@@ -171,6 +237,7 @@ export function PossessionEntry() {
   const onCancel = () => {
     setIsCancelled(true);
     setPhase("input");
+    setProgressLine("");
     addLog("⏹️ 用户取消了操作");
   };
 
@@ -273,6 +340,7 @@ export function PossessionEntry() {
         <SessionRunner
           sessionId={sessionId}
           mode={mode}
+          matchedSouls={matchedSouls}
           onDone={() => setSessionDone(true)}
           onReview={() => setPhase("input")}
           sessionDone={sessionDone}
@@ -281,7 +349,14 @@ export function PossessionEntry() {
         {/* Follow-up input (shown after session is done) */}
         {sessionDone && (
           <div className="mt-4">
-            <FollowUpInput sessionId={sessionId} />
+            {!reviewDone ? (
+              <PostSessionReview
+                sessionId={sessionId}
+                onComplete={() => setReviewDone(true)}
+              />
+            ) : (
+              <FollowUpInput sessionId={sessionId} />
+            )}
           </div>
         )}
       </div>
@@ -319,7 +394,162 @@ export function PossessionEntry() {
                 data-testid="task-input"
                 className="resize-none transition-all focus:ring-2 focus:ring-primary/20"
               />
-              <div className="flex items-center justify-end">
+
+              {/* SearXNG 搜索背景 */}
+              {searchContext && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/30 rounded-lg px-3 py-1.5">
+                  <Globe className="h-3.5 w-3.5 text-green-500" />
+                  <span>已添加 SearXNG 搜索背景</span>
+                  <button onClick={clearSearchContext} className="ml-auto text-destructive hover:underline">
+                    清除
+                  </button>
+                </div>
+              )}
+
+              {!showSearch && (
+                <button
+                  onClick={() => setShowSearch(true)}
+                  className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <Search className="h-4 w-4" />
+                  搜索背景资料（通过 SearXNG）
+                </button>
+              )}
+
+              {showSearch && (
+                <div className="rounded-lg border bg-muted/20 p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">SearXNG 搜索背景</span>
+                    <button
+                      onClick={() => { setShowSearch(false); setSearchResults([]); }}
+                      className="text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      收起
+                    </button>
+                  </div>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
+                        placeholder={task ? `搜索: ${task.slice(0, 40)}...` : "输入搜索关键词..."}
+                        className="w-full rounded-lg border bg-background pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      />
+                    </div>
+                    <Button
+                      onClick={handleSearch}
+                      disabled={searchLoading || !searchQuery.trim()}
+                      size="sm"
+                    >
+                      {searchLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                      搜索
+                    </Button>
+                  </div>
+
+                  {searchResults.length > 0 && (
+                    <>
+                      <div className="max-h-64 overflow-y-auto space-y-2">
+                        {searchResults.slice(0, 8).map((r, i) => (
+                          <div
+                            key={i}
+                            className="rounded-lg border border-transparent bg-background hover:border-primary/20 p-3 transition-all text-sm group"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex-1 min-w-0">
+                                <a
+                                  href={r.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="font-medium line-clamp-1 hover:underline text-primary"
+                                >
+                                  {r.title}
+                                </a>
+                                {r.content && (
+                                  <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{r.content}</p>
+                                )}
+                              </div>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => applyResultContext(r)}
+                                className="shrink-0 h-7 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                              >
+                                引用
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="text-xs text-muted-foreground pt-1">
+                        共 {searchResults.length} 条结果，点击「引用」添加到问题背景
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              <div className="border-t pt-3">
+                <button
+                  type="button"
+                  onClick={() => setShowPresets(!showPresets)}
+                  className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {showPresets ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                  使用者预设（判断 · 担忧 · 未知）
+                </button>
+                {showPresets && (
+                  <div className="mt-3 space-y-3">
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">你的判断</label>
+                      <Textarea
+                        value={judgment}
+                        onChange={(e) => setJudgment(e.target.value)}
+                        placeholder="对这个问题，你目前的基本判断是什么？"
+                        rows={2}
+                        className="mt-1 resize-none text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">你的担忧</label>
+                      <Textarea
+                        value={worry}
+                        onChange={(e) => setWorry(e.target.value)}
+                        placeholder="你最担心分析中可能忽略什么？"
+                        rows={2}
+                        className="mt-1 resize-none text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">未知领域</label>
+                      <Textarea
+                        value={unknown}
+                        onChange={(e) => setUnknown(e.target.value)}
+                        placeholder="有哪些你不确定的关键信息或变量？"
+                        rows={2}
+                        className="mt-1 resize-none text-sm"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={searchTopic}
+                      onChange={(e) => setSearchTopic(e.target.checked)}
+                      className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                    />
+                    <Globe className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm text-muted-foreground">启动时搜索议题背景</span>
+                  </label>
+                </div>
                 <Button 
                   onClick={onStart} 
                   disabled={!task.trim()} 
@@ -334,31 +564,6 @@ export function PossessionEntry() {
             </div>
           </div>
 
-          {/* Pipeline preview */}
-          <div className="rounded-xl border bg-muted/30 p-4">
-            <h3 className="text-sm font-medium mb-3">流程</h3>
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <div className="flex items-center gap-2">
-                <Brain className="h-4 w-4" />
-                <span>提问</span>
-              </div>
-              <ArrowRightCircle className="h-4 w-4" />
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4" />
-                <span>匹配</span>
-              </div>
-              <ArrowRightCircle className="h-4 w-4" />
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="h-4 w-4" />
-                <span>审查</span>
-              </div>
-              <ArrowRightCircle className="h-4 w-4" />
-              <div className="flex items-center gap-2">
-                <Play className="h-4 w-4" />
-                <span>启动</span>
-              </div>
-            </div>
-          </div>
         </div>
       )}
 
@@ -398,6 +603,13 @@ export function PossessionEntry() {
                   <Loader2 className="h-5 w-5 animate-spin text-primary" />
                   附体流程
                 </h2>
+
+                {progressLine && (
+                  <p className="text-sm text-primary font-medium mb-4 px-3 py-2 bg-primary/5 rounded-lg border border-primary/20 animate-in fade-in">
+                    {progressLine}
+                  </p>
+                )}
+
                 <div className="space-y-3">
                   {activePhases.map((p, i) => {
                     const Icon = p.icon;
@@ -419,6 +631,8 @@ export function PossessionEntry() {
                     );
                   })}
                 </div>
+
+                {phase === "matching" && <SoulCarousel />}
                 
                 <Button 
                   variant="ghost" 

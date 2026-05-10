@@ -12,3 +12,4 @@ tracing = { workspace = true }
 tantivy = "0.22"
 uuid = { workspace = true }
 chrono = { workspace = true }
+dashmap = { workspace = true }

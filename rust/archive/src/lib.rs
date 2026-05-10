@@ -306,6 +306,14 @@ impl ArchiveSystem {
         self.store.rebuild_fts().await
     }
 
+    pub async fn list_knowledge_topics(&self, mode: Option<&str>, limit: usize, offset: usize) -> Result<Vec<foundation::KnowledgeTopic>> {
+        self.store.list_knowledge_topics(mode, limit, offset).await
+    }
+
+    pub async fn get_knowledge_cards_list(&self, filter: &foundation::KnowledgeCardFilter) -> Result<Vec<foundation::KnowledgeCard>> {
+        self.store.get_knowledge_cards(filter).await
+    }
+
     // ── Audit ──
 
     pub async fn check_failure_conditions(&self) -> Result<Vec<FailureAlert>> {
@@ -398,19 +406,31 @@ fn archive_session_dir(session_id: &str) -> String {
     )
 }
 
+const EXPORT_PAGE_SIZE: u32 = 50;
+
 async fn build_export(store: &dyn Storage) -> Result<(ExportBundle, String)> {
-    let sessions = store
-        .list_sessions(&SessionFilter::default())
-        .await?;
     let call_records = store
         .query_call_records(&CallFilter::default())
         .await?;
 
     let mut session_details = Vec::new();
-    for s in &sessions {
-        let session = store.get_session(&s.id).await?;
-        let messages = store.get_messages(&s.id).await?;
-        session_details.push(SessionDetail { session, messages });
+    let mut offset: u32 = 0;
+    loop {
+        let filter = SessionFilter {
+            limit: Some(EXPORT_PAGE_SIZE),
+            offset: Some(offset),
+            ..Default::default()
+        };
+        let page = store.list_sessions(&filter).await?;
+        if page.is_empty() {
+            break;
+        }
+        for s in &page {
+            let session = store.get_session(&s.id).await?;
+            let messages = store.get_messages(&s.id).await?;
+            session_details.push(SessionDetail { session, messages });
+        }
+        offset += EXPORT_PAGE_SIZE;
     }
 
     let bundle = ExportBundle {

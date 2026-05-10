@@ -1,14 +1,15 @@
 use ai_gateway::GatewayRegistry;
-use foundation::{Chunk, ProviderInfo, Result, UsageStats};
-use tokio::sync::mpsc::UnboundedReceiver;
+use foundation::{Chunk, LLMRequest, Prompt, PromptMessage, ProviderInfo, Result, UsageStats};
+use tokio::sync::mpsc;
 
-use crate::{SoulOutput, WsEvent, WsEventType, WsSessionManager};
+use crate::{SoulOutput, ToolCallPayload, ToolResultPayload, WsEvent, WsEventType, WsSessionManager};
+use crate::tools::ToolRegistry;
 
 const FALLBACK_MODEL: &str = "claude-sonnet-4-6";
 
 /// Stream LLM chunks to WebSocket, aggregating content and usage stats.
 pub async fn stream_single_soul(
-    mut rx: UnboundedReceiver<Result<Chunk>>,
+    mut rx: mpsc::Receiver<Result<Chunk>>,
     session_id: &str,
     soul_name: &str,
     ws: &WsSessionManager,
@@ -17,6 +18,7 @@ pub async fn stream_single_soul(
     let mut usage = UsageStats::default();
     let mut seq: u32 = 0;
     let name = soul_name.to_string();
+    let mut tool_calls: Vec<foundation::ToolCall> = Vec::new();
 
     while let Some(result) = rx.recv().await {
         match result {
@@ -24,10 +26,11 @@ pub async fn stream_single_soul(
                 if let Some(u) = chunk.usage {
                     usage = u;
                 }
+                if !chunk.tool_calls.is_empty() {
+                    tool_calls.extend(chunk.tool_calls);
+                }
                 if !chunk.content.is_empty() || chunk.reasoning_content.is_some() {
-                    if let Some(rc) = &chunk.reasoning_content {
-                        content.push_str(rc);
-                    } else {
+                    if chunk.reasoning_content.is_none() {
                         content.push_str(&chunk.content);
                     }
                     ws.broadcast_soul(
@@ -73,7 +76,7 @@ pub async fn stream_single_soul(
         },
     );
 
-    SoulOutput { soul_name: name, content, usage, error: None }
+    SoulOutput { soul_name: name, content, usage, error: None, tool_calls }
 }
 
 /// Pick the first available provider info (model + tier).
@@ -93,7 +96,7 @@ pub fn pick_provider_info(gateway: &GatewayRegistry) -> ProviderInfo {
 
 /// Stream synthesis to WebSocket, returning aggregated content and usage.
 pub async fn stream_synthesis(
-    mut rx: UnboundedReceiver<Result<Chunk>>,
+    mut rx: mpsc::Receiver<Result<Chunk>>,
     session_id: &str,
     ws: &WsSessionManager,
 ) -> Result<(String, UsageStats)> {
@@ -111,9 +114,7 @@ pub async fn stream_synthesis(
                 }
                 if !chunk.content.is_empty() || chunk.reasoning_content.is_some() {
                     chunk_count += 1;
-                    if let Some(rc) = &chunk.reasoning_content {
-                        content.push_str(rc);
-                    } else {
+                    if chunk.reasoning_content.is_none() {
                         content.push_str(&chunk.content);
                     }
                     tracing::debug!("Broadcasting synthesis chunk #{}: content={:?}, reasoning={:?}", chunk_count, chunk.content, chunk.reasoning_content);
@@ -150,4 +151,105 @@ pub async fn stream_synthesis(
     );
 
     Ok((content, usage))
+}
+
+pub async fn run_tool_loop(
+    gateway: &GatewayRegistry,
+    provider: foundation::Provider,
+    initial_prompt: &Prompt,
+    config: &foundation::CallConfig,
+    session_id: &str,
+    soul_name: &str,
+    ws: &WsSessionManager,
+    tool_registry: &ToolRegistry,
+) -> SoulOutput {
+    let mut history: Vec<PromptMessage> = initial_prompt.messages.clone();
+    let max_rounds = crate::tools::max_tool_rounds();
+    let name = soul_name.to_string();
+
+    for _round in 0..max_rounds {
+        let prompt = Prompt { messages: history.clone() };
+        let req = LLMRequest {
+            provider: provider.clone(),
+            prompt,
+            config: config.clone(),
+        };
+
+        let rx = match gateway.call(&req) {
+            Ok(rx) => rx,
+            Err(e) => return SoulOutput::error(name, e.to_string()),
+        };
+
+        let output = stream_single_soul(rx, session_id, soul_name, ws).await;
+
+        if output.error.is_some() {
+            return output;
+        }
+
+        if output.tool_calls.is_empty() {
+            return output;
+        }
+
+        for tc in &output.tool_calls {
+            let payload = ToolCallPayload {
+                tool_call_id: tc.id.clone(),
+                tool_name: tc.function.name.clone(),
+                arguments: tc.function.arguments.clone(),
+                soul_name: name.clone(),
+            };
+            let json = serde_json::to_string(&payload).unwrap_or_default();
+            ws.broadcast_soul(session_id, &name, &WsEvent {
+                event_type: WsEventType::ToolCallStarted,
+                payload: json,
+                reasoning_content: None,
+                soul_name: Some(name.clone()),
+                seq: 0,
+            });
+
+            match tool_registry.execute(tc).await {
+                Ok(result) => {
+                    let result_payload = ToolResultPayload {
+                        tool_call_id: tc.id.clone(),
+                        tool_name: tc.function.name.clone(),
+                        result: result.clone(),
+                        soul_name: name.clone(),
+                    };
+                    let result_json = serde_json::to_string(&result_payload).unwrap_or_default();
+                    ws.broadcast_soul(session_id, &name, &WsEvent {
+                        event_type: WsEventType::ToolResult,
+                        payload: result_json,
+                        reasoning_content: None,
+                        soul_name: Some(name.clone()),
+                        seq: 0,
+                    });
+
+                    history.push(PromptMessage {
+                        role: "assistant".to_string(),
+                        content: String::new(),
+                        reasoning_content: None,
+                        tool_calls: Some(output.tool_calls.clone()),
+                        tool_call_id: None,
+                    });
+                    history.push(PromptMessage {
+                        role: "tool".to_string(),
+                        content: result,
+                        reasoning_content: None,
+                        tool_calls: None,
+                        tool_call_id: Some(tc.id.clone()),
+                    });
+                }
+                Err(e) => {
+                    return SoulOutput::error(name, format!("Tool {} failed: {}", tc.function.name, e));
+                }
+            }
+        }
+    }
+
+    SoulOutput {
+        soul_name: name,
+        content: String::new(),
+        usage: UsageStats::default(),
+        error: Some(format!("Tool call loop exceeded {} rounds", max_rounds)),
+        tool_calls: Vec::new(),
+    }
 }

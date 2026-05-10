@@ -41,12 +41,12 @@ impl Gateway for ClaudeClient {
         &self,
         prompt: &Prompt,
         config: &CallConfig,
-    ) -> mpsc::UnboundedReceiver<Result<Chunk>> {
-        let (tx, rx) = mpsc::unbounded_channel();
+    ) -> mpsc::Receiver<Result<Chunk>> {
+        let (tx, rx) = mpsc::channel(256);
         let api_key = match &self.api_key {
             Some(k) => k.clone(),
             None => {
-                let _ = tx.send(Err(FoundationError::Validation(
+                let _ = tx.try_send(Err(FoundationError::Validation(
                     "Claude API key not configured".into(),
                 )));
                 return rx;
@@ -103,7 +103,7 @@ impl Gateway for ClaudeClient {
             let response = match result {
                 Ok(r) => r,
                 Err(e) => {
-                    let _ = tx.send(Err(FoundationError::Io(std::io::Error::other(e.to_string()))));
+                    let _ = tx.send(Err(FoundationError::Io(std::io::Error::other(e.to_string())))).await;
                     return;
                 }
             };
@@ -114,7 +114,7 @@ impl Gateway for ClaudeClient {
                 let _ = tx.send(Err(FoundationError::Validation(format!(
                     "Claude API error {}: {}",
                     status, body
-                ))));
+                )))).await;
                 return;
             }
 
@@ -150,7 +150,8 @@ impl Gateway for ClaudeClient {
                                                     finish_reason: None,
                                                     index: chunk_index,
                                                     usage: None,
-                                                }));
+                                                    tool_calls: Vec::new(),
+                                                })).await;
                                                 chunk_index += 1;
                                             }
                                         }
@@ -171,7 +172,8 @@ impl Gateway for ClaudeClient {
                                             finish_reason: Some("stop".into()),
                                             index: chunk_index,
                                             usage: Some(usage),
-                                        }));
+                                            tool_calls: Vec::new(),
+                                        })).await;
                                         }
                                         _ => {}
                                     }
@@ -180,7 +182,7 @@ impl Gateway for ClaudeClient {
                         }
                     }
                     Err(e) => {
-                        let _ = tx.send(Err(FoundationError::Io(std::io::Error::other(e.to_string()))));
+                        let _ = tx.send(Err(FoundationError::Io(std::io::Error::other(e.to_string())))).await;
                         return;
                     }
                 }

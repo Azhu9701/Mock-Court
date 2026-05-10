@@ -2,6 +2,7 @@ mod modes;
 mod recovery;
 pub mod soul;
 pub mod stream;
+pub mod tools;
 pub mod triage;
 mod ws;
 pub mod cross_detector;
@@ -14,7 +15,7 @@ use foundation::{
     FoundationError, PossessionMode, Result, Session, SessionStatus, Storage, UsageStats,
 };
 use registry::SoulRegistry;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 pub use recovery::RecoveryManager;
@@ -149,6 +150,7 @@ pub struct SoulOutput {
     pub content: String,
     pub usage: UsageStats,
     pub error: Option<String>,
+    pub tool_calls: Vec<foundation::ToolCall>,
 }
 
 impl SoulOutput {
@@ -158,6 +160,7 @@ impl SoulOutput {
             content: String::new(),
             usage: UsageStats::default(),
             error: Some(err),
+            tool_calls: Vec::new(),
         }
     }
 }
@@ -169,6 +172,22 @@ pub struct WsEvent {
     pub reasoning_content: Option<String>,
     pub soul_name: Option<String>,
     pub seq: u32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ToolCallPayload {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub arguments: String,
+    pub soul_name: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ToolResultPayload {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub result: String,
+    pub soul_name: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -211,6 +230,11 @@ pub enum WsEventType {
     // Cost tracking
     #[serde(rename = "cost")]
     Cost,
+    // Tool calling
+    #[serde(rename = "tool_call_started")]
+    ToolCallStarted,
+    #[serde(rename = "tool_result")]
+    ToolResult,
 }
 
 pub struct PossessionEngine {
@@ -219,6 +243,7 @@ pub struct PossessionEngine {
     gateway: Arc<GatewayRegistry>,
     ws_manager: WsSessionManager,
     shutdown_flag: AtomicBool,
+    tool_registry: tools::ToolRegistry,
 }
 
 impl PossessionEngine {
@@ -233,13 +258,22 @@ impl PossessionEngine {
             gateway,
             ws_manager: WsSessionManager::new(),
             shutdown_flag: AtomicBool::new(false),
+            tool_registry: tools::ToolRegistry::new(),
         }
+    }
+
+    pub fn tool_registry(&self) -> &tools::ToolRegistry {
+        &self.tool_registry
+    }
+
+    pub fn tool_registry_mut(&mut self) -> &mut tools::ToolRegistry {
+        &mut self.tool_registry
     }
 
     pub async fn start_possession(
         &self,
         input: PossessionInput,
-        system_tx: UnboundedSender<WsEvent>,
+        system_tx: mpsc::Sender<WsEvent>,
     ) -> Result<String> {
         let entry = triage::triage(&input);
         let session_id = Uuid::new_v4().to_string();
@@ -262,6 +296,7 @@ impl PossessionEngine {
         let registry = self.registry.clone();
         let gateway = self.gateway.clone();
         let ws = self.ws_manager.clone();
+        let tool_reg = self.tool_registry.clone();
         let sid = session_id.clone();
         let task = input.task.clone();
         let created_at = session.created_at;
@@ -273,6 +308,7 @@ impl PossessionEngine {
                 &registry,
                 &gateway,
                 &ws,
+                &tool_reg,
                 &sid,
                 &input,
                 &system_tx,
@@ -294,13 +330,13 @@ impl PossessionEngine {
             })
             .await;
 
-            let _ = system_tx.send(WsEvent {
+            let _ = system_tx.try_send(WsEvent {
         event_type: WsEventType::SessionComplete,
         payload: String::new(),
         reasoning_content: None,
         soul_name: None,
         seq: 0,
-    });
+    }).ok();
 
             if let Err(e) = result {
                 tracing::error!("Session {} failed: {}", sid, e);
@@ -333,38 +369,60 @@ async fn dispatch_mode(
     registry: &SoulRegistry,
     gateway: &GatewayRegistry,
     ws: &WsSessionManager,
+    tool_registry: &tools::ToolRegistry,
     session_id: &str,
     input: &PossessionInput,
-    system_tx: &UnboundedSender<WsEvent>,
+    system_tx: &mpsc::Sender<WsEvent>,
 ) -> Result<()> {
     let presets = UserPresets::from(input);
 
-    let _ = system_tx.send(WsEvent {
+    let _ = system_tx.try_send(WsEvent {
         event_type: WsEventType::SessionStarted,
         payload: format!("附体会话已创建，模式：{}", entry_to_mode(entry).as_str()),
         reasoning_content: None,
         soul_name: None,
         seq: 0,
-    });
+    }).ok();
 
-    let _ = system_tx.send(WsEvent {
+    let _ = system_tx.try_send(WsEvent {
         event_type: WsEventType::EntryClassified,
         payload: format!("入口分流完成 — 匹配魂：{}", input.souls.join(", ")),
         reasoning_content: None,
         soul_name: None,
         seq: 1,
-    });
+    }).ok();
+
+    if let Some(ref sr) = input.search_results {
+        let preview_len = 100.min(sr.len());
+        let preview = &sr[..preview_len];
+        let line_count = sr.lines().count();
+        let _ = system_tx.try_send(WsEvent {
+            event_type: WsEventType::ProcessStep,
+            payload: format!("议题背景搜索完成：已获取 {} 行背景资料\n> {}", line_count, preview),
+            reasoning_content: None,
+            soul_name: None,
+            seq: 2,
+        }).ok();
+    } else if input.search_topic {
+        let _ = system_tx.try_send(WsEvent {
+            event_type: WsEventType::ProcessStep,
+            payload: "议题背景搜索未获取到结果，魂将依赖自身知识库。".into(),
+            reasoning_content: None,
+            soul_name: None,
+            seq: 2,
+        }).ok();
+    }
 
     match entry {
         EntryType::Single => {
             let soul = input.souls.first().ok_or_else(|| {
                 FoundationError::Validation("Single mode requires a soul".into())
             })?;
-            single::run(store, registry, gateway, ws, session_id, soul, &input.task, &presets, system_tx).await?;
+            single::run(store, registry, gateway, ws, session_id, soul, &input.task, &presets, system_tx, tool_registry).await?;
         }
         EntryType::Conference => {
             conference::run(
-                store, registry, gateway, ws, session_id, &input.task, &input.souls, &input.task_cards, &presets, system_tx,
+                store, registry, gateway, ws, session_id, &input.task, &input.souls, &input.task_cards, &presets, system_tx, tool_registry,
             )
             .await?;
         }
@@ -379,7 +437,7 @@ async fn dispatch_mode(
             };
             let topic = input.topic.clone().unwrap_or_else(|| input.task.clone());
             debate::run(
-                store, registry, gateway, ws, session_id, &a, &b, &topic, &presets, system_tx,
+                store, registry, gateway, ws, session_id, &a, &b, &topic, &presets, system_tx, tool_registry,
             )
             .await?;
         }
@@ -390,7 +448,7 @@ async fn dispatch_mode(
                 ));
             }
             relay::run(
-                store, registry, gateway, ws, session_id, &input.task, &input.souls, &presets, system_tx,
+                store, registry, gateway, ws, session_id, &input.task, &input.souls, &presets, system_tx, tool_registry,
             )
             .await?;
         }
@@ -398,11 +456,11 @@ async fn dispatch_mode(
             let soul = input.souls.first().ok_or_else(|| {
                 FoundationError::Validation("Learn mode requires a soul".into())
             })?;
-            learn::run(store, registry, gateway, ws, session_id, soul, &input.task, &presets, system_tx).await?;
+            learn::run(store, registry, gateway, ws, session_id, soul, &input.task, &presets, system_tx, tool_registry).await?;
         }
         EntryType::PracticeOpening => {
             practice_opening::run(
-                store, registry, gateway, ws, session_id, &input.task, &presets, system_tx,
+                store, registry, gateway, ws, session_id, &input.task, &presets, system_tx, tool_registry,
             )
             .await?;
         }

@@ -1,291 +1,147 @@
-# 万民幡 Rust 版 - 完整 UI 升级实现计划
+# 性能优化实现计划
 
-## [x] Task 1: DeepSeek V4 缓存与结构化输出优化
+## [x] Task 1: SQLite WAL 模式 + 连接池
 - **Priority**: P0
 - **Depends On**: None
-- **Description**: 
-  - 优化 PromptBuilder，实现缓存友好的消息顺序
-  - 添加结构化输出支持（JSON Schema）
-  - 完善 DeepSeek 客户端，支持不同推理强度（Think/Think High/Think Max）
-- **Acceptance Criteria Addressed**: AC-10
+- **Description**:
+  - 在 SQLite 数据库初始化时启用 WAL 模式 (`PRAGMA journal_mode=WAL`)
+  - 引入 `r2d2-sqlite` 连接池，替换现有的直接 `rusqlite::Connection`
+  - 扩展 `foundation::Storage` trait 以使用连接池
+  - 配置合理的连接池大小（建议 5-10）
+- **Acceptance Criteria Addressed**: SQLite 并发性能优化
 - **Test Requirements**:
-  - `programmatic`: 验证缓存优化前后的响应时间对比
-  - `programmatic`: 验证结构化输出能正确解析
-  - `human-judgment`: 检查代码结构清晰，易于维护
-- **Notes**: 优先实现，因为能立即带来成本降低
+  - `programmatic`: 验证 WAL 模式已启用
+  - `programmatic`: 并发写入测试验证无锁争用
+  - `programmatic`: 数据库查询响应时间 < 30ms
 
-## [x] Task 2: 模型智能路由系统
-- **Priority**: P0
-- **Depends On**: Task 1
-- **Description**: 
-  - 设计并实现 ModelRouter trait
-  - 实现任务类型分类（简单魂/核心分析/综合/审查）
-  - 根据任务类型自动选择模型和推理强度
-  - 添加降级策略
-- **Acceptance Criteria Addressed**: AC-12
-- **Test Requirements**:
-  - `programmatic`: 单元测试验证路由逻辑正确
-  - `programmatic`: 集成测试验证不同任务使用不同模型
-  - `human-judgment`: 代码审查路由策略合理性
-
-## [x] Task 3: 流式交叉检测器（基础框架）
+## [x] Task 2: 有界 Channel 替换
 - **Priority**: P0
 - **Depends On**: None
-- **Description**: 
-  - 设计交叉检测数据结构
-  - 实现 token 流缓冲区
-  - 实现基础的冲突检测逻辑（关键词匹配）
-  - 添加碰撞事件类型到 WsEventType
-- **Acceptance Criteria Addressed**: AC-3
+- **Description**:
+  - 将 `possession/src/ws.rs` 中 `WsSessionManager` 的 `mpsc::unbounded_channel` 替换为 `mpsc::channel`（建议容量 256）
+  - 将 `possession/src/stream.rs` 中 LLM 流式输出到广播层的 channel 替换为有界
+  - 处理 `try_send` 失败的情况（消费者满时记录警告日志并跳过）
+  - 将 `ai-gateway` 中 LLM provider 与 consumer 之间的 channel 替换为有界
+- **Acceptance Criteria Addressed**: 有界 Channel 防止内存泄漏
 - **Test Requirements**:
-  - `programmatic`: 单元测试验证缓冲区管理
-  - `programmatic`: 单元测试验证基础冲突检测
-  - `human-judgment`: 设计文档审查
+  - `programmatic`: 验证 channel 满时不会 panic
+  - `programmatic`: 验证消费者断开后消息不会无限积压
+  - `human-judgment`: 代码审查 back-pressure 处理逻辑
 
-## [/] Task 4: 魂长驻进程管理器
-- **Priority**: P1
-- **Depends On**: Task 2
-- **Description**: 
-  - 实现 SoulProcess struct（tokio task + channel）
-  - 实现 SoulRegistry 扩展支持长驻进程
-  - 添加进程生命周期管理（启动/休眠/唤醒）
-  - 利用 DeepSeek 跨轮思考保留
-- **Acceptance Criteria Addressed**: AC-10
-- **Test Requirements**:
-  - `programmatic`: 单元测试进程状态管理
-  - `programmatic`: 集成测试验证记忆连续性
-  - `human-judgment`: 架构设计审查
-
-## [ ] Task 5: 三区制布局框架（前端）
+## [x] Task 3: DashMap 替换 RwLock<HashMap>
 - **Priority**: P0
 - **Depends On**: None
-- **Description**: 
-  - 实现响应式布局容器组件
-  - 桌面端三列网格布局
-  - 移动端标签页布局
-  - 碰撞通知栏容器
-  - 辩证综合面板容器
-- **Acceptance Criteria Addressed**: AC-1, AC-5
+- **Description**:
+  - 在 `Cargo.toml` workspace dependencies 中添加 `dashmap`
+  - 将 `possession/src/ws.rs` 中 `WsSessionManager` 的 `Arc<RwLock<HashMap>>` 替换为 `Arc<DashMap>`
+  - 将 `registry/src/lib.rs` 中灵魂缓存的 `RwLock<HashMap>` 替换为 `DashMap`
+  - 简化广播逻辑（无需获取读锁）
+- **Acceptance Criteria Addressed**: RwLock 争用优化
 - **Test Requirements**:
-  - `human-judgment`: 验证布局在不同屏幕尺寸正常显示
-  - `programmatic`: 组件渲染测试
-- **Notes**: 这是 UI 升级的基础框架
+  - `programmatic`: 并发读写测试
+  - `programmatic`: 基准测试对比吞吐量
+  - `human-judgment`: 代码简化度审查
 
-## [ ] Task 6: 魂面板组件（多列并行）
-- **Priority**: P0
-- **Depends On**: Task 5
-- **Description**: 
-  - 实现单个魂面板组件
-  - 集成 token 流显示（打字机效果）
-  - 实现进度条显示
-  - 添加碰撞 badge 提示
-  - 鼠标悬停显示领域标签
-- **Acceptance Criteria Addressed**: AC-2
-- **Test Requirements**:
-  - `human-judgment`: UI 交互测试
-  - `programmatic`: 组件状态更新测试
-
-## [ ] Task 7: 碰撞通知栏组件
-- **Priority**: P0
-- **Depends On**: Task 5
-- **Description**: 
-  - 实现碰撞事件显示组件
-  - 实现碰撞摘要显示
-  - 点击展开详细内容
-  - 历史碰撞展开/收起
-- **Acceptance Criteria Addressed**: AC-3
-- **Test Requirements**:
-  - `human-judgment`: 交互测试
-  - `programmatic`: 事件处理测试
-
-## [ ] Task 8: 辩证综合面板组件（持续更新）
-- **Priority**: P0
-- **Depends On**: Task 5
-- **Description**: 
-  - 实现共识点显示（带进度条）
-  - 实现分歧点显示（可展开）
-  - 实现盲区点显示（可展开）
-  - 实现矛盾点和建议行动显示
-  - 持续更新无需等待完成
-- **Acceptance Criteria Addressed**: AC-4
-- **Test Requirements**:
-  - `human-judgment`: UI 流畅性测试
-  - `programmatic`: 实时更新测试
-
-## [ ] Task 9: 增强的合议模式（流式+交叉检测）
-- **Priority**: P0
-- **Depends On**: Task 3, Task 4, Task 6, Task 7, Task 8
-- **Description**: 
-  - 重构 conference::run 支持流式交叉
-  - 集成交叉检测器到合议流程
-  - 实现追问动态注入机制
-  - 前端 WebSocket 事件处理更新
-  - 集成新 UI 组件
-- **Acceptance Criteria Addressed**: AC-1, AC-2, AC-3, AC-4
-- **Test Requirements**:
-  - `programmatic`: 集成测试验证碰撞事件生成
-  - `programmatic`: 集成测试验证追问注入
-  - `human-judgment`: 端到端 UI 交互测试
-
-## [ ] Task 10: 辩论模式 UI 升级
+## [x] Task 4: LLM 语义缓存
 - **Priority**: P1
-- **Depends On**: Task 5
-- **Description**: 
-  - 实现两列对立布局组件
-  - 实现中间裁决栏组件
-  - 实现阶段性结论显示
-  - 实现双方论点对比
-  - 集成辩论模式后端逻辑
-- **Acceptance Criteria Addressed**: AC-6
+- **Depends On**: Task 1（需要数据库存储缓存条目）
+- **Description**:
+  - 在 `ai-gateway/src/` 下创建 `cache.rs` 模块，实现 `LlMCache` 结构体
+  - 缓存键：`(provider, model, system_prompt, user_prompt)` 的 SHA256 hash
+  - 缓存值：完整的响应内容和 usage 统计
+  - TTL 策略：默认 1 小时可配置
+  - 集成到 `GatewayRegistry::call()`，调用前先检查缓存
+  - 缓存存储到 SQLite（复用现有连接池）
+- **Acceptance Criteria Addressed**: LLM 语义缓存
 - **Test Requirements**:
-  - `human-judgment`: UI 交互测试
-  - `programmatic`: 组件渲染测试
+  - `programmatic`: 缓存命中/未命中测试
+  - `programmatic`: TTL 过期测试
+  - `human-judgment`: 缓存策略合理性审查
 
-## [ ] Task 11: 接力模式 UI 升级
-- **Priority**: P1
-- **Depends On**: Task 5
-- **Description**: 
-  - 实现横向时间轴组件
-  - 实现阶段卡片组件
-  - 实现衔接风险点高亮
-  - 点击卡片展开完整输出
-  - 集成接力模式后端逻辑
-- **Acceptance Criteria Addressed**: AC-7
+## [x] Task 5: 归档导出分页
+- **Priority**: P2
+- **Depends On**: None
+- **Description**:
+  - 修改 `archive/src/lib.rs` 的 `build_export` 方法，增加分页参数
+  - 实现游标分页（基于 session created_at）
+  - 每批次加载 50 个 session，输出一组后释放内存再加载下一组
+  - 导出 API 增加分页支持
+- **Acceptance Criteria Addressed**: 归档导出分页
 - **Test Requirements**:
-  - `human-judgment`: UI 交互测试
-  - `programmatic`: 组件渲染测试
+  - `programmatic`: 验证大量会话导出不 OOM
+  - `programmatic`: 验证分页边界正确
+  - `human-judgment`: 内存使用监控
 
-## [ ] Task 12: 魂自我审计系统
-- **Priority**: P1
-- **Depends On**: Task 4
-- **Description**: 
-  - 实现自我审计逻辑（矛盾检测/盲区检测/前提动摇）
-  - 实现修正提案数据结构
-  - 添加审计触发机制（每次输出后）
-  - 实现提案存储
-- **Acceptance Criteria Addressed**: AC-11
+## [x] Task 6: 请求限流中间件
+- **Priority**: P2
+- **Depends On**: None
+- **Description**:
+  - 在 `api/src/` 下创建 `rate_limiter.rs`，使用 `tower::limit` 或自实现
+  - 实现基于 IP 的令牌桶算法
+  - 默认限制：每秒 30 个请求，每 IP 突发容量 60
+  - 超限返回 429 + 重试提示
+  - 添加限流配置到 `config/default.yaml`
+- **Acceptance Criteria Addressed**: 请求限流
 - **Test Requirements**:
-  - `programmatic`: 单元测试审计逻辑
-  - `programmatic`: 集成测试提案生成
-  - `human-judgment`: 审计策略合理性审查
+  - `programmatic`: 限流触发测试
+  - `programmatic`: 正常使用不受影响测试
+  - `human-judgment`: 限流配置合理性审查
 
-## [ ] Task 13: 数据库扩展（修正历史/盲区/知识卡片）
+## [x] Task 7: 前端虚拟列表
+- **Priority**: P0
+- **Depends On**: None
+- **Description**:
+  - 为历史会话详情页 `/sessions/[id]` 实现虚拟列表
+  - 使用自实现分页方式（初始 20 条 + 加载更多按钮）
+  - 仅渲染可视区域和初始批次的 SoulResponseCard 组件
+  - 保持现有的 CSS Grid 布局一致性
+  - 确保 ArticleModal 点击打开正常
+- **Acceptance Criteria Addressed**: 前端虚拟列表
+- **Test Requirements**:
+  - `human-judgment`: 100+ 消息数量下的滚动流畅性
+  - `programmatic`: 验证初始仅渲染 20 条
+  - `programmatic`: 初始渲染时间 < 200ms
+
+## [x] Task 8: recharts 懒加载 + 打包优化
+- **Priority**: P0
+- **Depends On**: None
+- **Description**:
+  - 创建 `dashboard-charts.tsx` 客户端组件，使用 `next/dynamic` 动态导入 `ModeBarChart`
+  - 添加加载占位符（骨架屏）
+  - 配置 `next.config.ts` 添加 `experimental.optimizePackageImports`
+  - 优化导入列表：`lucide-react`, `recharts`
+- **Acceptance Criteria Addressed**: recharts 懒加载, Next.js 打包优化配置
+- **Test Requirements**:
+  - `programmatic`: 验证 analyses 页面之外不包含 recharts chunk
+  - `human-judgment`: analytics 页面加载体验可接受
+  - `programmatic`: 验证首屏 JS bundle 大小减少
+
+## [x] Task 9: SidebarSessions 轮询替换
 - **Priority**: P1
 - **Depends On**: None
-- **Description**: 
-  - 扩展 SQLite schema 添加 soul_revisions 表
-  - 添加 blind_spots 表
-  - 添加 knowledge_cards 表
-  - 扩展 Storage trait 相关方法
-- **Acceptance Criteria Addressed**: AC-8, AC-9
+- **Description**:
+  - 移除 5 秒轮询 `setInterval` 逻辑
+  - 保留 CustomEvent 监听和手动刷新按钮
+  - 保留初始加载时的 HTTP 请求（首次渲染）
+- **Acceptance Criteria Addressed**: SidebarSessions 轮询替换
 - **Test Requirements**:
-  - `programmatic`: 数据库迁移测试
-  - `programmatic`: CRUD 操作单元测试
+  - `human-judgment`: 会话创建后侧边栏自动更新
+  - `programmatic`: 验证不再有 5 秒间隔的 HTTP 请求
+  - `programmatic`: 操作后 CustomEvent 触发正常
 
-## [ ] Task 14: 魂状态详情页增强
-- **Priority**: P1
-- **Depends On**: Task 13
-- **Description**: 
-  - 添加修正历史时间线组件
-  - 添加盲区记录显示组件
-  - 增强召唤统计可视化
-  - 添加修正提案审查界面
-  - 完善主义主义坐标雷达图
-- **Acceptance Criteria Addressed**: AC-8
-- **Test Requirements**:
-  - `human-judgment`: UI 美观性和可用性测试
-  - `programmatic`: 组件渲染测试
-
-## [ ] Task 15: 全文检索集成（tantivy）
+## [x] Task 10: Markdown 渲染缓存优化
 - **Priority**: P2
-- **Depends On**: Task 13
-- **Description**: 
-  - 集成 tantivy 库
-  - 实现索引构建和更新
-  - 实现搜索接口
-  - 添加到知识检索 API
-- **Acceptance Criteria Addressed**: AC-9
+- **Depends On**: None
+- **Description**:
+  - 创建 `hooks/use-clean-content.ts` 共享 hook
+  - 在 `SoulChatBubble` 和 `SoulPanel` 中引入缓存
+  - 使用 `useMemo` + `useRef` 避免重复执行 HTML 标签清洗
+- **Acceptance Criteria Addressed**: Markdown 渲染优化
 - **Test Requirements**:
-  - `programmatic`: 索引构建测试
-  - `programmatic`: 搜索结果相关性测试
-  - `human-judgment`: 搜索结果质量评估
+  - `programmatic`: 验证缓存命中时不重复清洗
+  - `programmatic`: 验证内容变化时正确重新清洗
+  - `human-judgment`: 流式渲染性能提升可感知
 
-## [ ] Task 16: 向量语义检索（基础版本）
-- **Priority**: P2
-- **Depends On**: Task 15
-- **Description**: 
-  - 选择向量存储方案（SQLite 扩展或轻量级）
-  - 实现嵌入生成
-  - 实现相似度搜索
-  - 混合检索（全文+向量）
-- **Acceptance Criteria Addressed**: AC-9
-- **Test Requirements**:
-  - `programmatic`: 向量生成和搜索测试
-  - `human-judgment`: 检索质量评估
-
-## [ ] Task 17: 知识库检索界面
-- **Priority**: P1
-- **Depends On**: Task 15, Task 16
-- **Description**: 
-  - 实现搜索框组件
-  - 实现多维筛选组件
-  - 实现结果列表组件（参与魂/核心分歧/知识卡片）
-  - 实现盲区热力图组件
-  - 集成检索 API
-- **Acceptance Criteria Addressed**: AC-9
-- **Test Requirements**:
-  - `human-judgment`: UI 交互测试
-  - `programmatic`: 搜索功能测试
-
-## [ ] Task 18: 成本透明化增强
-- **Priority**: P2
-- **Depends On**: Task 1
-- **Description**: 
-  - 完善成本估算逻辑（考虑缓存折扣）
-  - 实时成本统计在会话中显示
-  - 添加历史成本分析页面
-  - 前端组件更新
-- **Acceptance Criteria Addressed**: AC-13
-- **Test Requirements**:
-  - `programmatic`: 成本计算准确性测试
-  - `human-judgment`: UI 显示合理性检查
-
-## [ ] Task 19: 盲区热力图
-- **Priority**: P2
-- **Depends On**: Task 13, Task 17
-- **Description**: 
-  - 实现盲区统计逻辑
-  - 设计可视化方案
-  - 前端组件实现
-  - 集成到知识库页面
-- **Acceptance Criteria Addressed**: AC-9
-- **Test Requirements**:
-  - `programmatic`: 盲区统计逻辑测试
-  - `human-judgment`: 可视化效果评估
-
-## [ ] Task 20: TUI 界面（ratatui）
-- **Priority**: P2
-- **Depends On**: Task 9
-- **Description**: 
-  - 集成 ratatui 库
-  - 实现魂 token 流显示
-  - 实现碰撞通知显示
-  - 实现辩证综合显示
-  - 实现键盘快捷键
-- **Acceptance Criteria Addressed**: AC-14
-- **Test Requirements**:
-  - `human-judgment`: TUI 交互测试
-  - `programmatic`: 终端渲染测试
-
-## [x] Task 13: 集成测试与文档
-- **Priority**: P1
-- **Depends On**: All above
-- **Description**: 
-  - 端到端集成测试
-  - 性能基准测试
-  - 更新 API 文档
-  - 用户指南更新
-- **Acceptance Criteria Addressed**: All ACs
-- **Test Requirements**:
-  - `programmatic`: 完整测试套件通过
-  - `human-judgment`: 文档完整性和准确性审查
+# Task Dependencies
+- [Task 4] depends on [Task 1]
+- [Task 1], [Task 2], [Task 3], [Task 5], [Task 6], [Task 7], [Task 8], [Task 9], [Task 10] 可并行执行

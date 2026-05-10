@@ -43,6 +43,15 @@ export interface CollisionEvent {
   injected?: boolean;
 }
 
+export interface ToolCallEvent {
+  toolCallId: string;
+  toolName: string;
+  arguments: string;
+  soulName: string;
+  status: 'calling' | 'done';
+  result?: string;
+}
+
 const MAX_RETRIES = 3;
 const FLUSH_INTERVAL_MS = 50; // batch state updates at ~20fps
 
@@ -51,11 +60,13 @@ const EVENT_LABEL: Record<string, string> = {
   entry_classified: "EntryClassified",
   soul_started: "SoulStarted",
   synthesis_started: "SynthesisStarted",
+  process_step: "SearchComplete",
 };
 
 export function useWebSocket(sessionId: string) {
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef(0);
+  const hasConnectedBeforeRef = useRef(false);
   const bufferRef = useRef<Record<string, SoulMessage>>({});
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingFlushRef = useRef(false);
@@ -74,6 +85,7 @@ export function useWebSocket(sessionId: string) {
   const [processSteps, setProcessSteps] = useState<ProcessStep[]>([]);
   const [cost, setCost] = useState<CostInfo | null>(null);
   const [collisions, setCollisions] = useState<CollisionEvent[]>([]);
+  const [toolCalls, setToolCalls] = useState<ToolCallEvent[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
 
   // Flush buffer to React state at controlled intervals
@@ -118,20 +130,27 @@ export function useWebSocket(sessionId: string) {
     wsRef.current = ws;
     mountedRef.current = true;
     setStatus("connecting");
-    setProcessSteps([]);
-    bufferRef.current = {};
-    synthesisRef.current = "";
-    setMessages({});
-    setSynthesis("");
-    setCost(null);
-    setCollisions([]);
-    setLogs([]);
+
+    // ── Preserve state on reconnect, only clear on first connection ──
+    if (!hasConnectedBeforeRef.current) {
+      setProcessSteps([]);
+      bufferRef.current = {};
+      synthesisRef.current = "";
+      setMessages({});
+      setSynthesis("");
+      setCost(null);
+      setCollisions([]);
+      setToolCalls([]);
+      setLogs([]);
+    }
 
     ws.onopen = () => {
       retryRef.current = 0;
+      hasConnectedBeforeRef.current = true;
       setStatus("streaming");
       setError(null);
-      addLog("WebSocket 连接已建立", 'success');
+      const suffix = retryRef.current > 0 ? `（第 ${hasConnectedBeforeRef.current ? '2+' : '1'} 次连接）` : "";
+      addLog(`WebSocket 连接已建立${suffix}`, 'success');
     };
 
     ws.onmessage = (e) => {
@@ -154,6 +173,11 @@ export function useWebSocket(sessionId: string) {
         case "synthesis_started":
           addStep(event.event_type, event.payload, event.soul_name);
           addLog(`开始综合分析...`, 'info');
+          break;
+
+        case "process_step":
+          addStep(event.event_type, event.payload, event.soul_name);
+          addLog(`📡 ${event.payload}`, 'info');
           break;
 
         // Soul streaming — write to ref (synchronous), schedule throttled flush
@@ -226,6 +250,47 @@ export function useWebSocket(sessionId: string) {
           } catch {}
           break;
 
+        case "tool_call_started":
+          try {
+            const tc = JSON.parse(event.payload) as {
+              tool_call_id: string;
+              tool_name: string;
+              arguments: string;
+              soul_name: string;
+            };
+            setToolCalls((prev) => [
+              ...prev,
+              {
+                toolCallId: tc.tool_call_id,
+                toolName: tc.tool_name,
+                arguments: tc.arguments,
+                soulName: tc.soul_name,
+                status: 'calling' as const,
+              },
+            ]);
+            addLog(`${tc.soul_name} 调用工具: ${tc.tool_name}`, 'info');
+          } catch {}
+          break;
+
+        case "tool_result":
+          try {
+            const tr = JSON.parse(event.payload) as {
+              tool_call_id: string;
+              tool_name: string;
+              result: string;
+              soul_name: string;
+            };
+            setToolCalls((prev) =>
+              prev.map((tc) =>
+                tc.toolCallId === tr.tool_call_id
+                  ? { ...tc, status: 'done' as const, result: tr.result }
+                  : tc
+              )
+            );
+            addLog(`${tr.soul_name} 工具 ${tr.tool_name} 完成`, 'success');
+          } catch {}
+          break;
+
         case "done":
         case "SessionComplete":
           flushImmediate();
@@ -265,6 +330,7 @@ export function useWebSocket(sessionId: string) {
     processSteps,
     cost,
     collisions,
+    toolCalls,
     logs,
     tick,
     reconnect: connect,

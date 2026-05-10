@@ -17,7 +17,8 @@ import {
   RefreshCw, Download, Loader2, AlertTriangle, CheckCircle2,
 } from "lucide-react";
 import { DEEPSEEK_MODELS_NO_DEFAULT, REASONING_OPTIONS } from "@/config/models";
-import { rebuildFts } from "@/lib/api";
+import { rebuildFts, fetchSouls } from "@/lib/api";
+import type { SoulListEntry } from "@/lib/api";
 
 type Provider = "claude" | "openai" | "deepseek";
 
@@ -66,6 +67,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [clearingSouls, setClearingSouls] = useState(false);
   const [clearingArchive, setClearingArchive] = useState(false);
   const [clearMsg, setClearMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [bannerLord, setBannerLord] = useState<string>("");
+  const [souls, setSouls] = useState<SoulListEntry[]>([]);
 
   useEffect(() => {
     setMounted(true);
@@ -82,6 +85,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     setKeys(stored);
     setDefaultModel(localStorage.getItem("default_model") || "deepseek-v4-pro");
     setDefaultReasoning(localStorage.getItem("default_reasoning") || "think");
+    setBannerLord(localStorage.getItem("aionui-banner-lord") || "");
+    fetchSouls().then(setSouls).catch(() => {});
 
     checkHealth();
     setRebuildMsg(null);
@@ -132,6 +137,14 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     } catch { /* backend may not be running */ }
     setSaved((prev) => ({ ...prev, model: true }));
     setTimeout(() => setSaved((prev) => ({ ...prev, model: false })), 2000);
+  };
+
+  const saveBannerLord = (value: string | null) => {
+    const v = value || "";
+    setBannerLord(v);
+    localStorage.setItem("aionui-banner-lord", v);
+    setSaved((prev) => ({ ...prev, bannerLord: true }));
+    setTimeout(() => setSaved((prev) => ({ ...prev, bannerLord: false })), 2000);
   };
 
   const handleRebuild = async () => {
@@ -592,9 +605,28 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           {/* ── 幡主 ── */}
           <div>
             <h3 className="text-sm font-semibold mb-2">幡主</h3>
-            <p className="text-xs text-muted-foreground">
-              幡主也是被召唤的魂。附体前 spawn 幡主子 agent 独立审查魂匹配结果。
+            <p className="text-xs text-muted-foreground mb-3">
+              选择审查官。附体前 spawn 幡主子 agent 独立审查魂匹配结果。
+              默认为未明子，可通过环境变量 AIONUI_REVIEWER_SOUL 设置服务端默认值。
             </p>
+            <Select value={bannerLord} onValueChange={saveBannerLord}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="选择幡主审查官..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">默认（环境变量/未明子）</SelectItem>
+                {souls.map((soul) => (
+                  <SelectItem key={soul.name} value={soul.name}>
+                    {soul.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {saved.bannerLord && (
+              <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-2">
+                幡主已更新
+              </p>
+            )}
           </div>
         </div>
       </DialogContent>

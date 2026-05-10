@@ -2,9 +2,10 @@ use ai_gateway::prompt::PromptBuilder;
 use ai_gateway::GatewayRegistry;
 use foundation::{CallConfig, LLMRequest, Result, Storage};
 use registry::SoulRegistry;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc;
 
 use crate::stream;
+use crate::tools::ToolRegistry;
 use crate::{SoulOutput, UserPresets, WsEvent, WsSessionManager};
 
 pub async fn run(
@@ -17,7 +18,8 @@ pub async fn run(
     soul_b: &str,
     topic: &str,
     _presets: &UserPresets,
-    _system_tx: &UnboundedSender<WsEvent>,
+    _system_tx: &mpsc::Sender<WsEvent>,
+    _tool_registry: &ToolRegistry,
 ) -> Result<(SoulOutput, SoulOutput)> {
     let profile_a = registry.get_soul(soul_a)?;
     let profile_b = registry.get_soul(soul_b)?;

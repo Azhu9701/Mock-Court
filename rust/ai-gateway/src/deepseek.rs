@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use foundation::{CallConfig, Chunk, FoundationError, Prompt, Provider, ReasoningEffort as FoundationReasoningEffort, Result, UsageStats};
+use foundation::{CallConfig, Chunk, FoundationError, Prompt, Provider, ReasoningEffort as FoundationReasoningEffort, Result, ToolCall, ToolCallFunction, UsageStats};
 use reqwest::Client;
 use tokio::sync::mpsc;
 
@@ -59,12 +59,12 @@ impl Gateway for DeepSeekClient {
         &self,
         prompt: &Prompt,
         config: &CallConfig,
-    ) -> mpsc::UnboundedReceiver<Result<Chunk>> {
-        let (tx, rx) = mpsc::unbounded_channel();
+    ) -> mpsc::Receiver<Result<Chunk>> {
+        let (tx, rx) = mpsc::channel(256);
         let api_key = match &self.api_key {
             Some(k) => k.clone(),
             None => {
-                let _ = tx.send(Err(FoundationError::Validation(
+                let _ = tx.try_send(Err(FoundationError::Validation(
                     "DeepSeek API key not configured".into(),
                 )));
                 return rx;
@@ -81,6 +81,12 @@ impl Gateway for DeepSeekClient {
                 let mut msg = serde_json::json!({"role": m.role, "content": m.content});
                 if let Some(rc) = &m.reasoning_content {
                     msg["reasoning_content"] = serde_json::json!(rc);
+                }
+                if let Some(tc) = &m.tool_calls {
+                    msg["tool_calls"] = serde_json::to_value(tc).unwrap();
+                }
+                if let Some(tcid) = &m.tool_call_id {
+                    msg["tool_call_id"] = serde_json::json!(tcid);
                 }
                 msg
             })
@@ -106,6 +112,13 @@ impl Gateway for DeepSeekClient {
         body["thinking"] = serde_json::json!({
             "type": if thinking_enabled { "enabled" } else { "disabled" }
         });
+
+        if let Some(tools) = &config.tools {
+            body["tools"] = serde_json::to_value(tools).unwrap();
+            if let Some(tool_choice) = &config.tool_choice {
+                body["tool_choice"] = serde_json::json!(tool_choice);
+            }
+        }
 
         if let Some(structured) = &config.structured_output {
             if structured.enabled {
@@ -134,7 +147,7 @@ impl Gateway for DeepSeekClient {
             let response = match result {
                 Ok(r) => r,
                 Err(e) => {
-                    let _ = tx.send(Err(FoundationError::Io(std::io::Error::other(e.to_string()))));
+                    let _ = tx.send(Err(FoundationError::Io(std::io::Error::other(e.to_string())))).await;
                     return;
                 }
             };
@@ -145,7 +158,7 @@ impl Gateway for DeepSeekClient {
                 let _ = tx.send(Err(FoundationError::Validation(format!(
                     "DeepSeek API error {}: {}",
                     status, body
-                ))));
+                )))).await;
                 return;
             }
 
@@ -174,7 +187,8 @@ impl Gateway for DeepSeekClient {
                                         finish_reason: Some("stop".into()),
                                         index: chunk_index,
                                         usage: None,
-                                    }));
+                                        tool_calls: Vec::new(),
+                                    })).await;
                                     return;
                                 }
                                 if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
@@ -184,6 +198,34 @@ impl Gateway for DeepSeekClient {
                                             let reasoning = choice["delta"]["reasoning_content"].as_str();
                                             let content = choice["delta"]["content"].as_str();
 
+                                            // 处理 tool_calls delta
+                                            if let Some(tool_calls) = choice["delta"]["tool_calls"].as_array() {
+                                                let mut parsed_calls: Vec<ToolCall> = Vec::new();
+                                                for tc in tool_calls {
+                                                    let function = &tc["function"];
+                                                    let call = ToolCall {
+                                                        id: tc["id"].as_str().unwrap_or("").to_string(),
+                                                        r#type: "function".to_string(),
+                                                        function: ToolCallFunction {
+                                                            name: function["name"].as_str().unwrap_or("").to_string(),
+                                                            arguments: function["arguments"].as_str().unwrap_or("").to_string(),
+                                                        },
+                                                    };
+                                                    parsed_calls.push(call);
+                                                }
+                                                if !parsed_calls.is_empty() {
+                                                    let _ = tx.send(Ok(Chunk {
+                                                        content: String::new(),
+                                                        reasoning_content: None,
+                                                        finish_reason: None,
+                                                        index: chunk_index,
+                                                        usage: None,
+                                                        tool_calls: parsed_calls,
+                                                    })).await;
+                                                    chunk_index += 1;
+                                                }
+                                            }
+
                                             // 发送思维链（如果有）
                                             if let Some(reasoning_text) = reasoning.filter(|s| !s.is_empty()) {
                                                 let _ = tx.send(Ok(Chunk {
@@ -192,7 +234,8 @@ impl Gateway for DeepSeekClient {
                                                     finish_reason: None,
                                                     index: chunk_index,
                                                     usage: None,
-                                                }));
+                                                    tool_calls: Vec::new(),
+                                                })).await;
                                                 chunk_index += 1;
                                             }
 
@@ -204,7 +247,8 @@ impl Gateway for DeepSeekClient {
                                                     finish_reason: choice["finish_reason"].as_str().map(|s| s.to_string()),
                                                     index: chunk_index,
                                                     usage: None,
-                                                }));
+                                                    tool_calls: Vec::new(),
+                                                })).await;
                                                 chunk_index += 1;
                                             }
                                         }
@@ -221,7 +265,8 @@ impl Gateway for DeepSeekClient {
                                             finish_reason: None,
                                             index: chunk_index,
                                             usage: Some(usage),
-                                        }));
+                                            tool_calls: Vec::new(),
+                                        })).await;
                                     }
                                 }
                             }
@@ -229,7 +274,7 @@ impl Gateway for DeepSeekClient {
                         buffer.drain(..pos);
                     }
                     Err(e) => {
-                        let _ = tx.send(Err(FoundationError::Io(std::io::Error::other(e.to_string()))));
+                        let _ = tx.send(Err(FoundationError::Io(std::io::Error::other(e.to_string())))).await;
                         return;
                     }
                 }

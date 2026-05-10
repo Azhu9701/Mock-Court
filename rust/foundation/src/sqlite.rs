@@ -1,13 +1,14 @@
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OpenFlags};
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::{params, Connection};
 use std::path::Path;
-use std::sync::Mutex;
 
 use crate::error::{FoundationError, Result};
 use crate::models::*;
 
 pub struct SqliteDb {
-    writer: Mutex<Connection>,
+    pool: Pool<SqliteConnectionManager>,
 }
 
 impl SqliteDb {
@@ -15,16 +16,20 @@ impl SqliteDb {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open_with_flags(
-            path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
-        )?;
-        conn.execute_batch("PRAGMA journal_mode = WAL;")?;
-        conn.execute_batch("PRAGMA synchronous = FULL;")?;
-        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-        conn.execute_batch("PRAGMA busy_timeout = 5000;")?;
+        let manager = SqliteConnectionManager::file(path).with_init(|conn| {
+            conn.execute_batch("PRAGMA journal_mode = WAL;")?;
+            conn.execute_batch("PRAGMA synchronous = NORMAL;")?;
+            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            conn.execute_batch("PRAGMA busy_timeout = 5000;")?;
+            Ok(())
+        });
+        let pool = Pool::builder()
+            .max_size(5)
+            .build(manager)
+            .map_err(|e| FoundationError::InvalidState(e.to_string()))?;
+        let conn = pool.get().map_err(|e| FoundationError::InvalidState(e.to_string()))?;
         Self::migrate(&conn)?;
-        Ok(SqliteDb { writer: Mutex::new(conn) })
+        Ok(SqliteDb { pool })
     }
 
     fn migrate(conn: &Connection) -> Result<()> {
@@ -117,19 +122,29 @@ impl SqliteDb {
             CREATE INDEX IF NOT EXISTS idx_blind_spots_soul ON blind_spots(soul_name);
             CREATE INDEX IF NOT EXISTS idx_knowledge_cards_soul ON knowledge_cards(source_soul);
             CREATE INDEX IF NOT EXISTS idx_revision_proposals_soul ON revision_proposals(soul_name);
-            CREATE INDEX IF NOT EXISTS idx_revision_proposals_status ON revision_proposals(status);",
+            CREATE INDEX IF NOT EXISTS idx_revision_proposals_status ON revision_proposals(status);
+
+            CREATE TABLE IF NOT EXISTS llm_cache (
+                hash TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                response_content TEXT NOT NULL,
+                usage_json TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_llm_cache_created ON llm_cache(created_at);",
         )?;
         Ok(())
     }
 
-    pub fn with_write<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-        let conn = self.writer.lock().map_err(|e| FoundationError::InvalidState(e.to_string()))?;
+    pub fn with_conn<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        let conn = self.pool.get().map_err(|e| FoundationError::InvalidState(e.to_string()))?;
         f(&conn)
     }
 
     // Sessions
     pub fn insert_session(&self, session: &Session) -> Result<()> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             conn.execute(
                 "INSERT INTO sessions (id, title, mode, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
@@ -146,7 +161,7 @@ impl SqliteDb {
     }
 
     pub fn update_session(&self, session: &Session) -> Result<()> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             conn.execute(
                 "UPDATE sessions SET title=?1, mode=?2, status=?3, updated_at=?4 WHERE id=?5",
                 params![
@@ -162,7 +177,7 @@ impl SqliteDb {
     }
 
     pub fn get_session(&self, id: &str) -> Result<Session> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             conn.query_row(
                 "SELECT id, title, mode, status, created_at, updated_at FROM sessions WHERE id=?1",
                 params![id],
@@ -186,7 +201,7 @@ impl SqliteDb {
     }
 
     pub fn list_sessions(&self, filter: &SessionFilter) -> Result<Vec<SessionSummary>> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             let mut sql = String::from(
                 "SELECT s.id, s.title, s.mode, s.status, s.created_at, COUNT(m.id) as msg_count
                  FROM sessions s LEFT JOIN messages m ON s.id = m.session_id WHERE 1=1"
@@ -236,7 +251,7 @@ impl SqliteDb {
 
     // Messages
     pub fn append_message(&self, msg: &Message) -> Result<()> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             conn.execute(
                 "INSERT INTO messages (id, session_id, role, soul_name, content, seq, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
@@ -276,7 +291,7 @@ impl SqliteDb {
     }
 
     pub fn rebuild_fts(&self) -> Result<usize> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             Self::ensure_fts5(conn)?;
             conn.execute("DELETE FROM knowledge_fts", [])?;
 
@@ -310,7 +325,7 @@ impl SqliteDb {
     }
 
     pub fn get_messages(&self, session_id: &str) -> Result<Vec<Message>> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, session_id, role, soul_name, content, seq, created_at FROM messages WHERE session_id=?1 ORDER BY seq"
             )?;
@@ -337,7 +352,7 @@ impl SqliteDb {
 
     // Call Records
     pub fn insert_call_record(&self, record: &CallRecord) -> Result<()> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             conn.execute(
                 "INSERT INTO call_records (id, session_id, soul_name, mode, task_summary, effectiveness, notes, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
@@ -356,7 +371,7 @@ impl SqliteDb {
     }
 
     pub fn query_call_records(&self, filter: &CallFilter) -> Result<Vec<CallRecord>> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             let mut sql = String::from("SELECT id, session_id, soul_name, mode, task_summary, effectiveness, notes, created_at FROM call_records WHERE 1=1");
             let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
 
@@ -407,7 +422,7 @@ impl SqliteDb {
     }
 
     pub fn delete_session(&self, id: &str) -> Result<()> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             conn.execute("DELETE FROM messages WHERE session_id = ?1", params![id])?;
             conn.execute("DELETE FROM call_records WHERE session_id = ?1", params![id])?;
             conn.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
@@ -416,14 +431,14 @@ impl SqliteDb {
     }
 
     pub fn count_call_records(&self) -> Result<usize> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             let count: usize = conn.query_row("SELECT COUNT(*) FROM call_records", [], |row| row.get(0))?;
             Ok(count)
         })
     }
 
     pub fn vacuum(&self) -> Result<()> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             conn.execute_batch("PRAGMA optimize; VACUUM;")?;
             Ok(())
         })
@@ -475,7 +490,7 @@ impl SqliteDb {
         created_at: &str,
         session_id: &str,
     ) -> Result<()> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             Self::ensure_fts5(conn)?;
             conn.execute(
                 "INSERT INTO knowledge_fts (soul_name, content, mode, task_summary, created_at, session_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -486,7 +501,7 @@ impl SqliteDb {
     }
 
     pub fn search_knowledge(&self, query: &str, limit: usize) -> Result<Vec<KnowledgeResult>> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             if query.trim().is_empty() {
                 Self::ensure_fts5(conn)?;
                 let mut stmt = conn.prepare(
@@ -677,7 +692,7 @@ fn str_to_proposal_status(s: &str) -> ProposalStatus {
 impl SqliteDb {
     // Soul Revisions
     pub fn insert_soul_revision(&self, revision: &SoulRevision) -> Result<()> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             conn.execute(
                 "INSERT INTO soul_revisions (id, soul_name, revision_type, description, old_value, new_value, reviewer, reviewed_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
@@ -697,7 +712,7 @@ impl SqliteDb {
     }
 
     pub fn get_soul_revisions(&self, filter: &SoulRevisionFilter) -> Result<Vec<SoulRevision>> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             let mut sql = String::from("SELECT id, soul_name, revision_type, description, old_value, new_value, reviewer, reviewed_at, created_at FROM soul_revisions WHERE 1=1");
             let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
 
@@ -745,7 +760,7 @@ impl SqliteDb {
 
     // Blind Spots
     pub fn insert_blind_spot(&self, blind_spot: &BlindSpot) -> Result<()> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             conn.execute(
                 "INSERT INTO blind_spots (id, soul_name, dimension, description, detected_at, resolved_at, resolved_by, resolution) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
@@ -764,7 +779,7 @@ impl SqliteDb {
     }
 
     pub fn update_blind_spot(&self, blind_spot: &BlindSpot) -> Result<()> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             conn.execute(
                 "UPDATE blind_spots SET soul_name=?1, dimension=?2, description=?3, detected_at=?4, resolved_at=?5, resolved_by=?6, resolution=?7 WHERE id=?8",
                 params![
@@ -783,7 +798,7 @@ impl SqliteDb {
     }
 
     pub fn get_blind_spots(&self, filter: &BlindSpotFilter) -> Result<Vec<BlindSpot>> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             let mut sql = String::from("SELECT id, soul_name, dimension, description, detected_at, resolved_at, resolved_by, resolution FROM blind_spots WHERE 1=1");
             let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
 
@@ -833,7 +848,7 @@ impl SqliteDb {
 
     // Knowledge Cards
     pub fn insert_knowledge_card(&self, card: &KnowledgeCard) -> Result<()> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             conn.execute(
                 "INSERT INTO knowledge_cards (id, title, content, source_soul, source_session, tags, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
@@ -852,7 +867,7 @@ impl SqliteDb {
     }
 
     pub fn update_knowledge_card(&self, card: &KnowledgeCard) -> Result<()> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             conn.execute(
                 "UPDATE knowledge_cards SET title=?1, content=?2, source_soul=?3, source_session=?4, tags=?5, updated_at=?6 WHERE id=?7",
                 params![
@@ -870,7 +885,7 @@ impl SqliteDb {
     }
 
     pub fn get_knowledge_cards(&self, filter: &KnowledgeCardFilter) -> Result<Vec<KnowledgeCard>> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             let mut sql = String::from("SELECT id, title, content, source_soul, source_session, tags, created_at, updated_at FROM knowledge_cards WHERE 1=1");
             let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
 
@@ -913,9 +928,84 @@ impl SqliteDb {
         })
     }
 
+    pub fn list_knowledge_topics(&self, mode: Option<&str>, limit: usize, offset: usize) -> Result<Vec<KnowledgeTopic>> {
+        self.with_conn(|conn| {
+            let mut sql = String::from(
+                "SELECT s.id, s.title, COALESCE(s.mode, 'unknown'), s.created_at
+                 FROM sessions s WHERE s.status = 'completed'
+                 AND EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id AND m.role = 'synthesis')"
+            );
+            let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
+
+            if let Some(m) = mode {
+                if !m.is_empty() {
+                    sql.push_str(&format!(" AND s.mode = ?{}", param_values.len() + 1));
+                    param_values.push(Box::new(m.to_string()));
+                }
+            }
+
+            sql.push_str(" ORDER BY s.created_at DESC");
+            sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
+
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params_refs.as_slice(), |row| {
+                let session_id: String = row.get(0)?;
+                let title: String = row.get(1)?;
+                let mode: String = row.get(2)?;
+                let created_at_str: String = row.get(3)?;
+                Ok((session_id, title, mode, created_at_str))
+            })?;
+
+            let mut topics = Vec::new();
+            for row in rows {
+                let (session_id, title, session_mode, created_at_str) = row?;
+                let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+                    .unwrap()
+                    .with_timezone(&Utc);
+
+                let soul_names: Vec<String> = {
+                    let mut s = conn.prepare(
+                        "SELECT DISTINCT soul_name FROM messages WHERE session_id = ?1 AND role = 'soul' ORDER BY soul_name"
+                    )?;
+                    let rows = s.query_map(params![session_id], |r| r.get::<_, String>(0))?;
+                    let names: Vec<String> = rows.filter_map(|n| n.ok()).collect();
+                    names
+                };
+
+                let card_summary: Option<String> = {
+                    conn.query_row(
+                        "SELECT content FROM messages WHERE session_id = ?1 AND role = 'system' AND soul_name = '知识卡片' LIMIT 1",
+                        params![session_id],
+                        |r| r.get::<_, String>(0),
+                    ).ok()
+                };
+
+                let synthesis_preview: Option<String> = {
+                    conn.query_row(
+                        "SELECT SUBSTR(content, 1, 400) FROM messages WHERE session_id = ?1 AND role = 'synthesis' LIMIT 1",
+                        params![session_id],
+                        |r| r.get::<_, String>(0),
+                    ).ok()
+                };
+
+                topics.push(KnowledgeTopic {
+                    session_id,
+                    title,
+                    mode: session_mode,
+                    created_at,
+                    soul_names,
+                    card_summary,
+                    synthesis_preview,
+                });
+            }
+            Ok(topics)
+        })
+    }
+
     // Revision Proposals
     pub fn insert_revision_proposal(&self, proposal: &RevisionProposal) -> Result<()> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             conn.execute(
                 "INSERT INTO revision_proposals (id, soul_name, proposal_type, title, description, proposed_changes, status, created_by, created_at, reviewed_at, reviewer, review_notes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
@@ -938,7 +1028,7 @@ impl SqliteDb {
     }
 
     pub fn update_revision_proposal(&self, proposal: &RevisionProposal) -> Result<()> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             conn.execute(
                 "UPDATE revision_proposals SET soul_name=?1, proposal_type=?2, title=?3, description=?4, proposed_changes=?5, status=?6, created_by=?7, created_at=?8, reviewed_at=?9, reviewer=?10, review_notes=?11 WHERE id=?12",
                 params![
@@ -961,7 +1051,7 @@ impl SqliteDb {
     }
 
     pub fn get_revision_proposals(&self, soul_name: Option<&str>, status: Option<ProposalStatus>) -> Result<Vec<RevisionProposal>> {
-        self.with_write(|conn| {
+        self.with_conn(|conn| {
             let mut sql = String::from("SELECT id, soul_name, proposal_type, title, description, proposed_changes, status, created_by, created_at, reviewed_at, reviewer, review_notes FROM revision_proposals WHERE 1=1");
             let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
 
