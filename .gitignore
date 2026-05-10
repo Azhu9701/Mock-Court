@@ -59,3 +59,4 @@ yarn-error.log*
 
 # Misc
 *.pem
+nohup.out
