@@ -6,8 +6,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { SessionRunner } from "@/components/session-runner";
 import FollowUpInput from "@/components/follow-up-input";
 import { 
-  Brain, Loader2, Sparkles, ShieldCheck, Zap, Play, User, ChevronDown, ChevronUp,
-  CheckCircle2, AlertCircle, ArrowRightCircle, Globe, Search
+  Brain, Loader2, Sparkles, ShieldCheck, Zap, Play, ChevronDown, ChevronUp,
+  CheckCircle2, AlertCircle, ArrowRightCircle, Globe, Search, Copy, Check
 } from "lucide-react";
 import { analyzeTask, startPossession, searchWeb, type SearxngResultItem } from "@/lib/api";
 import { MODE_LABELS_LONG } from "@/config/possession-modes";
@@ -15,20 +15,22 @@ import { triggerSessionsUpdate } from "@/components/sidebar-sessions";
 import { AttachmentUpload } from "@/components/attachment-upload";
 import { PostSessionReview } from "@/components/post-session-review";
 import { SoulCarousel } from "@/components/soul-carousel";
+import { PracticeOpeningDialog } from "@/components/practice-opening-dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
 
 type Phase = "input" | "classifying" | "matching" | "reviewing" | "adjusting" | "starting" | "running" | "practice_opening";
 
-const PHASES: { key: Phase; icon: React.ComponentType<{ className?: string }>; label: string }[] = [
-  { key: "classifying", icon: Brain, label: "入口分流中..." },
-  { key: "matching", icon: Sparkles, label: "智能匹配魂..." },
-  { key: "reviewing", icon: ShieldCheck, label: "幡主审查中..." },
-  { key: "adjusting", icon: Zap, label: "调整魂组合..." },
-  { key: "starting", icon: Play, label: "启动附体..." },
+const PHASES: { key: Phase; icon: React.ComponentType<{ className?: string }>; label: string; desc: string }[] = [
+  { key: "classifying", icon: Brain, label: "入口分流", desc: "分析任务类型" },
+  { key: "matching", icon: Sparkles, label: "匹配魂", desc: "智能匹配思想者" },
+  { key: "reviewing", icon: ShieldCheck, label: "审查", desc: "幡主审查魂组合" },
+  { key: "adjusting", icon: Zap, label: "调整", desc: "优化魂搭配" },
+  { key: "starting", icon: Play, label: "启动", desc: "启动讨论会话" },
 ];
 
 interface MatchedSoul {
   name: string;
-
   field: string;
   ismism_code: string;
   rationale: string;
@@ -39,6 +41,16 @@ interface ReviewResult {
   checks: string[];
   notes: string;
   reviewer: string;
+}
+
+const LOG_FILTERS = ["全部", "关键", "魂匹配", "审查"] as const;
+type LogFilter = typeof LOG_FILTERS[number];
+
+function classifyLogType(line: string): "key" | "soul" | "review" | "other" {
+  if (line.includes("🚀") || line.includes("🎉") || line.includes("❌") || line.includes("⏹️")) return "key";
+  if (line.includes("魂") || line.includes("匹配")) return "soul";
+  if (line.includes("审查") || line.includes("幡主")) return "review";
+  return "other";
 }
 
 export function PossessionEntry() {
@@ -59,10 +71,14 @@ export function PossessionEntry() {
   const [judgment, setJudgment] = useState("");
   const [worry, setWorry] = useState("");
   const [unknown, setUnknown] = useState("");
-  const [showPresets, setShowPresets] = useState(false);
+  const [showPresetsDialog, setShowPresetsDialog] = useState(false);
   const [progressLine, setProgressLine] = useState("");
+  const [logFilter, setLogFilter] = useState<LogFilter>("全部");
+  const [logsCollapsed, setLogsCollapsed] = useState(true);
+  const [copiedLogs, setCopiedLogs] = useState(false);
+  const [sessionStats, setSessionStats] = useState<{ elapsed: number; soulCount: number; synthesisLen: number } | null>(null);
+  const [startTime, setStartTime] = useState(0);
 
-  // SearXNG 搜索状态
   const [searchQuery, setSearchQuery] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<SearxngResultItem[]>([]);
@@ -80,7 +96,6 @@ export function PossessionEntry() {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [log]);
 
-  // 会话完成时触发更新
   useEffect(() => {
     if (sessionDone) {
       triggerSessionsUpdate();
@@ -95,7 +110,6 @@ export function PossessionEntry() {
     });
   }, []);
 
-  // SearXNG 搜索
   const handleSearch = useCallback(async () => {
     if (!searchQuery.trim()) return;
     setSearchLoading(true);
@@ -127,8 +141,10 @@ export function PossessionEntry() {
     setTask((prev) => prev.replace(/^> 以下是通过 SearXNG 搜索获取的背景信息\n\n[\s\S]*?\n\n---\n\n/gm, "").trim());
   }, []);
 
+  const canStart = task.trim().length > 0 && judgment.trim().length > 0;
+
   const onStart = async () => {
-    if (!task.trim() || phase !== "input") return;
+    if (!canStart || phase !== "input") return;
     
     console.log("=== 开始讨论流程");
     setIsCancelled(false);
@@ -138,6 +154,8 @@ export function PossessionEntry() {
     setMatchedSouls([]);
     setReview(null);
     setSessionDone(false);
+    setSessionStats(null);
+    setStartTime(Date.now());
 
     try {
       addLog("开始分析任务...");
@@ -241,6 +259,37 @@ export function PossessionEntry() {
     addLog("⏹️ 用户取消了操作");
   };
 
+  const handlePracticeOpeningStart = async (j: string, w: string, u: string) => {
+    setJudgment(j);
+    setWorry(w);
+    setUnknown(u);
+    setPhase("starting");
+    setProgressLine("正在启动实践开口流程…");
+    addLog("🚀 启动实践开口附体会话...");
+
+    try {
+      const { session_id } = await startPossession({
+        mode: "practice_opening",
+        task,
+        souls: [],
+        judgment: j || undefined,
+        worry: w || undefined,
+        unknown: u || undefined,
+      });
+      setSessionId(session_id);
+      setMode("practice_opening");
+      setPhase("running");
+      addLog("🎉 实践开口附体会话已启动");
+      setProgressLine("实践开口进行中…");
+      triggerSessionsUpdate();
+    } catch (e: any) {
+      const errorMsg = e.message || e.toString() || "启动失败";
+      setError(errorMsg);
+      addLog(`❌ 错误: ${errorMsg}`);
+      setPhase("input");
+    }
+  };
+
   const getModeLabel = (m: string) => (MODE_LABELS_LONG as Record<string, string>)[m] || m;
 
   const getVerdictLabel = (v: string) => {
@@ -252,10 +301,44 @@ export function PossessionEntry() {
     return labels[v] || v;
   };
 
+  const copyLogs = () => {
+    const text = log.join("\n");
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedLogs(true);
+      setTimeout(() => setCopiedLogs(false), 2000);
+    }).catch(() => {});
+  };
+
+  const handleSessionDone = () => {
+    setSessionDone(true);
+    const elapsed = Math.round((Date.now() - startTime) / 1000);
+    setSessionStats({
+      elapsed,
+      soulCount: matchedSouls.length,
+      synthesisLen: 0,
+    });
+  };
+
+  const filteredLogs = log.filter((l) => {
+    if (logFilter === "全部") return true;
+    const type = classifyLogType(l);
+    if (logFilter === "关键") return type === "key";
+    if (logFilter === "魂匹配") return type === "soul";
+    if (logFilter === "审查") return type === "review";
+    return true;
+  });
+
+  const presetsFilled = (judgment.trim() ? 1 : 0) + (worry.trim() ? 1 : 0) + (unknown.trim() ? 1 : 0);
+  const presetsTitle = presetsFilled === 0 ? "使用者预设 ⚠️ 请填写判断" :
+    presetsFilled === 3 ? "使用者预设 ✅" :
+    `使用者预设（${presetsFilled}/3 完成）`;
+
+  const currentPhaseIndex = PHASES.findIndex((p) => p.key === phase);
+  const totalPhases = PHASES.length;
+
   if (phase === "running" && sessionId) {
     return (
-      <div className="max-w-4xl mx-auto space-y-4" data-testid="possession-entry">
-        {/* Header: matched souls + review summary */}
+      <div className="max-w-4xl mx-auto space-y-4 animate-in fade-in duration-500" data-testid="possession-entry">
         <div className="rounded-xl border bg-gradient-to-br from-muted/40 to-background p-4 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
@@ -283,7 +366,6 @@ export function PossessionEntry() {
 
           {showDetail && (
             <div className="mt-4 space-y-4 text-sm border-t pt-4">
-              {/* Matched souls */}
               <div>
                 <h4 className="font-medium text-muted-foreground mb-3 flex items-center gap-2">
                   <Sparkles className="h-4 w-4" />
@@ -303,7 +385,6 @@ export function PossessionEntry() {
                 </div>
               </div>
 
-              {/* Review */}
               {review && (
                 <div>
                   <h4 className="font-medium text-muted-foreground mb-3 flex items-center gap-2">
@@ -336,19 +417,35 @@ export function PossessionEntry() {
           )}
         </div>
 
-        {/* Live streaming */}
         <SessionRunner
           sessionId={sessionId}
           mode={mode}
           matchedSouls={matchedSouls}
-          onDone={() => setSessionDone(true)}
+          onDone={handleSessionDone}
           onReview={() => setPhase("input")}
           sessionDone={sessionDone}
         />
         
-        {/* Follow-up input (shown after session is done) */}
         {sessionDone && (
-          <div className="mt-4">
+          <div className="mt-4 space-y-6">
+            {sessionStats && (
+              <div className="rounded-xl border bg-gradient-to-br from-emerald-50 to-background dark:from-emerald-950/20 p-5 animate-in fade-in slide-in-from-top-4 duration-500">
+                <h3 className="text-sm font-semibold text-emerald-700 dark:text-emerald-300 mb-3 flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4" />
+                  讨论完成
+                </h3>
+                <div className="flex items-center gap-6 text-sm text-muted-foreground">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-emerald-600 dark:text-emerald-400 font-mono font-medium">{sessionStats.elapsed}s</span>
+                    <span>耗时</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-emerald-600 dark:text-emerald-400 font-mono font-medium">{sessionStats.soulCount}</span>
+                    <span>个魂参与</span>
+                  </div>
+                </div>
+              </div>
+            )}
             {!reviewDone ? (
               <PostSessionReview
                 sessionId={sessionId}
@@ -363,10 +460,9 @@ export function PossessionEntry() {
     );
   }
 
-  const activePhases = PHASES.filter((p) => {
-    const idx = PHASES.findIndex((x) => x.key === phase);
-    const myIdx = PHASES.findIndex((x) => x.key === p.key);
-    return myIdx <= idx && idx >= 0;
+  const activePhases = PHASES.filter((p, i) => {
+    const idx = currentPhaseIndex;
+    return i <= idx && idx >= 0;
   });
 
   return (
@@ -395,7 +491,6 @@ export function PossessionEntry() {
                 className="resize-none transition-all focus:ring-2 focus:ring-primary/20"
               />
 
-              {/* SearXNG 搜索背景 */}
               {searchContext && (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/30 rounded-lg px-3 py-1.5">
                   <Globe className="h-3.5 w-3.5 text-green-500" />
@@ -483,7 +578,6 @@ export function PossessionEntry() {
                           </div>
                         ))}
                       </div>
-
                       <div className="text-xs text-muted-foreground pt-1">
                         共 {searchResults.length} 条结果，点击「引用」添加到问题背景
                       </div>
@@ -495,47 +589,64 @@ export function PossessionEntry() {
               <div className="border-t pt-3">
                 <button
                   type="button"
-                  onClick={() => setShowPresets(!showPresets)}
+                  onClick={() => setShowPresetsDialog(true)}
                   className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
                 >
-                  {showPresets ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                  使用者预设（判断 · 担忧 · 未知）
+                  <ChevronDown className="h-3.5 w-3.5" />
+                  {presetsTitle}
                 </button>
-                {showPresets && (
-                  <div className="mt-3 space-y-3">
-                    <div>
-                      <label className="text-xs font-medium text-muted-foreground">你的判断</label>
+              </div>
+
+              <Dialog open={showPresetsDialog} onOpenChange={setShowPresetsDialog}>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>使用者预设</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-3">
+                    <div className="relative">
+                      <label className="text-xs font-medium text-muted-foreground">
+                        你的判断 <span className="text-red-500">*</span>
+                      </label>
                       <Textarea
                         value={judgment}
                         onChange={(e) => setJudgment(e.target.value)}
                         placeholder="对这个问题，你目前的基本判断是什么？"
                         rows={2}
-                        className="mt-1 resize-none text-sm"
+                        className="mt-1 resize-none text-sm pr-6"
                       />
+                      {judgment.trim() && (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 absolute top-2 right-1" />
+                      )}
                     </div>
-                    <div>
+                    <div className="relative">
                       <label className="text-xs font-medium text-muted-foreground">你的担忧</label>
                       <Textarea
                         value={worry}
                         onChange={(e) => setWorry(e.target.value)}
                         placeholder="你最担心分析中可能忽略什么？"
                         rows={2}
-                        className="mt-1 resize-none text-sm"
+                        className="mt-1 resize-none text-sm pr-6"
                       />
+                      {worry.trim() && (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 absolute top-2 right-1" />
+                      )}
                     </div>
-                    <div>
+                    <div className="relative">
                       <label className="text-xs font-medium text-muted-foreground">未知领域</label>
                       <Textarea
                         value={unknown}
                         onChange={(e) => setUnknown(e.target.value)}
                         placeholder="有哪些你不确定的关键信息或变量？"
                         rows={2}
-                        className="mt-1 resize-none text-sm"
+                        className="mt-1 resize-none text-sm pr-6"
                       />
+                      {unknown.trim() && (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 absolute top-2 right-1" />
+                      )}
                     </div>
                   </div>
-                )}
-              </div>
+                </DialogContent>
+              </Dialog>
 
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
@@ -550,36 +661,35 @@ export function PossessionEntry() {
                     <span className="text-sm text-muted-foreground">启动时搜索议题背景</span>
                   </label>
                 </div>
-                <Button 
-                  onClick={onStart} 
-                  disabled={!task.trim()} 
-                  className="w-full sm:w-auto" 
-                  size="lg" 
-                  data-testid="start-possession-btn"
-                >
-                  <Brain className="mr-2 h-5 w-5" />
-                  我想问
-                </Button>
+                <div className="flex flex-col items-end gap-1">
+                  <Button 
+                    onClick={onStart} 
+                    disabled={!canStart} 
+                    className="w-full sm:w-auto"
+                    size="lg" 
+                    data-testid="start-possession-btn"
+                  >
+                    <Brain className="mr-2 h-5 w-5" />
+                    我想问
+                  </Button>
+                  {!canStart && task.trim() && !judgment.trim() && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                      请填写你的判断后再开始
+                    </p>
+                  )}
+                </div>
               </div>
             </div>
           </div>
-
         </div>
       )}
 
       {phase === "practice_opening" && (
-        <div className="space-y-4">
-          <div className="rounded-xl border-2 border-orange-300 bg-gradient-to-br from-orange-50 to-orange-100 dark:from-orange-950/50 dark:to-orange-950 p-8 text-center shadow-lg">
-            <User className="h-16 w-16 text-orange-500 mx-auto mb-4" />
-            <h3 className="font-bold text-2xl text-orange-700 dark:text-orange-300 mb-2">实践开口</h3>
-            <p className="text-orange-600 dark:text-orange-400 mb-6">
-              检测到在场者经验，进入 P1-P4 实践流程
-            </p>
-            <Button variant="default" onClick={() => setPhase("input")} className="bg-orange-600 hover:bg-orange-700">
-              重新开始
-            </Button>
-          </div>
-        </div>
+        <PracticeOpeningDialog
+          open={true}
+          onStart={handlePracticeOpeningStart}
+          onCancel={() => setPhase("input")}
+        />
       )}
 
       {phase !== "input" && phase !== "practice_opening" && phase !== "running" && (
@@ -597,42 +707,84 @@ export function PossessionEntry() {
 
           {!error && (
             <>
-              {/* Process timeline */}
               <div className="rounded-xl border bg-background p-6 shadow-sm">
-                <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
+                <h2 className="text-lg font-semibold flex items-center gap-2 mb-2">
                   <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                  附体流程
+                  讨论流程
                 </h2>
 
+                <div className="mb-1 mt-3">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground mb-1.5">
+                    <span>{currentPhaseIndex + 1}/{totalPhases} 步骤</span>
+                    <span>
+                      {currentPhaseIndex >= 0 && currentPhaseIndex < totalPhases
+                        ? PHASES[currentPhaseIndex].desc
+                        : ""}
+                    </span>
+                  </div>
+                  <div className="h-2 bg-muted rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-primary to-emerald-500 transition-all duration-700 ease-out rounded-full"
+                      style={{ width: `${Math.round(((currentPhaseIndex + 1) / totalPhases) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+
                 {progressLine && (
-                  <p className="text-sm text-primary font-medium mb-4 px-3 py-2 bg-primary/5 rounded-lg border border-primary/20 animate-in fade-in">
+                  <p className="text-sm text-primary mb-4 px-3 py-2 bg-primary/5 rounded-lg border border-primary/20 animate-in fade-in">
                     {progressLine}
                   </p>
                 )}
 
-                <div className="space-y-3">
-                  {activePhases.map((p, i) => {
+                <div className="flex items-center justify-center gap-0 mt-5 mb-2 overflow-x-auto">
+                  {PHASES.map((p, i) => {
                     const Icon = p.icon;
-                    const isCurrent = p.key === phase;
-                    const isDone = activePhases.length > i + 1 || phase === "starting";
+                    const isCurrent = i === currentPhaseIndex;
+                    const isDone = i < currentPhaseIndex;
+                    const isPending = i > currentPhaseIndex;
+
                     return (
-                      <div key={p.key} className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm transition-all ${
-                        isCurrent 
-                          ? "bg-primary/10 text-primary font-medium border border-primary/20 shadow-sm" 
-                          : isDone 
-                            ? "text-green-600 bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800" 
-                            : "text-muted-foreground bg-muted/30"
-                      }`}>
-                        <Icon className={`h-5 w-5 shrink-0 ${isCurrent ? "animate-pulse" : ""} ${isDone ? "text-green-500" : ""}`} />
-                        <span className="flex-1">{p.label}</span>
-                        {isDone && <CheckCircle2 className="h-5 w-5 text-green-500" />}
-                        {isCurrent && <Loader2 className="h-5 w-5 animate-spin" />}
+                      <div key={p.key} className="flex items-center">
+                        <div className="flex flex-col items-center gap-1.5">
+                          <div className={cn(
+                            "flex items-center justify-center w-10 h-10 rounded-full transition-all duration-300",
+                            isCurrent ? "bg-primary text-primary-foreground shadow-lg shadow-primary/25 scale-110" :
+                            isDone ? "bg-emerald-500 text-white shadow-sm" :
+                            "bg-muted text-muted-foreground/40"
+                          )}>
+                            {isDone ? (
+                              <CheckCircle2 className="h-5 w-5" />
+                            ) : isCurrent ? (
+                              <Loader2 className="h-5 w-5 animate-spin" />
+                            ) : (
+                              <Icon className="h-4 w-4" />
+                            )}
+                          </div>
+                          <span className={cn(
+                            "text-[10px] leading-tight text-center max-w-[60px]",
+                            isCurrent ? "text-primary font-semibold" :
+                            isDone ? "text-emerald-600 font-medium" :
+                            "text-muted-foreground/40"
+                          )}>
+                            {p.label}
+                          </span>
+                        </div>
+                        {i < PHASES.length - 1 && (
+                          <div className={cn(
+                            "h-0.5 w-8 sm:w-12 mx-0.5 rounded-full transition-colors duration-500",
+                            i < currentPhaseIndex ? "bg-emerald-400" : "bg-muted"
+                          )} />
+                        )}
                       </div>
                     );
                   })}
                 </div>
 
-                {phase === "matching" && <SoulCarousel />}
+                {phase === "matching" && (
+                  <div className="mt-4">
+                    <SoulCarousel />
+                  </div>
+                )}
                 
                 <Button 
                   variant="ghost" 
@@ -644,26 +796,67 @@ export function PossessionEntry() {
                 </Button>
               </div>
 
-              {/* Log panel */}
               <div className="rounded-xl border bg-muted/20 p-4 shadow-sm">
-                <h4 className="text-sm font-semibold text-muted-foreground mb-3 flex items-center gap-2">
-                  <span>执行日志</span>
-                  <span className="text-xs bg-muted px-2 py-0.5 rounded-full">{log.length} 条</span>
-                </h4>
-                <div className="bg-background rounded-lg p-3 max-h-64 overflow-y-auto font-mono text-xs space-y-1">
-                  {log.map((l, i) => (
-                    <p key={i} className="text-muted-foreground break-all leading-relaxed">
-                      {l}
-                    </p>
-                  ))}
-                  {phase === "starting" && (
-                    <p className="text-primary animate-pulse flex items-center gap-2">
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      正在启动附体会话...
-                    </p>
-                  )}
-                  <div ref={logEndRef} />
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
+                    <button
+                      onClick={() => setLogsCollapsed(!logsCollapsed)}
+                      className="flex items-center gap-2 hover:text-foreground transition-colors"
+                    >
+                      <span>执行日志</span>
+                      <span className="text-xs bg-muted px-2 py-0.5 rounded-full">{log.length} 条</span>
+                      {logsCollapsed ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />}
+                    </button>
+                  </h4>
+                  <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-0.5 bg-muted rounded-md p-0.5">
+                      {LOG_FILTERS.map((f) => (
+                        <button
+                          key={f}
+                          onClick={() => setLogFilter(f)}
+                          className={cn(
+                            "text-[10px] px-2 py-0.5 rounded transition-colors",
+                            logFilter === f ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                          )}
+                        >
+                          {f}
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      onClick={copyLogs}
+                      className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                      title="复制日志"
+                    >
+                      {copiedLogs ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
                 </div>
+                {!logsCollapsed && (
+                  <div className="bg-background rounded-lg p-3 max-h-64 overflow-y-auto font-mono text-xs space-y-1">
+                    {filteredLogs.map((l, i) => {
+                      const type = classifyLogType(l);
+                      return (
+                        <p key={i} className={cn(
+                          "break-all leading-relaxed",
+                          type === "key" ? "text-foreground font-medium" :
+                          type === "soul" ? "text-blue-600 dark:text-blue-400" :
+                          type === "review" ? "text-purple-600 dark:text-purple-400" :
+                          "text-muted-foreground"
+                        )}>
+                          {l}
+                        </p>
+                      );
+                    })}
+                    {phase === "starting" && (
+                      <p className="text-primary animate-pulse flex items-center gap-2">
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        正在启动附体会话...
+                      </p>
+                    )}
+                    <div ref={logEndRef} />
+                  </div>
+                )}
               </div>
             </>
           )}
