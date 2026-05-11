@@ -191,6 +191,7 @@ pub async fn run(
     };
 
     for output in &outputs {
+        crate::emit_soul_cost(system_tx, &output.soul_name, &output.usage, None);
         if let Err(e) = crate::finalize_output(store, session_id, output, foundation::PossessionMode::Conference, task).await {
             tracing::error!("Failed to finalize {} output: {}", output.soul_name, e);
         }
@@ -246,22 +247,11 @@ pub async fn run(
 
         if let Ok(rx) = gateway.call(&synthesis_req) {
             if let Ok((content, synth_usage)) = stream::stream_synthesis(rx, session_id, ws).await {
-                // Emit cost event
-                let total_tokens: u32 = outputs.iter().map(|o| o.usage.total_tokens).sum::<u32>() + synth_usage.total_tokens;
-                let llm_calls = limited.len() as u32 + 1; // N souls + 1 synthesis
-                let cost_estimate = estimate_cost(card_decision.as_ref().map(|d| d.provider.clone()).unwrap_or(synthesis_provider.clone()), total_tokens, true);
-                let _ = system_tx.try_send(WsEvent {
-                    event_type: WsEventType::Cost,
-                    payload: serde_json::json!({
-                        "llm_calls": llm_calls,
-                        "tokens_used": total_tokens,
-                        "estimated_cost": cost_estimate,
-                        "cache_discount": true,
-                    }).to_string(),
-                    reasoning_content: None,
-                    soul_name: None,
-                    seq: 0,
-                }).ok();
+                let per_soul_costs: Vec<(String, foundation::UsageStats, Option<String>)> = outputs.iter()
+                    .filter(|o| o.error.is_none())
+                    .map(|o| (o.soul_name.clone(), o.usage.clone(), None))
+                    .collect();
+                crate::emit_session_cost(system_tx, &per_soul_costs, Some(synth_usage.total_tokens));
 
                 if let Err(e) = store.archive_synthesis(session_id, &content).await {
                     tracing::error!("Failed to archive synthesis: {}", e);
@@ -471,8 +461,7 @@ async fn stream_single_soul_with_detection(
                 }
                 if !chunk.content.is_empty() {
                     content.push_str(&chunk.content);
-                    
-                    // 发送给 WebSocket
+
                     ws.broadcast_soul(
                         session_id,
                         &name,
@@ -484,14 +473,28 @@ async fn stream_single_soul_with_detection(
                             seq,
                         },
                     );
-                    
-                    // 发送给检测器
+
                     let _ = chunk_tx.send(SoulStreamMessage::Chunk {
                         soul_name: name.clone(),
                         token: chunk.content,
                     });
-                    
+
                     seq += 1;
+                } else if let Some(ref reasoning) = chunk.reasoning_content {
+                    if !reasoning.is_empty() && seq == 0 {
+                        ws.broadcast_soul(
+                            session_id,
+                            &name,
+                            &WsEvent {
+                                event_type: WsEventType::SoulChunk,
+                                payload: String::new(),
+                                reasoning_content: Some(reasoning.clone()),
+                                soul_name: Some(name.clone()),
+                                seq,
+                            },
+                        );
+                        seq += 1;
+                    }
                 }
             }
             Err(e) => {
