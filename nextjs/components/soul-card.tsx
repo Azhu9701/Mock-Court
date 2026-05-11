@@ -22,7 +22,7 @@ export function SoulCard({ soul }: { soul: SoulListEntry }) {
       <p className="text-sm text-muted-foreground">{soul.field}</p>
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span className="flex items-center gap-1">
-          <Users className="h-3 w-3" />
+          <Users className="h-3 w-3" aria-hidden="true" />
           {soul.summon_count}
         </span>
         {soul.tags.length > 0 && (

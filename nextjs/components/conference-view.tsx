@@ -60,18 +60,26 @@ export function ConferenceView({ messages, synthesis, collisions, toolCalls }: C
               className={`transition-all duration-300 ${
                 isCurrentlyExpanded ? "lg:col-span-2 xl:col-span-2" : ""
               }`}
-              onClick={() => setExpandedSoul(isCurrentlyExpanded ? null : name)}
             >
-              <SoulPanel
-                name={name}
-                content={messages[name].content}
-                isStreaming={messages[name].isStreaming}
-                error={messages[name].error}
-                hasCollision={collisions.some(c => c.to === name || c.from === name)}
-                ismismCode={messages[name].ismismCode || ""}
-                isExpanded={isCurrentlyExpanded}
-                onToggleExpand={() => setExpandedSoul(isCurrentlyExpanded ? null : name)}
-              />
+              <button
+                type="button"
+                className="w-full h-full text-left"
+                onClick={() => setExpandedSoul(isCurrentlyExpanded ? null : name)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedSoul(isCurrentlyExpanded ? null : name); } }}
+                aria-expanded={isCurrentlyExpanded}
+                aria-label={`${name} 面板`}
+              >
+                <SoulPanel
+                  name={name}
+                  content={messages[name].content}
+                  isStreaming={messages[name].isStreaming}
+                  error={messages[name].error}
+                  hasCollision={collisions.some(c => c.to === name || c.from === name)}
+                  ismismCode={messages[name].ismismCode || ""}
+                  isExpanded={isCurrentlyExpanded}
+                  onToggleExpand={() => setExpandedSoul(isCurrentlyExpanded ? null : name)}
+                />
+              </button>
             </div>
           );
         })}

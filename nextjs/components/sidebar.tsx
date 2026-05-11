@@ -79,7 +79,14 @@ export function Sidebar() {
         <div
           className="shrink-0 w-1 hover:w-1.5 cursor-col-resize bg-transparent hover:bg-border transition-all duration-150 flex items-center justify-center group"
           onMouseDown={handleMouseDown}
+          onKeyDown={(e) => { if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); setWidth(width + (e.key === "ArrowLeft" ? -10 : 10)); } }}
           title="拖拽调整宽度"
+          role="slider"
+          aria-label="调整侧边栏宽度"
+          aria-valuemin={100}
+          aria-valuemax={400}
+          aria-valuenow={width}
+          tabIndex={0}
         >
           <div className="opacity-0 group-hover:opacity-100 transition-opacity">
             <GripVertical className="h-4 w-4 text-muted-foreground" />

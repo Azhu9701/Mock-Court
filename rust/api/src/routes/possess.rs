@@ -212,7 +212,7 @@ fn spawn_banner_lord_review(
              - 利用场域差异——场域1做地基（\"这是什么\"），场域2做边界（\"这看不到什么\"），\
              场域3做自反（\"这个问法本身有什么问题\"），场域4做实践（\"怎么落地\"）\n\
              - 每个子问题要具体（\"请回答：X在Y条件下的Z\"），不要\"请分析\"这种空指令\n\n\
-             返回JSON：\n\
+             返回JSON：\
              {{\"verdict\":\"pass|conditional|reject\",\
              \"verified_souls\":[\"魂名\"],\
              \"task_cards\":{{\"魂名\":\"专属子问题\"}},\
@@ -319,7 +319,16 @@ async fn analyze_task(
             Ok(p) => p,
             Err(_) => {
                 send(serde_json::json!({ "phase": "error", "message": "无可用的 AI provider" }).to_string());
-                send(serde_json::json!({ "phase": "done", "response": null }).to_string());
+                send(serde_json::json!({
+                    "phase": "done",
+                    "response": {
+                        "entry_type": "conventional",
+                        "matched_souls": [],
+                        "recommended_mode": "single",
+                        "review": { "verdict": "pass", "checks": [], "notes": "No LLM provider available", "reviewer": "" },
+                        "task_cards": {}
+                    }
+                }).to_string());
                 return;
             }
         };
@@ -328,7 +337,16 @@ async fn analyze_task(
             Ok(s) => s,
             Err(_) => {
                 send(serde_json::json!({ "phase": "error", "message": "魂列表加载失败" }).to_string());
-                send(serde_json::json!({ "phase": "done", "response": null }).to_string());
+                send(serde_json::json!({
+                    "phase": "done",
+                    "response": {
+                        "entry_type": "conventional",
+                        "matched_souls": [],
+                        "recommended_mode": "single",
+                        "review": { "verdict": "pass", "checks": [], "notes": "Failed to list souls", "reviewer": "" },
+                        "task_cards": {}
+                    }
+                }).to_string());
                 return;
             }
         };
@@ -370,13 +388,91 @@ async fn analyze_task(
             }
         }).collect();
 
+        // ── Ismism-based mode determination ──
+        // Parse ismism code: format "F-O-E-T" (4 numbers 0-9)
+        fn parse_ismism(code: &str) -> Option<[u8; 4]> {
+            let parts: Vec<&str> = code.split('-').collect();
+            if parts.len() != 4 {
+                return None;
+            }
+            let nums: Option<[u8; 4]> = parts.iter().map(|p| p.parse().ok()).collect::<Option<Vec<_>>>()?.try_into().ok();
+            nums
+        }
+
+        // Calculate Ismism diversity score (0.0 = identical, 1.0 = maximum diversity)
+        fn calc_ismism_diversity(codes: &[[u8; 4]]) -> (f64, usize, usize) {
+            if codes.len() < 2 {
+                return (0.0, 0, 0);
+            }
+
+            let mut total_field_diff = 0.0;
+            let mut total_ontology_diff = 0.0;
+            let mut total_epistemology_diff = 0.0;
+            let mut total_teleology_diff = 0.0;
+            let comparisons = codes.len() * (codes.len() - 1) / 2;
+            let mut high_field_count = 0;
+            let mut high_ontology_count = 0;
+            let mut high_epistemology_count = 0;
+            let mut high_teleology_count = 0;
+
+            for i in 0..codes.len() {
+                for j in (i+1)..codes.len() {
+                    let diff0 = codes[i][0].abs_diff(codes[j][0]) as f64 / 9.0;
+                    let diff1 = codes[i][1].abs_diff(codes[j][1]) as f64 / 9.0;
+                    let diff2 = codes[i][2].abs_diff(codes[j][2]) as f64 / 9.0;
+                    let diff3 = codes[i][3].abs_diff(codes[j][3]) as f64 / 9.0;
+                    total_field_diff += diff0;
+                    total_ontology_diff += diff1;
+                    total_epistemology_diff += diff2;
+                    total_teleology_diff += diff3;
+                    if diff0 >= 0.4 { high_field_count += 1; }
+                    if diff1 >= 0.4 { high_ontology_count += 1; }
+                    if diff2 >= 0.4 { high_epistemology_count += 1; }
+                    if diff3 >= 0.4 { high_teleology_count += 1; }
+                }
+            }
+
+            let avg_field = total_field_diff / comparisons as f64;
+            let _avg_ontology = total_ontology_diff / comparisons as f64;
+            let _avg_epistemology = total_epistemology_diff / comparisons as f64;
+            let _avg_teleology = total_teleology_diff / comparisons as f64;
+
+            // Weighted diversity: teleology > epistemology > ontology > field
+            let diversity = avg_field * 0.15 + _avg_ontology * 0.20 + _avg_epistemology * 0.25 + _avg_teleology * 0.40;
+
+            // Count how many dimensions have high diversity
+            let high_dimensions = [high_field_count, high_ontology_count, high_epistemology_count, high_teleology_count]
+                .iter().filter(|&&c| c >= comparisons / 2).count();
+
+            (diversity, high_dimensions, comparisons)
+        }
+
         let mode = if souls.len() <= 1 {
             "single".to_string()
         } else {
-            let unique_fields: std::collections::HashSet<&str> = souls.iter()
-                .filter_map(|s| if s.field.is_empty() { None } else { Some(s.field.as_str()) })
+            // Parse ismism codes from matched souls
+            let ismism_codes: Vec<[u8; 4]> = souls.iter()
+                .filter_map(|s| parse_ismism(&s.ismism_code))
                 .collect();
-            if unique_fields.len() >= 3 { "debate".to_string() } else { "conference".to_string() }
+
+            let (diversity, high_dims, _comparisons) = calc_ismism_diversity(&ismism_codes);
+
+            tracing::debug!(
+                "Ismism mode analysis: souls={} diversity={:.3} high_dims={}/4",
+                souls.len(), diversity, high_dims
+            );
+
+            // Mode determination based on Ismism diversity:
+            // - Single: 1 soul or diversity < 0.2
+            // - Conference: diversity 0.2-0.5, 1-2 high-dim
+            // - Debate: diversity >= 0.5 OR 3+ dimensions with high divergence
+            if diversity < 0.2 || ismism_codes.len() < 2 {
+                "single".to_string()
+            } else if diversity >= 0.5 || high_dims >= 3 {
+                "debate".to_string()
+            } else {
+                "conference".to_string()
+            }
         };
 
         // ── Phase: matched ──
@@ -476,7 +572,7 @@ async fn analyze_task(
             send(serde_json::json!({ "phase": "adjusting" }).to_string());
 
             let adjustment_prompt = format!(
-                "## 任务\n{}\n\n## 当前魂组合\n{}\n\n## 幡主审查结果\n裁决：{}\n{}\n备注：{}\n\n## 指令\n根据审查结果调整魂组合。如果是条件通过——增删魂以满足约束。如果是拒绝——完全重新匹配。\n返回JSON：{{\"souls\":[{{\"name\":\"魂名\",\"rationale\":\"调整理由\"}}]}}",
+                "## 任务\n{}\n\n## 当前魂组合\n{}\n\n## 幡主审查结果\n裁决：{}\n{}\n备注：{}\n\n## 指令\n根据审查结果调整魂组合。如果是条件通过——增删魂以满足约束。如果是拒绝——完全重新匹配。\n返回JSON：{{\"souls\":[{{\"name\":\"魂名\",\"rationale\":\"调整理由\"}}]}}}",
                 body.task,
                 souls.iter().map(|s| format!("- {} [{}] {}", s.name, s.field, s.rationale)).collect::<Vec<_>>().join("\n"),
                 verdict, checks.join("\n"), notes

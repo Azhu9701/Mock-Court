@@ -46,6 +46,7 @@ export function DeleteSoulButton({ soulName, variant = "icon", className }: Dele
   return (
     <>
       <button
+        type="button"
         onClick={(e) => {
           e.stopPropagation();
           e.preventDefault();
@@ -53,6 +54,7 @@ export function DeleteSoulButton({ soulName, variant = "icon", className }: Dele
         }}
         className="rounded-md p-1.5 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
         title="散魂"
+        aria-label="散魂"
       >
         <Trash2 className="h-4 w-4" />
       </button>

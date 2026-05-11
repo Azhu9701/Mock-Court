@@ -46,7 +46,7 @@ export const SoulChatBubble = memo(function SoulChatBubble({
         <div className="flex items-center gap-2 mb-1">
           <span className="text-sm font-semibold">{message.soulName}</span>
           {message.isStreaming && (
-            <span className="inline-block w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+            <span className="inline-block w-2 h-2 rounded-full bg-green-500 animate-pulse" aria-hidden="true" />
           )}
           {message.error && (
             <span className="text-xs text-red-500">错误</span>
@@ -66,7 +66,7 @@ export const SoulChatBubble = memo(function SoulChatBubble({
             ) : null}
           </div>
           {message.isStreaming && (
-            <span className="inline-block w-1.5 h-4 bg-foreground animate-pulse ml-0.5 align-text-bottom" />
+            <span className="inline-block w-1.5 h-4 bg-foreground animate-pulse ml-0.5 align-text-bottom" aria-hidden="true" />
           )}
         </div>
         <div ref={bottomRef} />

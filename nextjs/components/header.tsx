@@ -24,6 +24,7 @@ export function Header() {
           onClick={() => setSettingsOpen(true)}
           data-testid="settings-btn"
           aria-label="设置"
+          type="button"
         >
           <Settings className="h-4 w-4" />
         </Button>

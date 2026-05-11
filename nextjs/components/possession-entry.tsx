@@ -379,7 +379,12 @@ export function PossessionEntry() {
                 <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/30 rounded-lg px-3 py-1.5">
                   <Globe className="h-3.5 w-3.5 text-green-500" />
                   <span>已添加 SearXNG 搜索背景</span>
-                  <button onClick={clearSearchContext} className="ml-auto text-destructive hover:underline">
+                  <button
+                    type="button"
+                    onClick={clearSearchContext}
+                    className="ml-auto text-destructive hover:underline"
+                    aria-label="清除搜索背景"
+                  >
                     清除
                   </button>
                 </div>
@@ -387,8 +392,10 @@ export function PossessionEntry() {
 
               {!showSearch && (
                 <button
+                  type="button"
                   onClick={() => setShowSearch(true)}
                   className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                  aria-label="搜索背景资料"
                 >
                   <Search className="h-4 w-4" />
                   搜索背景资料（通过 SearXNG）
@@ -400,8 +407,10 @@ export function PossessionEntry() {
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium">SearXNG 搜索背景</span>
                     <button
+                      type="button"
                       onClick={() => { setShowSearch(false); setSearchResults([]); }}
                       className="text-xs text-muted-foreground hover:text-foreground"
+                      aria-label="收起搜索"
                     >
                       收起
                     </button>
@@ -478,8 +487,9 @@ export function PossessionEntry() {
                       checked={searchTopic}
                       onChange={(e) => setSearchTopic(e.target.checked)}
                       className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                      id="search-topic-checkbox"
                     />
-                    <Globe className="h-4 w-4 text-muted-foreground" />
+                    <Globe className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                     <span className="text-sm text-muted-foreground">启动时搜索议题背景</span>
                   </label>
                 </div>
@@ -611,8 +621,11 @@ export function PossessionEntry() {
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
                     <button
+                      type="button"
                       onClick={() => setLogsCollapsed(!logsCollapsed)}
                       className="flex items-center gap-2 hover:text-foreground transition-colors"
+                      aria-expanded={!logsCollapsed}
+                      aria-controls="execution-logs"
                     >
                       <span>执行日志</span>
                       <span className="text-xs bg-muted px-2 py-0.5 rounded-full">{log.length} 条</span>
@@ -623,21 +636,25 @@ export function PossessionEntry() {
                     <div className="flex items-center gap-0.5 bg-muted rounded-md p-0.5">
                       {LOG_FILTERS.map((f) => (
                         <button
+                          type="button"
                           key={f}
                           onClick={() => setLogFilter(f)}
                           className={cn(
                             "text-[10px] px-2 py-0.5 rounded transition-colors",
                             logFilter === f ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                           )}
+                          aria-pressed={logFilter === f}
                         >
                           {f}
                         </button>
                       ))}
                     </div>
                     <button
+                      type="button"
                       onClick={copyLogs}
                       className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
                       title="复制日志"
+                      aria-label="复制日志"
                     >
                       {copiedLogs ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
                     </button>
@@ -668,7 +685,7 @@ export function PossessionEntry() {
                     {phase === "starting" && (
                       <p className="text-primary animate-pulse flex items-center gap-2">
                         <Loader2 className="h-3 w-3 animate-spin" />
-                        正在启动附体会话...
+                        正在启动附体会话…
                       </p>
                     )}
                     <div ref={logEndRef} />

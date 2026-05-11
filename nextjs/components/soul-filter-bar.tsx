@@ -52,6 +52,7 @@ export function SoulFilterBar({ totalCount }: SoulFilterBarProps) {
           }}
           className="pl-9"
           data-testid="soul-search-input"
+          aria-label="搜索魂"
         />
       </div>
       <span className="text-sm text-muted-foreground whitespace-nowrap">

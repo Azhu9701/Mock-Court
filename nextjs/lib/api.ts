@@ -386,65 +386,91 @@ export interface AnalyzeStreamEvent {
 }
 
 export async function analyzeTask(
-  task: string,
-  reviewer?: string,
-  signal?: AbortSignal,
-  onEvent?: (event: AnalyzeStreamEvent) => void,
+    task: string,
+    reviewer?: string,
+    signal?: AbortSignal,
+    onEvent?: (event: AnalyzeStreamEvent) => void,
 ): Promise<AnalyzeResponse> {
-  const url = `${API_BASE}/possess/analyze`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ task, reviewer }),
-    signal,
-  });
+    const url = `${API_BASE}/possess/analyze`;
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task, reviewer }),
+        signal,
+    });
 
-  if (!res.ok) {
-    let errorDetail = res.statusText;
-    try { const ed = await res.json(); errorDetail = ed.message || ed.error || errorDetail; } catch {}
-    throw new Error(`API request failed: analyzeTask - ${errorDetail}`);
-  }
+    if (!res.ok) {
+        let errorDetail = res.statusText;
+        try { const ed = await res.json(); errorDetail = ed.message || ed.error || errorDetail; } catch {}
+        throw new Error(`API request failed: analyzeTask - ${errorDetail}`);
+    }
 
-  if (!res.body) throw new Error("analyzeTask: empty response body");
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let finalResponse: AnalyzeResponse | null = null;
-  let eventCount = 0;
+    if (!res.body) throw new Error("analyzeTask: empty response body");
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalResponse: AnalyzeResponse | null = null;
+    let eventCount = 0;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+    // 保存中间状态以便在未收到 done 事件时构造响应
+    let intermediateEntryType = "conventional";
+    let intermediateSouls: any[] = [];
+    let intermediateMode = "single";
+    let intermediateReview: any = null;
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data:")) continue;
-      try {
-        const event: AnalyzeStreamEvent = JSON.parse(trimmed.slice(5).trim());
-        eventCount++;
-        if (event.phase === "done" && event.response) {
-          finalResponse = event.response;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data:")) continue;
+            try {
+                const event: AnalyzeStreamEvent = JSON.parse(trimmed.slice(5).trim());
+                eventCount++;
+                // 保存中间状态
+                if (event.entry_type) intermediateEntryType = event.entry_type;
+                if (event.souls) intermediateSouls = event.souls;
+                if (event.mode) intermediateMode = event.mode;
+                if (event.review) intermediateReview = event.review;
+                if (event.phase === "done" && event.response) {
+                    finalResponse = event.response;
+                }
+                onEvent?.(event);
+            } catch {}
         }
-        onEvent?.(event);
-      } catch {}
     }
-  }
 
-  if (!finalResponse) {
-    // Fallback: 旧版后端返回的是纯 JSON 而非 SSE
-    if (eventCount === 0 && buffer.trim()) {
-      try {
-        const legacyResponse = JSON.parse(buffer.trim()) as AnalyzeResponse;
-        finalResponse = legacyResponse;
-      } catch {}
+    // 如果没有收到 done 事件，尝试 fallback 机制
+    if (!finalResponse) {
+        // Fallback 1: 从中间状态构造响应
+        if (intermediateSouls.length > 0 || intermediateReview) {
+            console.warn("analyzeTask: stream ended without done event, constructing response from intermediate state");
+            finalResponse = {
+                entry_type: intermediateEntryType,
+                matched_souls: intermediateSouls,
+                recommended_mode: intermediateMode,
+                review: intermediateReview || { verdict: "pass", checks: [], notes: "No review received", reviewer: "" },
+                task_cards: {}
+            };
+        }
+        // Fallback 2: 旧版后端返回的是纯 JSON 而非 SSE
+        else if (eventCount === 0 && buffer.trim()) {
+            try {
+                const legacyResponse = JSON.parse(buffer.trim()) as AnalyzeResponse;
+                finalResponse = legacyResponse;
+            } catch {}
+        }
     }
-    if (!finalResponse) throw new Error("analyzeTask: stream ended without done event");
-  }
-  return finalResponse;
+
+    if (!finalResponse) {
+        throw new Error("analyzeTask: stream ended without done event");
+    }
+    return finalResponse;
 }
 
 export interface StartPossessionResponse {

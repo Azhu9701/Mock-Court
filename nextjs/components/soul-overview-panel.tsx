@@ -27,6 +27,7 @@ export function SoulOverviewPanel({
         <button
           key={name}
           onClick={() => onFocus(name)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onFocus(name); } }}
           className={`w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm text-left transition-colors
             ${
               focusSoul === name
@@ -34,8 +35,9 @@ export function SoulOverviewPanel({
                 : "hover:bg-muted"
             }`}
           data-testid={`overview-soul-${name}`}
+          tabIndex={0}
         >
-          <span className="w-4 text-center text-xs">
+          <span className="w-4 text-center text-xs" aria-hidden="true">
             {msg.error ? "✗" : msg.isStreaming ? "●" : msg.content ? "✓" : "○"}
           </span>
           <span className="truncate">{name}</span>
