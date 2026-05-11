@@ -7,13 +7,11 @@ import { DebateView } from "@/components/debate-view";
 import { RelayView } from "@/components/relay-view";
 import { LearnView } from "@/components/learn-view";
 import { PracticeOpeningView } from "@/components/practice-opening-view";
-import { SessionStatusBar } from "@/components/session-status-bar";
 import { Brain, Loader2, AlertTriangle, Key, CheckCircle, Sparkles, Wifi, Zap, MessageCircle, ChevronRight, Globe } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SoulResponseCard } from "@/components/soul-response-card";
 import { PostSessionReview } from "@/components/post-session-review";
 import FollowUpInput from "@/components/follow-up-input";
-import Link from "next/link";
 import { useState } from "react";
 
 interface MatchedSoulInfo {
@@ -274,11 +272,6 @@ export function SessionRunner({ sessionId, mode, matchedSouls, onDone, sessionDo
 
   return (
     <div className="flex flex-col flex-1" data-testid="session-runner">
-      <Link href="/possess" className="text-sm text-muted-foreground hover:text-foreground mb-2">
-        ← 返回讨论
-      </Link>
-      <SessionStatusBar status={status} error={error} onReconnect={reconnect} />
-
       {progressText && (
         <div className={cn(
           "px-4 py-2 text-sm border-b transition-colors",
