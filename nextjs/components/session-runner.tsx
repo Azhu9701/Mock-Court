@@ -128,16 +128,67 @@ function WaitingSoulsView({ mode, matchedSouls, processSteps, messages }: { mode
         <div className="grid gap-3 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {souls.map((soul) => {
             const soulMsg = messages[soul.name];
-            const isArrived = arrivedSet.has(soul.name);
-            const isStreaming = !soulMsg || soulMsg.isStreaming;
+            const hasArrived = arrivedSet.has(soul.name);
+            const streamingContent = soulMsg?.content || "";
             return (
-              <SoulResponseCard
+              <div
                 key={soul.name}
-                name={soul.name}
-                content={soulMsg?.content || ""}
-                ismismCode={soul.ismism_code}
-                isStreaming={isStreaming}
-              />
+                className={cn(
+                  "flex flex-col rounded-lg border bg-background overflow-hidden h-40 transition-all duration-500",
+                  hasArrived && "border-primary/30 shadow-md shadow-primary/10"
+                )}
+              >
+                <div className={cn(
+                  "px-4 py-2 border-b flex items-center justify-between transition-colors duration-500",
+                  hasArrived ? "bg-primary/5" : "bg-muted/30"
+                )}>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-sm">{soul.name}</span>
+                    {soul.ismism_code && (
+                      <span className="text-xs text-muted-foreground font-mono">{soul.ismism_code}</span>
+                    )}
+                  </div>
+                  {hasArrived && (
+                    <CheckCircle className="h-3.5 w-3.5 text-emerald-500 animate-in zoom-in duration-300" />
+                  )}
+                </div>
+                <div className={cn(
+                  "flex items-center gap-2 px-4 py-2 border-b transition-colors duration-500",
+                  hasArrived ? "bg-emerald-50/50 dark:bg-emerald-950/10" : "bg-muted/10"
+                )}>
+                  {hasArrived ? (
+                    <>
+                      <CheckCircle className="h-4 w-4 text-emerald-500" />
+                      <span className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">已到达</span>
+                    </>
+                  ) : (
+                    <>
+                      <Brain className="h-4 w-4 text-primary animate-pulse" />
+                      <span className="text-xs text-muted-foreground">等待回应…</span>
+                    </>
+                  )}
+                  <div className="flex-1" />
+                  {!hasArrived && (
+                    <div className="h-1 w-12 bg-muted rounded-full overflow-hidden">
+                      <div className="h-full bg-primary/20 animate-pulse rounded-full" style={{ width: "40%" }} />
+                    </div>
+                  )}
+                </div>
+                <div className="flex-1 flex items-center px-4 overflow-hidden">
+                  {streamingContent ? (
+                    <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+                      {streamingContent}
+                      {soulMsg?.isStreaming && (
+                        <span className="inline-block w-1.5 h-3.5 bg-primary animate-pulse ml-0.5 align-middle rounded-full" />
+                      )}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground/60 italic truncate">
+                      {soul.field || "正在加载思维框架…"}
+                    </p>
+                  )}
+                </div>
+              </div>
             );
           })}
         </div>
