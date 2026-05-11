@@ -66,9 +66,13 @@ impl WsSessionManager {
 
     pub fn broadcast_system(&self, session_id: &str, event: &WsEvent) {
         if let Some(mut state) = self.sessions.get_mut(session_id) {
-            state.event_buffer.push_back(event.clone());
-            while state.event_buffer.len() > MAX_BUFFERED_EVENTS {
-                state.event_buffer.pop_front();
+            let event_type: &str = &serde_json::to_string(&event.event_type).unwrap_or_default();
+            let is_stream_chunk = event_type == "\"soul_token\"" || event_type == "\"synthesis_chunk\"";
+            if !is_stream_chunk {
+                state.event_buffer.push_back(event.clone());
+                while state.event_buffer.len() > MAX_BUFFERED_EVENTS {
+                    state.event_buffer.pop_front();
+                }
             }
             for tx in &state.system_channel {
                 let _ = tx.try_send(event.clone());

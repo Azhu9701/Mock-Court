@@ -142,17 +142,17 @@ export function useWebSocket(sessionId: string) {
     mountedRef.current = true;
     setStatus("connecting");
 
-    // ── Preserve state on reconnect, only clear on first connection ──
+    // ── Always clear streaming state on (re)connect; process steps replays from server buffer ──
+    setProcessSteps([]);
+    bufferRef.current = {};
+    synthesisRef.current = "";
+    setMessages({});
+    setSynthesis("");
+    setCost(null);
+    costPerSoulRef.current = [];
+    setCollisions([]);
+    setToolCalls([]);
     if (!hasConnectedBeforeRef.current) {
-      setProcessSteps([]);
-      bufferRef.current = {};
-      synthesisRef.current = "";
-      setMessages({});
-      setSynthesis("");
-      setCost(null);
-      costPerSoulRef.current = [];
-      setCollisions([]);
-      setToolCalls([]);
       setLogs([]);
     }
 

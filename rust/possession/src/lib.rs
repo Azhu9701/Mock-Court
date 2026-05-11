@@ -15,6 +15,7 @@ use foundation::{
     FoundationError, PossessionMode, Result, Session, SessionStatus, Storage, UsageStats,
 };
 use registry::SoulRegistry;
+use serde_json;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -128,10 +129,62 @@ pub async fn finalize_output_with_notes(
         self_negation: None,
         empty_chair: None,
         user_feedback: None,
+        usage: output.usage.clone(),
     };
     let _ = store.record_call(&record).await;
 
     Ok(())
+}
+
+pub fn emit_soul_cost(
+    system_tx: &mpsc::Sender<WsEvent>,
+    soul_name: &str,
+    usage: &UsageStats,
+    provider: Option<&str>,
+) {
+    let payload = serde_json::json!({
+        "soul_name": soul_name,
+        "prompt_tokens": usage.prompt_tokens,
+        "completion_tokens": usage.completion_tokens,
+        "total_tokens": usage.total_tokens,
+        "provider": provider.unwrap_or("unknown"),
+    });
+    let _ = system_tx.try_send(WsEvent {
+        event_type: WsEventType::Cost,
+        payload: payload.to_string(),
+        reasoning_content: None,
+        soul_name: Some(soul_name.to_string()),
+        seq: 0,
+    }).ok();
+}
+
+pub fn emit_session_cost(
+    system_tx: &mpsc::Sender<WsEvent>,
+    per_soul: &[(String, UsageStats, Option<String>)],
+    synth_tokens: Option<u32>,
+) {
+    let per_soul_breakdown: Vec<serde_json::Value> = per_soul.iter().map(|(name, usage, provider)| {
+        serde_json::json!({
+            "soul_name": name,
+            "prompt_tokens": usage.prompt_tokens,
+            "completion_tokens": usage.completion_tokens,
+            "total_tokens": usage.total_tokens,
+            "provider": provider.as_deref().unwrap_or("unknown"),
+        })
+    }).collect();
+    let total_tokens: u32 = per_soul.iter().map(|(_, u, _)| u.total_tokens).sum::<u32>() + synth_tokens.unwrap_or(0);
+    let payload = serde_json::json!({
+        "llm_calls": per_soul.len() as u32 + if synth_tokens.is_some() { 1 } else { 0 },
+        "tokens_used": total_tokens,
+        "per_soul": per_soul_breakdown,
+    });
+    let _ = system_tx.try_send(WsEvent {
+        event_type: WsEventType::Cost,
+        payload: payload.to_string(),
+        reasoning_content: None,
+        soul_name: None,
+        seq: 0,
+    }).ok();
 }
 
 #[derive(Debug, Clone)]
@@ -190,7 +243,7 @@ pub struct ToolResultPayload {
     pub soul_name: String,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum WsEventType {
     // Soul streaming
     #[serde(rename = "soul_token")]
