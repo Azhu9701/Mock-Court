@@ -1,17 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Trash2, Brain, Users, ChevronRight, Download } from "lucide-react";
 import { ConfirmButton } from "@/components/ui/confirm-button";
 import { deleteSession, exportSessionMarkdown, fetchSessions } from "@/lib/api";
-import { triggerSessionsUpdate } from "@/components/sidebar-sessions";
+import { triggerSessionsUpdate, SESSIONS_UPDATED_EVENT } from "@/components/sidebar-sessions";
 import type { SessionSummary } from "@/lib/api";
 import { modeLabel, MODE_COLORS_BG, MODE_COLORS_TEXT } from "@/config/possession-modes";
 import type { PossessionMode } from "@/config/possession-modes";
-
-const SESSIONS_UPDATED_EVENT = "aionui-sessions-updated";
 
 interface SessionTimelineProps {
   sessions: SessionSummary[];
@@ -63,8 +61,8 @@ function SessionRow({ s, onDelete }: { s: SessionSummary; onDelete: (id: string)
   const handleDelete = async () => {
     try {
       await deleteSession(s.id);
-      triggerSessionsUpdate();
       onDelete(s.id);
+      triggerSessionsUpdate();
     } catch {}
   };
 
@@ -131,9 +129,14 @@ function SessionRow({ s, onDelete }: { s: SessionSummary; onDelete: (id: string)
 
 export function SessionTimeline({ sessions: initialSessions }: SessionTimelineProps) {
   const [sessions, setSessions] = useState<SessionSummary[]>(initialSessions);
+  const skipEventRef = useRef(false);
 
   useEffect(() => {
     const handle = () => {
+      if (skipEventRef.current) {
+        skipEventRef.current = false;
+        return;
+      }
       fetchSessions(200).then(setSessions).catch(() => {});
     };
     window.addEventListener(SESSIONS_UPDATED_EVENT, handle);
@@ -141,6 +144,7 @@ export function SessionTimeline({ sessions: initialSessions }: SessionTimelinePr
   }, []);
 
   const handleDelete = (id: string) => {
+    skipEventRef.current = true;
     setSessions((prev) => prev.filter((s) => s.id !== id));
   };
   if (sessions.length === 0) {

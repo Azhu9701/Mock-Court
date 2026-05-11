@@ -11,8 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmButton } from "@/components/ui/confirm-button";
 
-// 会话更新事件
-const SESSIONS_UPDATED_EVENT = "aionui-sessions-updated";
+export const SESSIONS_UPDATED_EVENT = "aionui-sessions-updated";
 
 export function triggerSessionsUpdate() {
   if (typeof window !== "undefined") {

@@ -317,12 +317,20 @@ async fn analyze_task(
 
         let provider = match pick_provider(&state) {
             Ok(p) => p,
-            Err(_) => { return; }
+            Err(_) => {
+                send(serde_json::json!({ "phase": "error", "message": "无可用的 AI provider" }).to_string());
+                send(serde_json::json!({ "phase": "done", "response": null }).to_string());
+                return;
+            }
         };
 
         let all_souls = match state.registry.list_souls(&foundation::IsmismFilter::default()) {
             Ok(s) => s,
-            Err(_) => { return; }
+            Err(_) => {
+                send(serde_json::json!({ "phase": "error", "message": "魂列表加载失败" }).to_string());
+                send(serde_json::json!({ "phase": "done", "response": null }).to_string());
+                return;
+            }
         };
         let task_lower = body.task.to_lowercase();
 

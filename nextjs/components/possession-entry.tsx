@@ -14,7 +14,6 @@ import { triggerSessionsUpdate } from "@/components/sidebar-sessions";
 import { AttachmentUpload } from "@/components/attachment-upload";
 import { SoulCarousel } from "@/components/soul-carousel";
 import { PracticeOpeningDialog } from "@/components/practice-opening-dialog";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { SessionContextHeader } from "@/components/session-context-header";
 
@@ -69,7 +68,6 @@ export function PossessionEntry() {
   const [judgment, setJudgment] = useState("");
   const [worry, setWorry] = useState("");
   const [unknown, setUnknown] = useState("");
-  const [showPresetsDialog, setShowPresetsDialog] = useState(false);
   const [progressLine, setProgressLine] = useState("");
   const [logFilter, setLogFilter] = useState<LogFilter>("全部");
   const [logsCollapsed, setLogsCollapsed] = useState(true);
@@ -326,11 +324,6 @@ export function PossessionEntry() {
     if (logFilter === "审查") return type === "review";
     return true;
   });
-
-  const presetsFilled = (judgment.trim() ? 1 : 0) + (worry.trim() ? 1 : 0) + (unknown.trim() ? 1 : 0);
-  const presetsTitle = presetsFilled === 0 ? "使用者预设 ⚠️ 请填写判断" :
-    presetsFilled === 3 ? "使用者预设 ✅" :
-    `使用者预设（${presetsFilled}/3 完成）`;
 
   const currentPhaseIndex = PHASES.findIndex((p) => p.key === phase);
   const totalPhases = PHASES.length;

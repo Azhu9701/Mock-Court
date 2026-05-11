@@ -405,10 +405,12 @@ export async function analyzeTask(
     throw new Error(`API request failed: analyzeTask - ${errorDetail}`);
   }
 
-  const reader = res.body!.getReader();
+  if (!res.body) throw new Error("analyzeTask: empty response body");
+  const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let finalResponse: AnalyzeResponse | null = null;
+  let eventCount = 0;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -423,6 +425,7 @@ export async function analyzeTask(
       if (!trimmed.startsWith("data:")) continue;
       try {
         const event: AnalyzeStreamEvent = JSON.parse(trimmed.slice(5).trim());
+        eventCount++;
         if (event.phase === "done" && event.response) {
           finalResponse = event.response;
         }
@@ -431,7 +434,16 @@ export async function analyzeTask(
     }
   }
 
-  if (!finalResponse) throw new Error("analyzeTask: stream ended without done event");
+  if (!finalResponse) {
+    // Fallback: 旧版后端返回的是纯 JSON 而非 SSE
+    if (eventCount === 0 && buffer.trim()) {
+      try {
+        const legacyResponse = JSON.parse(buffer.trim()) as AnalyzeResponse;
+        finalResponse = legacyResponse;
+      } catch {}
+    }
+    if (!finalResponse) throw new Error("analyzeTask: stream ended without done event");
+  }
   return finalResponse;
 }
 

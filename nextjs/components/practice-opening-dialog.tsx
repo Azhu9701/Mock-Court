@@ -12,6 +12,39 @@ interface PracticeOpeningDialogProps {
   onCancel: () => void;
 }
 
+function PracticeField({
+  label,
+  required,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  required?: boolean;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <div className="relative">
+      <label className="text-xs font-medium text-muted-foreground">
+        {label}
+        {required && <span className="text-red-500"> *</span>}
+      </label>
+      <Textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        rows={2}
+        className="mt-1 resize-none text-sm pr-6"
+      />
+      {value.trim() && (
+        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 absolute top-7 right-2" />
+      )}
+    </div>
+  );
+}
+
 export function PracticeOpeningDialog({ open, onStart, onCancel }: PracticeOpeningDialogProps) {
   const [judgment, setJudgment] = useState("");
   const [worry, setWorry] = useState("");
@@ -42,49 +75,25 @@ export function PracticeOpeningDialog({ open, onStart, onCancel }: PracticeOpeni
         </DialogHeader>
 
         <div className="space-y-3 mt-2">
-          <div className="relative">
-            <label className="text-xs font-medium text-muted-foreground">
-              你的判断 <span className="text-red-500">*</span>
-            </label>
-            <Textarea
-              value={judgment}
-              onChange={(e) => { setJudgment(e.target.value); setShowHint(false); }}
-              placeholder="对这个问题，你目前的基本判断是什么？"
-              rows={2}
-              className="mt-1 resize-none text-sm pr-6"
-            />
-            {judgment.trim() && (
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 absolute top-7 right-2" />
-            )}
-          </div>
-
-          <div className="relative">
-            <label className="text-xs font-medium text-muted-foreground">你的担忧</label>
-            <Textarea
-              value={worry}
-              onChange={(e) => setWorry(e.target.value)}
-              placeholder="你最担心分析中可能忽略什么？"
-              rows={2}
-              className="mt-1 resize-none text-sm pr-6"
-            />
-            {worry.trim() && (
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 absolute top-7 right-2" />
-            )}
-          </div>
-
-          <div className="relative">
-            <label className="text-xs font-medium text-muted-foreground">未知领域</label>
-            <Textarea
-              value={unknown}
-              onChange={(e) => setUnknown(e.target.value)}
-              placeholder="有哪些你不确定的关键信息或变量？"
-              rows={2}
-              className="mt-1 resize-none text-sm pr-6"
-            />
-            {unknown.trim() && (
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 absolute top-7 right-2" />
-            )}
-          </div>
+          <PracticeField
+            label="你的判断"
+            required
+            value={judgment}
+            onChange={(v) => { setJudgment(v); setShowHint(false); }}
+            placeholder="对这个问题，你目前的基本判断是什么？"
+          />
+          <PracticeField
+            label="你的担忧"
+            value={worry}
+            onChange={setWorry}
+            placeholder="你最担心分析中可能忽略什么？"
+          />
+          <PracticeField
+            label="未知领域"
+            value={unknown}
+            onChange={setUnknown}
+            placeholder="有哪些你不确定的关键信息或变量？"
+          />
 
           {showHint && (
             <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">

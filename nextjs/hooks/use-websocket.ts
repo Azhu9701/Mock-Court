@@ -135,6 +135,11 @@ export function useWebSocket(sessionId: string) {
   };
 
   const connect = useCallback(() => {
+    // Close previous connection without triggering its onclose retry
+    if (wsRef.current) {
+      wsRef.current.onclose = null;
+      wsRef.current.close();
+    }
     const wsHost = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3096").replace("http://", "ws://").replace("/api/v1", "");
     const url = `${wsHost}/ws/possess/${sessionId}/main`;
     const ws = new WebSocket(url);
@@ -330,6 +335,7 @@ export function useWebSocket(sessionId: string) {
     };
 
     ws.onclose = () => {
+      if (!mountedRef.current) return;
       if (retryRef.current < MAX_RETRIES) {
         setTimeout(connect, Math.pow(2, retryRef.current) * 1000);
         retryRef.current++;
