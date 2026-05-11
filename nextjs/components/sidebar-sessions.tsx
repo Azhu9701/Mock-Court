@@ -124,10 +124,7 @@ export function SidebarSessions() {
       </div>
       <div className="space-y-0.5">
         {sessions.slice(0, 8).map((s) => {
-          const isActiveRunning = s.status === "active" || s.status === "running";
-          const href = isActiveRunning
-            ? `/possess/${s.id}?mode=${s.mode}`
-            : `/sessions/${s.id}`;
+          const href = `/sessions/${s.id}`;
           const active = pathname === href;
           const isEditing = editingId === s.id;
 
