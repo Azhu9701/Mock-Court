@@ -4,25 +4,24 @@ import { useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { analyzeTask, startPossession, fetchSouls, searchWeb, type SearxngResultItem } from "@/lib/api";
+import { startPossession, searchWeb, type SearxngResultItem } from "@/lib/api";
 import { triggerSessionsUpdate } from "@/components/sidebar-sessions";
 import { AttachmentUpload } from "@/components/attachment-upload";
 import { PracticeOpeningDialog } from "@/components/practice-opening-dialog";
 import { storePendingSession } from "@/lib/pending-session";
-import { Brain, Loader2, Globe, Search, AlertCircle } from "lucide-react";
+import { Brain, Loader2, Globe, Search } from "lucide-react";
 
-type Phase = "input" | "loading" | "practice_opening";
+type Phase = "input" | "practice_opening";
 
 export function PossessionEntry() {
   const router = useRouter();
   const [task, setTask] = useState("");
   const [phase, setPhase] = useState<Phase>("input");
-  const [error, setError] = useState("");
+  const [creating, setCreating] = useState(false);
   const [searchTopic, setSearchTopic] = useState(true);
   const [judgment, setJudgment] = useState("");
   const [worry, setWorry] = useState("");
   const [unknown, setUnknown] = useState("");
-  const [progressLine, setProgressLine] = useState("");
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
@@ -30,7 +29,7 @@ export function PossessionEntry() {
   const [searchContext, setSearchContext] = useState("");
   const [showSearch, setShowSearch] = useState(false);
 
-  const canStart = task.trim().length > 0;
+  const canStart = task.trim().length > 0 && !creating;
 
   const handleOcrResults = useCallback((texts: string[]) => {
     const block = texts.join("\n\n");
@@ -65,124 +64,56 @@ export function PossessionEntry() {
   }, []);
 
   const onStart = async () => {
-    if (!canStart || phase !== "input") return;
+    if (!canStart) return;
 
-    setPhase("loading");
-    setError("");
-    setProgressLine("正在分析任务，入口分流中…");
-
-    let souls: { name: string; field: string; ismism_code: string; rationale: string }[] = [];
-    let matchedMode = "conference";
-    let cards: Record<string, string> = {};
-    let reviewData: any = {};
-    const completedPhases: string[] = [];
-
-    // Try analyzeTask with 12s timeout
-    const controller = new AbortController();
-    const analyzeTimeout = setTimeout(() => controller.abort(), 12000);
-    const reviewer = localStorage.getItem("aionui-banner-lord") || undefined;
+    setCreating(true);
     try {
-      const data = await analyzeTask(task, reviewer, controller.signal);
-      clearTimeout(analyzeTimeout);
-
-      if (data.entry_type === "practice_opening") {
-        setPhase("practice_opening");
-        return;
-      }
-
-      souls = data.matched_souls || [];
-      matchedMode = data.recommended_mode || "conference";
-      cards = data.task_cards || {};
-      reviewData = data.review || {};
-      completedPhases.push("classifying", "matching", "reviewing");
-      if (reviewData.verdict === "reject") completedPhases.push("adjusting");
-    } catch (e: any) {
-      clearTimeout(analyzeTimeout);
-      if (e.name === "AbortError") {
-        setProgressLine("分析超时，使用默认魂组合…");
-      }
-      // Fallback: use a few souls from registry
-      try {
-        const allSouls = await fetchSouls();
-        souls = allSouls.slice(0, 3).map(s => ({
-          name: s.name, field: s.field, ismism_code: s.ismism_code, rationale: s.self_declare || ""
-        }));
-      } catch {}
-    }
-
-    completedPhases.push("starting");
-
-    const uniquePhases = Array.from(new Set(completedPhases));
-    setProgressLine(`已匹配 ${souls.length} 个魂，正在启动讨论…`);
-
-    try {
+      // 1. 立即创建会话（不等待 analyzeTask）
       const { session_id } = await startPossession({
-        mode: matchedMode, task,
-        souls: souls.map((s) => s.name),
-        task_cards: Object.keys(cards).length > 0 ? cards : undefined,
+        mode: "conference", task,
+        souls: [],  // 魂由 sessions 页异步匹配
         search_topic: searchTopic,
         judgment: judgment || undefined, worry: worry || undefined, unknown: unknown || undefined,
       });
 
+      // 2. 存储任务信息，由 sessions 页负责调用 analyzeTask
       storePendingSession({
-        sessionId: session_id, task, mode: matchedMode,
-        matchedSouls: souls,
-        review: reviewData.reviewer ? reviewData : null,
-        phases: uniquePhases,
+        sessionId: session_id, task, mode: null,
+        matchedSouls: [],
+        review: null,
+        phases: ["starting"],
+        searchTopic, judgment, worry, unknown,
+        needsAnalysis: true,
       });
 
       triggerSessionsUpdate();
       router.push(`/sessions/${session_id}`);
     } catch (e: any) {
-      setError(e.message || "启动失败");
-      setPhase("input");
+      setCreating(false);
     }
   };
 
-  // ── Loading ──
-  if (phase === "loading") {
-    return (
-      <div className="max-w-2xl mx-auto space-y-6" data-testid="possession-entry">
-        <div className="rounded-xl border bg-background p-6 shadow-sm space-y-6">
-          <div className="flex items-center gap-3">
-            <Loader2 className="h-5 w-5 animate-spin text-primary" />
-            <div>
-              <h2 className="text-lg font-semibold">{task}</h2>
-              <p className="text-sm text-muted-foreground">{progressLine}</p>
-            </div>
-          </div>
-          <div className="h-2 bg-muted rounded-full overflow-hidden">
-            <div className="h-full bg-gradient-to-r from-primary to-emerald-500 animate-pulse rounded-full w-2/3" />
-          </div>
-        </div>
-        {error && (
-          <div className="rounded-xl border-2 border-red-200 bg-red-50 p-6 text-center">
-            <AlertCircle className="h-10 w-10 text-red-500 mx-auto mb-3" />
-            <h3 className="font-semibold text-lg text-red-700 mb-2">启动失败</h3>
-            <p className="text-red-600">{error}</p>
-            <Button variant="outline" className="mt-4" onClick={() => setPhase("input")}>重新开始</Button>
-          </div>
-        )}
-      </div>
-    );
-  }
-
+  // ── Practice opening ──
   if (phase === "practice_opening") {
     return (
       <PracticeOpeningDialog
         open={true}
         onStart={async (j, w, u) => {
           setJudgment(j); setWorry(w); setUnknown(u);
-          setProgressLine("正在启动…");
+          setCreating(true);
           try {
             const { session_id } = await startPossession({
               mode: "practice_opening", task, souls: [],
               judgment: j || undefined, worry: w || undefined, unknown: u || undefined,
             });
-            storePendingSession({ sessionId: session_id, task, mode: "practice_opening", matchedSouls: [], review: null, phases: ["starting"] });
+            storePendingSession({
+              sessionId: session_id, task, mode: "practice_opening",
+              matchedSouls: [], review: null, phases: ["starting"],
+              searchTopic: false, judgment: j, worry: w, unknown: u, needsAnalysis: false,
+            });
             triggerSessionsUpdate();
             router.push(`/sessions/${session_id}`);
-          } catch (e: any) { setError(e.message || "启动失败"); setPhase("input"); }
+          } catch (e: any) { setCreating(false); }
         }}
         onCancel={() => setPhase("input")}
       />
@@ -259,7 +190,8 @@ export function PossessionEntry() {
               <Globe className="h-4 w-4 text-muted-foreground" /><span className="text-sm text-muted-foreground">启动时搜索议题背景</span>
             </label>
             <Button onClick={onStart} disabled={!canStart} className="w-full sm:w-auto" size="lg" data-testid="start-possession-btn">
-              <Brain className="mr-2 h-5 w-5" />我想问
+              {creating ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Brain className="mr-2 h-5 w-5" />}
+              {creating ? "创建中…" : "我想问"}
             </Button>
           </div>
         </div>

@@ -9,7 +9,7 @@ import { SynthesisSection } from "@/components/synthesis-section";
 import { BreadcrumbSetter } from "@/components/breadcrumb-setter";
 import SessionActions from "@/components/session-actions";
 import FollowUpInput from "@/components/follow-up-input";
-import { fetchSessionDetail, fetchSoul } from "@/lib/api";
+import { fetchSessionDetail, fetchSoul, analyzeTask } from "@/lib/api";
 import { readPendingSession, clearPendingSession } from "@/lib/pending-session";
 import { ArrowLeft, User, Brain, Sparkles, ShieldCheck, Zap, Play, Loader2, CheckCircle2, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,7 @@ export default function SessionDetailView({ id }: { id: string }) {
   const [matchedSouls, setMatchedSouls] = useState<MatchedSoulInfo[]>([]);
   const [review, setReview] = useState<{ verdict: string; checks: string[]; notes: string; reviewer: string } | null>(null);
   const [phases, setPhases] = useState<string[]>([]);
+  const [currentFlowPhase, setCurrentFlowPhase] = useState<string | null>(null);
   const [flowExpanded, setFlowExpanded] = useState(true);
   const [loading, setLoading] = useState(true);
   const clearRef = useRef(false);
@@ -41,24 +42,56 @@ export default function SessionDetailView({ id }: { id: string }) {
       const pending = readPendingSession(id);
       if (pending && pending.sessionId === id) {
         if (!cancelled) {
-          setMode(pending.mode);
-          setMatchedSouls(pending.matchedSouls.map((s) => ({
-            name: s.name,
-            field: s.field || "",
-            ismism_code: s.ismism_code || "",
-            rationale: s.rationale || "",
+          if (pending.mode) setMode(pending.mode);
+          if (pending.matchedSouls?.length) setMatchedSouls(pending.matchedSouls.map((s) => ({
+            name: s.name, field: s.field || "", ismism_code: s.ismism_code || "", rationale: s.rationale || ""
           })));
           if (pending.review) setReview(pending.review);
           if (pending.phases?.length) setPhases(pending.phases);
-          if (!clearRef.current) { clearRef.current = true; clearPendingSession(id); }
         }
+
+        // ── Run analyzeTask in background if needed ──
+        if (pending.needsAnalysis && !cancelled) {
+          setPhases(["starting"]);
+          setCurrentFlowPhase("classifying");
+
+          const reviewer = localStorage.getItem("aionui-banner-lord") || undefined;
+          try {
+            const data = await analyzeTask(pending.task, reviewer);
+
+            if (cancelled) return;
+
+            const souls = data.matched_souls || [];
+            const matchedMode = data.recommended_mode || "conference";
+            const reviewData = data.review || {};
+
+            const newPhases = ["classifying", "matching", "reviewing", "starting"];
+            if (reviewData.verdict === "reject") newPhases.splice(3, 0, "adjusting");
+
+            setPhases(newPhases);
+            setCurrentFlowPhase(null);
+            setMode(matchedMode);
+            setMatchedSouls(souls.map((s) => ({
+              name: s.name, field: s.field || "", ismism_code: s.ismism_code || "", rationale: s.rationale || ""
+            })));
+            if (reviewData.reviewer) setReview(reviewData);
+
+          } catch (e: any) {
+            if (cancelled) return;
+            // Fallback: mark steps as completed anyway
+            setPhases(["classifying", "matching", "starting"]);
+            setCurrentFlowPhase(null);
+          }
+        }
+
+        if (!clearRef.current) { clearRef.current = true; clearPendingSession(id); }
       }
 
       try {
         const d = await fetchSessionDetail(id);
         if (cancelled) return;
         setDetail(d);
-        setMode(d.session.mode);
+        if (!pending?.mode) setMode(d.session.mode);
 
         const soulNames = Array.from(
           new Set(d.messages.filter((m) => m.soul_name && m.role !== "system").map((m) => m.soul_name!))
@@ -72,13 +105,14 @@ export default function SessionDetailView({ id }: { id: string }) {
             souls.push({ name, field: "", ismism_code: "", rationale: "" });
           }
         }
-        if (!cancelled) setMatchedSouls(souls);
+        if (!cancelled && matchedSouls.length === 0) setMatchedSouls(souls);
       } catch {} finally {
         if (!cancelled) setLoading(false);
       }
     }
     load();
     return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   if (loading || !detail) {
@@ -96,18 +130,21 @@ export default function SessionDetailView({ id }: { id: string }) {
   if (isActive) {
     const completedPhases = new Set(phases);
     const totalFlowPhases = FLOW_PHASES.length;
+    const hasFlow = phases.length > 0;
+    const ph = hasFlow ? currentFlowPhase : null;
+    const currentIdx = ph ? FLOW_PHASES.findIndex((p) => p.key === ph) : -1;
+    const isAnalyzing = currentFlowPhase !== null;
 
     return (
       <div className="max-w-5xl mx-auto space-y-4">
         <BreadcrumbSetter label={session.title} />
         <SessionContextHeader task={session.title} mode={mode} matchedSouls={matchedSouls} review={review} />
 
-        {/* 5 步流程进度条 — 仅在从 /possess 刚跳转过来时显示 */}
-        {phases.length > 0 && (
+        {hasFlow && (
           <div className="rounded-xl border bg-background p-6 shadow-sm space-y-4 animate-in fade-in duration-300">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold flex items-center gap-2">
-                <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                {isAnalyzing ? <Loader2 className="h-5 w-5 animate-spin text-primary" /> : <CheckCircle2 className="h-5 w-5 text-emerald-500" />}
                 讨论流程
               </h2>
               <Button variant="ghost" size="sm" onClick={() => setFlowExpanded(!flowExpanded)}>
@@ -121,10 +158,15 @@ export default function SessionDetailView({ id }: { id: string }) {
                 <div className="mb-1">
                   <div className="flex items-center justify-between text-xs text-muted-foreground mb-1.5">
                     <span>{completedPhases.size}/{totalFlowPhases} 步骤</span>
-                    <span className="text-emerald-600 font-medium">全部完成</span>
+                    <span className={isAnalyzing ? "text-primary font-medium" : "text-emerald-600 font-medium"}>
+                      {isAnalyzing ? (FLOW_PHASES[currentIdx]?.desc || "分析中…") : "全部完成"}
+                    </span>
                   </div>
                   <div className="h-2 bg-muted rounded-full overflow-hidden">
-                    <div className="h-full bg-gradient-to-r from-primary to-emerald-500 rounded-full w-full" />
+                    <div
+                      className="h-full bg-gradient-to-r from-primary to-emerald-500 transition-all duration-700 ease-out rounded-full"
+                      style={{ width: `${isAnalyzing ? Math.round(((currentIdx + 0.5) / totalFlowPhases) * 100) : Math.round((completedPhases.size / totalFlowPhases) * 100)}%` }}
+                    />
                   </div>
                 </div>
 
@@ -132,18 +174,25 @@ export default function SessionDetailView({ id }: { id: string }) {
                   {FLOW_PHASES.map((p, i) => {
                     const Icon = p.icon;
                     const isDone = completedPhases.has(p.key);
+                    const isCurrent = isAnalyzing && p.key === currentFlowPhase;
                     return (
                       <div key={p.key} className="flex items-center">
                         <div className="flex flex-col items-center gap-1.5">
                           <div className={cn(
                             "flex items-center justify-center w-10 h-10 rounded-full transition-all duration-300",
-                            isDone ? "bg-emerald-500 text-white shadow-sm" : "bg-muted text-muted-foreground/40"
+                            isCurrent ? "bg-primary text-primary-foreground shadow-lg shadow-primary/25 scale-110" :
+                            isDone ? "bg-emerald-500 text-white shadow-sm" :
+                            "bg-muted text-muted-foreground/40"
                           )}>
-                            {isDone ? <CheckCircle2 className="h-5 w-5" /> : <Icon className="h-4 w-4" />}
+                            {isDone ? <CheckCircle2 className="h-5 w-5" /> :
+                             isCurrent ? <Loader2 className="h-5 w-5 animate-spin" /> :
+                             <Icon className="h-4 w-4" />}
                           </div>
                           <span className={cn(
                             "text-[10px] leading-tight text-center max-w-[60px]",
-                            isDone ? "text-emerald-600 font-medium" : "text-muted-foreground/40"
+                            isCurrent ? "text-primary font-semibold" :
+                            isDone ? "text-emerald-600 font-medium" :
+                            "text-muted-foreground/40"
                           )}>
                             {p.label}
                           </span>
@@ -151,7 +200,7 @@ export default function SessionDetailView({ id }: { id: string }) {
                         {i < FLOW_PHASES.length - 1 && (
                           <div className={cn(
                             "h-0.5 w-8 sm:w-12 mx-0.5 rounded-full transition-colors duration-500",
-                            isDone ? "bg-emerald-400" : "bg-muted"
+                            isDone || isCurrent ? "bg-emerald-400" : "bg-muted"
                           )} />
                         )}
                       </div>
@@ -159,7 +208,6 @@ export default function SessionDetailView({ id }: { id: string }) {
                   })}
                 </div>
 
-                {/* Matched souls summary */}
                 {matchedSouls.length > 0 && (
                   <div className="mt-4 space-y-4 text-sm border-t pt-4">
                     <div>
