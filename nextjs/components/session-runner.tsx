@@ -10,6 +10,7 @@ import { PracticeOpeningView } from "@/components/practice-opening-view";
 import { SessionStatusBar } from "@/components/session-status-bar";
 import { Brain, Loader2, AlertTriangle, Key, CheckCircle, Sparkles, Wifi, Zap, MessageCircle, ChevronRight, Globe } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SoulResponseCard } from "@/components/soul-response-card";
 import { PostSessionReview } from "@/components/post-session-review";
 import FollowUpInput from "@/components/follow-up-input";
 import Link from "next/link";
@@ -94,13 +95,6 @@ function ConnectingView() {
   );
 }
 
-const SOUL_QUOTES = [
-  "正在召唤 {name} 之魂…",
-  "{name} 正在检视你的问题…",
-  "{name} 开始构建分析框架…",
-  "等待 {name} 的回应…",
-];
-
 function WaitingSoulsView({ mode, matchedSouls, processSteps, messages }: { mode: string; matchedSouls?: MatchedSoulInfo[]; processSteps?: ProcessStep[]; messages: Record<string, SoulMessage> }) {
   const steps = processSteps || [];
   const arrivedSouls = steps
@@ -133,71 +127,17 @@ function WaitingSoulsView({ mode, matchedSouls, processSteps, messages }: { mode
       {souls ? (
         <div className="grid gap-3 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {souls.map((soul) => {
-            const hasArrived = arrivedSet.has(soul.name);
-            const quote = SOUL_QUOTES[Math.floor(Math.random() * SOUL_QUOTES.length)].replace("{name}", soul.name);
             const soulMsg = messages[soul.name];
-            const streamingContent = soulMsg?.content || "";
+            const isArrived = arrivedSet.has(soul.name);
+            const isStreaming = !soulMsg || soulMsg.isStreaming;
             return (
-              <div
+              <SoulResponseCard
                 key={soul.name}
-                className={cn(
-                  "flex flex-col rounded-lg border bg-background overflow-hidden h-40 transition-all duration-500",
-                  hasArrived && "border-primary/30 shadow-md shadow-primary/10"
-                )}
-              >
-                <div className={cn(
-                  "px-4 py-2 border-b flex items-center justify-between transition-colors duration-500",
-                  hasArrived ? "bg-primary/5" : "bg-muted/30"
-                )}>
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-sm">{soul.name}</span>
-                    {soul.ismism_code && (
-                      <span className="text-xs text-muted-foreground font-mono">{soul.ismism_code}</span>
-                    )}
-                  </div>
-                  {hasArrived && (
-                    <CheckCircle className="h-3.5 w-3.5 text-emerald-500 animate-in zoom-in duration-300" />
-                  )}
-                </div>
-                <div className={cn(
-                  "flex items-center gap-2 px-4 py-2 border-b transition-colors duration-500",
-                  hasArrived ? "bg-emerald-50/50 dark:bg-emerald-950/10" : "bg-muted/10"
-                )}>
-                  {hasArrived ? (
-                    <>
-                      <CheckCircle className="h-4 w-4 text-emerald-500" />
-                      <span className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">已到达</span>
-                    </>
-                  ) : (
-                    <>
-                      <Brain className="h-4 w-4 text-primary animate-pulse" />
-                      <span className="text-xs text-muted-foreground">
-                        {quote}
-                      </span>
-                    </>
-                  )}
-                  <div className="flex-1" />
-                  {!hasArrived && (
-                    <div className="h-1 w-12 bg-muted rounded-full overflow-hidden">
-                      <div className="h-full bg-primary/20 animate-pulse rounded-full" style={{ width: "40%" }} />
-                    </div>
-                  )}
-                </div>
-                <div className="flex-1 flex items-center px-4 overflow-hidden">
-                  {streamingContent ? (
-                    <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
-                      {streamingContent}
-                      {soulMsg?.isStreaming && (
-                        <span className="inline-block w-1.5 h-3.5 bg-primary animate-pulse ml-0.5 align-middle rounded-full" />
-                      )}
-                    </p>
-                  ) : (
-                    <p className="text-xs text-muted-foreground/60 italic truncate">
-                      {soul.field || "正在加载思维框架…"}
-                    </p>
-                  )}
-                </div>
-              </div>
+                name={soul.name}
+                content={soulMsg?.content || ""}
+                ismismCode={soul.ismism_code}
+                isStreaming={isStreaming}
+              />
             );
           })}
         </div>
