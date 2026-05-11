@@ -16,6 +16,7 @@ import { SoulCarousel } from "@/components/soul-carousel";
 import { PracticeOpeningDialog } from "@/components/practice-opening-dialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { SessionContextHeader } from "@/components/session-context-header";
 
 type Phase = "input" | "classifying" | "matching" | "reviewing" | "adjusting" | "starting" | "running" | "practice_opening";
 
@@ -326,83 +327,7 @@ export function PossessionEntry() {
   if (phase === "running" && sessionId) {
     return (
       <div className="max-w-5xl mx-auto space-y-4 animate-in fade-in duration-500" data-testid="possession-entry">
-        <div className="rounded-xl border bg-gradient-to-br from-muted/40 to-background p-4 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-semibold">{task}</h2>
-              <p className="text-sm text-muted-foreground mt-1 flex items-center gap-2">
-                <span>模式：{getModeLabel(mode)}</span>
-                <span>·</span>
-                <span>{matchedSouls.length} 魂</span>
-                {review && (
-                  <>
-                    <span>·</span>
-                    <span>审查：{review.reviewer}</span>
-                    <span className={review.verdict === "pass" ? "text-green-600" : review.verdict === "conditional" ? "text-yellow-600" : "text-red-600"}>
-                      [{review.verdict}]
-                    </span>
-                  </>
-                )}
-              </p>
-            </div>
-            <Button variant="ghost" size="sm" onClick={() => setShowDetail(!showDetail)} className="transition-all hover:bg-muted">
-              {showDetail ? <ChevronUp className="h-4 w-4 mr-1" /> : <ChevronDown className="h-4 w-4 mr-1" />}
-              {showDetail ? "收起" : "详情"}
-            </Button>
-          </div>
-
-          {showDetail && (
-            <div className="mt-4 space-y-4 text-sm border-t pt-4">
-              <div>
-                <h4 className="font-medium text-muted-foreground mb-3 flex items-center gap-2">
-                  <Sparkles className="h-4 w-4" />
-                  匹配魂
-                </h4>
-                <div className="grid gap-3">
-                  {matchedSouls.map((s) => (
-                    <div key={s.name} className="rounded-lg border p-3 bg-background transition-all hover:shadow-sm">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-semibold text-base">{s.name}</span>
-                        <span className="text-xs bg-muted px-2 py-0.5 rounded">{s.field}</span>
-                        <span className="text-xs text-muted-foreground font-mono">{s.ismism_code}</span>
-                      </div>
-                      <p className="text-muted-foreground mt-2 text-sm leading-relaxed">{s.rationale}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {review && (
-                <div>
-                  <h4 className="font-medium text-muted-foreground mb-3 flex items-center gap-2">
-                    <ShieldCheck className="h-4 w-4" />
-                    审查 · {review.reviewer}
-                  </h4>
-                  <div className={`rounded-lg border p-3 ${
-                    review.verdict === "pass" ? "border-green-200 bg-green-50 dark:bg-green-950/20" :
-                    review.verdict === "conditional" ? "border-yellow-200 bg-yellow-50 dark:bg-yellow-950/20" :
-                    "border-red-200 bg-red-50 dark:bg-red-950/20"
-                  }`}>
-                    <div className="font-medium mb-2">裁决: {getVerdictLabel(review.verdict)}</div>
-                    <ul className="space-y-1">
-                      {review.checks.map((c, i) => (
-                        <li key={i} className="text-sm flex items-start gap-2">
-                          <ArrowRightCircle className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
-                          <span>{c}</span>
-                        </li>
-                      ))}
-                    </ul>
-                    {review.notes && (
-                      <p className="text-sm mt-2 italic text-muted-foreground border-t pt-2">
-                        📝 {review.notes}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        <SessionContextHeader task={task} mode={mode} matchedSouls={matchedSouls} review={review} />
 
         <SessionRunner
           sessionId={sessionId}
