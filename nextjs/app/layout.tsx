@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Providers } from "@/components/providers";
 import { ShellLayout } from "@/components/shell-layout";
+import { BreadcrumbProvider } from "@/contexts/breadcrumb-context";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -49,7 +50,9 @@ export default function RootLayout({
           }}
         />
         <Providers>
-          <ShellLayout>{children}</ShellLayout>
+          <BreadcrumbProvider>
+            <ShellLayout>{children}</ShellLayout>
+          </BreadcrumbProvider>
         </Providers>
       </body>
     </html>

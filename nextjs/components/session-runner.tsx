@@ -1,6 +1,6 @@
 "use client";
 
-import { useWebSocket, type ProcessStep, type LogEntry } from "@/hooks/use-websocket";
+import { useWebSocket, type ProcessStep, type LogEntry, type SoulMessage } from "@/hooks/use-websocket";
 import { SingleView } from "@/components/single-view";
 import { ConferenceView } from "@/components/conference-view";
 import { DebateView } from "@/components/debate-view";
@@ -10,6 +10,10 @@ import { PracticeOpeningView } from "@/components/practice-opening-view";
 import { SessionStatusBar } from "@/components/session-status-bar";
 import { Brain, Loader2, AlertTriangle, Key, CheckCircle, Sparkles, Wifi, Zap, MessageCircle, ChevronRight, Globe } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { PostSessionReview } from "@/components/post-session-review";
+import FollowUpInput from "@/components/follow-up-input";
+import Link from "next/link";
+import { useState } from "react";
 
 interface MatchedSoulInfo {
   name: string;
@@ -22,7 +26,6 @@ interface SessionRunnerProps {
   mode: string;
   matchedSouls?: MatchedSoulInfo[];
   onDone?: () => void;
-  onReview?: () => void;
   sessionDone?: boolean;
 }
 
@@ -66,7 +69,11 @@ export function ProcessTimeline({ steps }: { steps: ProcessStep[] }) {
         const Icon = stepIcons[step.event];
         const color = stepColors[step.event] || "text-muted-foreground";
         return (
-          <div key={i} className={cn("flex items-center justify-center h-7 w-7 rounded-full bg-background border", color)} title={step.soulName || step.message}>
+          <div key={i} className={cn(
+            "flex items-center justify-center h-7 w-7 rounded-full bg-background border transition-all duration-500",
+            color,
+            step.event === "SoulStarted" && "animate-in zoom-in duration-300"
+          )} title={step.soulName || step.message}>
             {Icon ? <Icon className="h-3.5 w-3.5" /> : <span className="text-[10px] font-bold">{step.soulName?.charAt(0)}</span>}
           </div>
         );
@@ -87,8 +94,19 @@ function ConnectingView() {
   );
 }
 
-function WaitingSoulsView({ mode, matchedSouls }: { mode: string; matchedSouls?: MatchedSoulInfo[] }) {
+const SOUL_QUOTES = [
+  "正在召唤 {name} 之魂…",
+  "{name} 正在检视你的问题…",
+  "{name} 开始构建分析框架…",
+  "等待 {name} 的回应…",
+];
+
+function WaitingSoulsView({ mode, matchedSouls, processSteps, messages }: { mode: string; matchedSouls?: MatchedSoulInfo[]; processSteps?: ProcessStep[]; messages: Record<string, SoulMessage> }) {
   const souls = matchedSouls && matchedSouls.length > 0 ? matchedSouls : null;
+  const arrivedSouls = new Set(
+    (processSteps || []).filter((s) => s.event === "SoulStarted" || s.event === "SoulDone").map((s) => s.soulName || "")
+  );
+
   return (
     <div className="flex flex-col flex-1 p-4 gap-4 overflow-y-auto">
       <div className="text-center py-2">
@@ -98,34 +116,74 @@ function WaitingSoulsView({ mode, matchedSouls }: { mode: string; matchedSouls?:
       </div>
       {souls ? (
         <div className="grid gap-3 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {souls.map((soul) => (
-            <div
-              key={soul.name}
-              className="flex flex-col rounded-lg border bg-background overflow-hidden h-40"
-            >
-              <div className="px-4 py-2 border-b bg-muted/30 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-sm">{soul.name}</span>
-                  {soul.ismism_code && (
-                    <span className="text-xs text-muted-foreground font-mono">{soul.ismism_code}</span>
+          {souls.map((soul) => {
+            const hasArrived = arrivedSouls.has(soul.name);
+            const quote = SOUL_QUOTES[Math.floor(Math.random() * SOUL_QUOTES.length)].replace("{name}", soul.name);
+            const soulMsg = messages[soul.name];
+            const streamingContent = soulMsg?.content || "";
+            return (
+              <div
+                key={soul.name}
+                className={cn(
+                  "flex flex-col rounded-lg border bg-background overflow-hidden h-40 transition-all duration-500",
+                  hasArrived && "border-primary/30 shadow-md shadow-primary/10"
+                )}
+              >
+                <div className={cn(
+                  "px-4 py-2 border-b flex items-center justify-between transition-colors duration-500",
+                  hasArrived ? "bg-primary/5" : "bg-muted/30"
+                )}>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-sm">{soul.name}</span>
+                    {soul.ismism_code && (
+                      <span className="text-xs text-muted-foreground font-mono">{soul.ismism_code}</span>
+                    )}
+                  </div>
+                  {hasArrived && (
+                    <CheckCircle className="h-3.5 w-3.5 text-emerald-500 animate-in zoom-in duration-300" />
+                  )}
+                </div>
+                <div className={cn(
+                  "flex items-center gap-2 px-4 py-2 border-b transition-colors duration-500",
+                  hasArrived ? "bg-emerald-50/50 dark:bg-emerald-950/10" : "bg-muted/10"
+                )}>
+                  {hasArrived ? (
+                    <>
+                      <CheckCircle className="h-4 w-4 text-emerald-500" />
+                      <span className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">已到达</span>
+                    </>
+                  ) : (
+                    <>
+                      <Brain className="h-4 w-4 text-primary animate-pulse" />
+                      <span className="text-xs text-muted-foreground">
+                        {quote}
+                      </span>
+                    </>
+                  )}
+                  <div className="flex-1" />
+                  {!hasArrived && (
+                    <div className="h-1 w-12 bg-muted rounded-full overflow-hidden">
+                      <div className="h-full bg-primary/20 animate-pulse rounded-full" style={{ width: "40%" }} />
+                    </div>
+                  )}
+                </div>
+                <div className="flex-1 flex items-center px-4 overflow-hidden">
+                  {streamingContent ? (
+                    <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+                      {streamingContent}
+                      {soulMsg?.isStreaming && (
+                        <span className="inline-block w-1.5 h-3.5 bg-primary animate-pulse ml-0.5 align-middle rounded-full" />
+                      )}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground/60 italic truncate">
+                      {soul.field || "正在加载思维框架…"}
+                    </p>
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-2 px-4 py-2 border-b bg-muted/10">
-                <Brain className="h-4 w-4 text-primary animate-pulse" />
-                <span className="text-xs text-muted-foreground">等待回应…</span>
-                <div className="flex-1" />
-                <div className="h-1 w-16 bg-muted rounded-full overflow-hidden">
-                  <div className="h-full bg-primary/20 animate-pulse rounded-full" style={{ width: "30%" }} />
-                </div>
-              </div>
-              <div className="flex-1 flex items-center justify-center px-4">
-                <p className="text-xs text-muted-foreground/60 italic">
-                  {soul.field || "正在加载思维框架…"}
-                </p>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <div className="flex flex-col items-center justify-center flex-1 gap-4 text-muted-foreground">
@@ -171,11 +229,12 @@ function ErrorView({ error, onReconnect }: { error: string; onReconnect: () => v
   );
 }
 
-export function SessionRunner({ sessionId, mode, matchedSouls, onDone, onReview, sessionDone }: SessionRunnerProps) {
+export function SessionRunner({ sessionId, mode, matchedSouls, onDone, sessionDone }: SessionRunnerProps) {
   const { messages, synthesis, status, error, processSteps, cost, collisions, toolCalls, logs, reconnect } =
     useWebSocket(sessionId);
 
   const hasMessages = Object.keys(messages).length > 0;
+  const [reviewDone, setReviewDone] = useState(false);
 
   const streamingSouls = Object.entries(messages)
     .filter(([, m]) => m.isStreaming)
@@ -203,6 +262,9 @@ export function SessionRunner({ sessionId, mode, matchedSouls, onDone, onReview,
 
   return (
     <div className="flex flex-col flex-1" data-testid="session-runner">
+      <Link href="/possess" className="text-sm text-muted-foreground hover:text-foreground mb-2">
+        ← 返回讨论
+      </Link>
       <SessionStatusBar status={status} error={error} onReconnect={reconnect} />
 
       {progressText && (
@@ -222,40 +284,36 @@ export function SessionRunner({ sessionId, mode, matchedSouls, onDone, onReview,
       )}
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Process Timeline - left sidebar during streaming */}
         {(status === "streaming" || status === "done") && (
           <ProcessTimeline steps={processSteps} />
         )}
-        {/* Main content */}
         <div className="flex-1 overflow-hidden flex flex-col">
           {status === "connecting" && !hasMessages && <ConnectingView />}
-          {status === "streaming" && !hasMessages && <WaitingSoulsView mode={mode} matchedSouls={matchedSouls} />}
+          {status === "streaming" && <WaitingSoulsView mode={mode} matchedSouls={matchedSouls} processSteps={processSteps} messages={messages} />}
           {status === "error" && !hasMessages && <ErrorView error={error || "未知错误"} onReconnect={reconnect} />}
           {status === "done" && !hasMessages && <RequireApiKeyView />}
-          {hasMessages && mode === "single" && <SingleView messages={messages} />}
-          {hasMessages && mode === "conference" && <ConferenceView messages={messages} synthesis={synthesis} collisions={collisions} cost={cost} toolCalls={toolCalls} />}
-          {hasMessages && mode === "debate" && <DebateView messages={messages} />}
-          {hasMessages && mode === "relay" && <RelayView messages={messages} />}
-          {hasMessages && mode === "learn" && <LearnView messages={messages} />}
-          {hasMessages && mode === "practice_opening" && <PracticeOpeningView messages={messages} />}
+          {status === "done" && hasMessages && mode === "single" && <SingleView messages={messages} />}
+          {status === "done" && hasMessages && mode === "conference" && <ConferenceView messages={messages} synthesis={synthesis} collisions={collisions} cost={cost} toolCalls={toolCalls} />}
+          {status === "done" && hasMessages && mode === "debate" && <DebateView messages={messages} />}
+          {status === "done" && hasMessages && mode === "relay" && <RelayView messages={messages} />}
+          {status === "done" && hasMessages && mode === "learn" && <LearnView messages={messages} />}
+          {status === "done" && hasMessages && mode === "practice_opening" && <PracticeOpeningView messages={messages} />}
         </div>
       </div>
 
-      {status === "done" && hasMessages && onReview && (
-        <div className="border-t bg-green-50 dark:bg-green-950 p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-green-700 dark:text-green-300">附体完成</p>
-              <p className="text-xs text-green-600 dark:text-green-400">知识不在魂里，在实践里。请完成反馈闭环。</p>
-            </div>
-            <button onClick={onReview} className="shrink-0 rounded-md bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-700" data-testid="start-review-btn">
-              反馈闭环 →
-            </button>
-          </div>
+      {status === "done" && hasMessages && (
+        <div className="border-t p-4 space-y-6">
+          {!reviewDone ? (
+            <PostSessionReview
+              sessionId={sessionId}
+              onComplete={() => setReviewDone(true)}
+            />
+          ) : (
+            <FollowUpInput sessionId={sessionId} />
+          )}
         </div>
       )}
 
-      {/* Log panel */}
       {logs.length > 0 && (
         <div className="border-t bg-muted/20 p-4">
           <h4 className="text-sm font-semibold text-muted-foreground mb-3 flex items-center gap-2">

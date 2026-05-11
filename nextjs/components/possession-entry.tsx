@@ -4,7 +4,6 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { SessionRunner } from "@/components/session-runner";
-import FollowUpInput from "@/components/follow-up-input";
 import { 
   Brain, Loader2, Sparkles, ShieldCheck, Zap, Play, ChevronDown, ChevronUp,
   CheckCircle2, AlertCircle, ArrowRightCircle, Globe, Search, Copy, Check
@@ -13,7 +12,6 @@ import { analyzeTask, startPossession, searchWeb, type SearxngResultItem } from 
 import { MODE_LABELS_LONG } from "@/config/possession-modes";
 import { triggerSessionsUpdate } from "@/components/sidebar-sessions";
 import { AttachmentUpload } from "@/components/attachment-upload";
-import { PostSessionReview } from "@/components/post-session-review";
 import { SoulCarousel } from "@/components/soul-carousel";
 import { PracticeOpeningDialog } from "@/components/practice-opening-dialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -64,7 +62,6 @@ export function PossessionEntry() {
   const [review, setReview] = useState<ReviewResult | null>(null);
   const [showDetail, setShowDetail] = useState(true);
   const [sessionDone, setSessionDone] = useState(false);
-  const [reviewDone, setReviewDone] = useState(false);
   const [isCancelled, setIsCancelled] = useState(false);
   const [searchTopic, setSearchTopic] = useState(true);
   const [taskCards, setTaskCards] = useState<Record<string, string>>({});
@@ -76,8 +73,6 @@ export function PossessionEntry() {
   const [logFilter, setLogFilter] = useState<LogFilter>("全部");
   const [logsCollapsed, setLogsCollapsed] = useState(true);
   const [copiedLogs, setCopiedLogs] = useState(false);
-  const [sessionStats, setSessionStats] = useState<{ elapsed: number; soulCount: number; synthesisLen: number } | null>(null);
-  const [startTime, setStartTime] = useState(0);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
@@ -154,8 +149,6 @@ export function PossessionEntry() {
     setMatchedSouls([]);
     setReview(null);
     setSessionDone(false);
-    setSessionStats(null);
-    setStartTime(Date.now());
 
     try {
       addLog("开始分析任务...");
@@ -311,12 +304,6 @@ export function PossessionEntry() {
 
   const handleSessionDone = () => {
     setSessionDone(true);
-    const elapsed = Math.round((Date.now() - startTime) / 1000);
-    setSessionStats({
-      elapsed,
-      soulCount: matchedSouls.length,
-      synthesisLen: 0,
-    });
   };
 
   const filteredLogs = log.filter((l) => {
@@ -338,7 +325,7 @@ export function PossessionEntry() {
 
   if (phase === "running" && sessionId) {
     return (
-      <div className="max-w-4xl mx-auto space-y-4 animate-in fade-in duration-500" data-testid="possession-entry">
+      <div className="max-w-5xl mx-auto space-y-4 animate-in fade-in duration-500" data-testid="possession-entry">
         <div className="rounded-xl border bg-gradient-to-br from-muted/40 to-background p-4 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
@@ -422,40 +409,8 @@ export function PossessionEntry() {
           mode={mode}
           matchedSouls={matchedSouls}
           onDone={handleSessionDone}
-          onReview={() => setPhase("input")}
           sessionDone={sessionDone}
         />
-        
-        {sessionDone && (
-          <div className="mt-4 space-y-6">
-            {sessionStats && (
-              <div className="rounded-xl border bg-gradient-to-br from-emerald-50 to-background dark:from-emerald-950/20 p-5 animate-in fade-in slide-in-from-top-4 duration-500">
-                <h3 className="text-sm font-semibold text-emerald-700 dark:text-emerald-300 mb-3 flex items-center gap-2">
-                  <CheckCircle2 className="h-4 w-4" />
-                  讨论完成
-                </h3>
-                <div className="flex items-center gap-6 text-sm text-muted-foreground">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-emerald-600 dark:text-emerald-400 font-mono font-medium">{sessionStats.elapsed}s</span>
-                    <span>耗时</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-emerald-600 dark:text-emerald-400 font-mono font-medium">{sessionStats.soulCount}</span>
-                    <span>个魂参与</span>
-                  </div>
-                </div>
-              </div>
-            )}
-            {!reviewDone ? (
-              <PostSessionReview
-                sessionId={sessionId}
-                onComplete={() => setReviewDone(true)}
-              />
-            ) : (
-              <FollowUpInput sessionId={sessionId} />
-            )}
-          </div>
-        )}
       </div>
     );
   }

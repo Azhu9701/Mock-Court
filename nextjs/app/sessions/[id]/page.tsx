@@ -7,6 +7,7 @@ import SessionActions from "@/components/session-actions";
 import FollowUpInput from "@/components/follow-up-input";
 import { SoulResponseCard } from "@/components/soul-response-card";
 import { SynthesisSection } from "@/components/synthesis-section";
+import { BreadcrumbSetter } from "@/components/breadcrumb-setter";
 import { MODE_LABELS_LONG, modeColorBg } from "@/config/possession-modes";
 
 export const dynamic = "force-dynamic";
@@ -63,6 +64,7 @@ export default async function SessionDetailPage({ params }: { params: Promise<{ 
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
+      <BreadcrumbSetter label={session.title} />
       <div className="flex items-center gap-3">
         <Link href="/sessions">
           <Button variant="ghost" size="icon" className="h-8 w-8">

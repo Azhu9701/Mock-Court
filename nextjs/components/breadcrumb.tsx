@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronRight } from "lucide-react";
+import { useBreadcrumb } from "@/contexts/breadcrumb-context";
 
 const labels: Record<string, string> = {
   souls: "魂览",
@@ -13,9 +14,12 @@ const labels: Record<string, string> = {
 
 export function Breadcrumb() {
   const pathname = usePathname();
+  const { lastLabel } = useBreadcrumb();
   const segments = pathname.split("/").filter(Boolean);
 
   if (segments.length === 0) return null;
+
+  const isLast = (i: number) => i === segments.length - 1;
 
   return (
     <nav data-testid="breadcrumb" aria-label="面包屑">
@@ -25,17 +29,23 @@ export function Breadcrumb() {
             首页
           </Link>
         </li>
-        {segments.map((seg, i) => (
-          <li key={i} className="flex items-center gap-1">
-            <ChevronRight className="h-3 w-3" />
-            <Link
-              href={`/${segments.slice(0, i + 1).join("/")}`}
-              className="hover:text-foreground transition-colors capitalize"
-            >
-              {labels[seg] || decodeURIComponent(seg)}
-            </Link>
-          </li>
-        ))}
+        {segments.map((seg, i) => {
+          const displayLabel = isLast(i) && lastLabel
+            ? lastLabel
+            : labels[seg] || decodeURIComponent(seg);
+
+          return (
+            <li key={i} className="flex items-center gap-1">
+              <ChevronRight className="h-3 w-3" />
+              <Link
+                href={`/${segments.slice(0, i + 1).join("/")}`}
+                className="hover:text-foreground transition-colors capitalize"
+              >
+                {displayLabel}
+              </Link>
+            </li>
+          );
+        })}
       </ol>
     </nav>
   );
