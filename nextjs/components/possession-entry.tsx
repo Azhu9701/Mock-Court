@@ -4,7 +4,7 @@ import { useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { analyzeTask, startPossession, searchWeb, type SearxngResultItem } from "@/lib/api";
+import { analyzeTask, startPossession, fetchSouls, searchWeb, type SearxngResultItem } from "@/lib/api";
 import { triggerSessionsUpdate } from "@/components/sidebar-sessions";
 import { AttachmentUpload } from "@/components/attachment-upload";
 import { PracticeOpeningDialog } from "@/components/practice-opening-dialog";
@@ -71,22 +71,51 @@ export function PossessionEntry() {
     setError("");
     setProgressLine("正在分析任务，入口分流中…");
 
+    let souls: { name: string; field: string; ismism_code: string; rationale: string }[] = [];
+    let matchedMode = "conference";
+    let cards: Record<string, string> = {};
+    let reviewData: any = {};
+    const completedPhases: string[] = [];
+
+    // Try analyzeTask with 12s timeout
+    const controller = new AbortController();
+    const analyzeTimeout = setTimeout(() => controller.abort(), 12000);
+    const reviewer = localStorage.getItem("aionui-banner-lord") || undefined;
     try {
-      const reviewer = localStorage.getItem("aionui-banner-lord") || undefined;
-      const data = await analyzeTask(task, reviewer);
+      const data = await analyzeTask(task, reviewer, controller.signal);
+      clearTimeout(analyzeTimeout);
 
       if (data.entry_type === "practice_opening") {
         setPhase("practice_opening");
         return;
       }
 
-      const souls = data.matched_souls || [];
-      const matchedMode = data.recommended_mode || "conference";
-      const cards = data.task_cards || {};
-      const reviewData = data.review || {};
+      souls = data.matched_souls || [];
+      matchedMode = data.recommended_mode || "conference";
+      cards = data.task_cards || {};
+      reviewData = data.review || {};
+      completedPhases.push("classifying", "matching", "reviewing");
+      if (reviewData.verdict === "reject") completedPhases.push("adjusting");
+    } catch (e: any) {
+      clearTimeout(analyzeTimeout);
+      if (e.name === "AbortError") {
+        setProgressLine("分析超时，使用默认魂组合…");
+      }
+      // Fallback: use a few souls from registry
+      try {
+        const allSouls = await fetchSouls();
+        souls = allSouls.slice(0, 3).map(s => ({
+          name: s.name, field: s.field, ismism_code: s.ismism_code, rationale: s.self_declare || ""
+        }));
+      } catch {}
+    }
 
-      setProgressLine(`已匹配 ${souls.length} 个魂，正在启动讨论…`);
+    completedPhases.push("starting");
 
+    const uniquePhases = Array.from(new Set(completedPhases));
+    setProgressLine(`已匹配 ${souls.length} 个魂，正在启动讨论…`);
+
+    try {
       const { session_id } = await startPossession({
         mode: matchedMode, task,
         souls: souls.map((s) => s.name),
@@ -99,7 +128,7 @@ export function PossessionEntry() {
         sessionId: session_id, task, mode: matchedMode,
         matchedSouls: souls,
         review: reviewData.reviewer ? reviewData : null,
-        phases: ["classifying", "matching", "reviewing", reviewData.verdict === "reject" ? "adjusting" : null, "starting"].filter(Boolean) as string[],
+        phases: uniquePhases,
       });
 
       triggerSessionsUpdate();

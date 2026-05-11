@@ -384,12 +384,13 @@ export interface AnalyzeResponse {
   task_cards?: Record<string, string>;
 }
 
-export async function analyzeTask(task: string, reviewer?: string): Promise<AnalyzeResponse> {
+export async function analyzeTask(task: string, reviewer?: string, signal?: AbortSignal): Promise<AnalyzeResponse> {
   return apiRequest<AnalyzeResponse>('/possess/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ task, reviewer }),
     operation: 'analyzeTask',
+    signal,
   });
 }
 
