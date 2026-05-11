@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import type { SoulMessage, CollisionEvent, CostInfo, ToolCallEvent } from "@/hooks/use-websocket";
+import type { SoulMessage, CollisionEvent, ToolCallEvent } from "@/hooks/use-websocket";
 import { SoulPanel } from "@/components/soul-panel";
-import { SynthesisPanel } from "@/components/synthesis-panel";
+import { SynthesisSection } from "@/components/synthesis-section";
 import { CollisionNotification } from "@/components/collision-notification";
 import { ToolCallList } from "@/components/tool-call-indicator";
 
@@ -11,11 +11,10 @@ interface ConferenceViewProps {
   messages: Record<string, SoulMessage>;
   synthesis: string;
   collisions: CollisionEvent[];
-  cost: CostInfo | null;
   toolCalls: ToolCallEvent[];
 }
 
-export function ConferenceView({ messages, synthesis, collisions, cost, toolCalls }: ConferenceViewProps) {
+export function ConferenceView({ messages, synthesis, collisions, toolCalls }: ConferenceViewProps) {
   const names = Object.keys(messages);
   const [expandedSoul, setExpandedSoul] = useState<string | null>(null);
 
@@ -83,8 +82,10 @@ export function ConferenceView({ messages, synthesis, collisions, cost, toolCall
         <CollisionNotification collisions={collisions} />
       )}
 
-      {/* 辩证综合面板 - 持续更新 */}
-      <SynthesisPanel content={synthesis} cost={cost} />
+      {/* 辩证综合 — 与历史详情页统一卡片样式 */}
+      {synthesis && (
+        <SynthesisSection messages={[{ id: "synthesis", content: synthesis, created_at: new Date().toISOString() }]} />
+      )}
     </div>
   );
 }

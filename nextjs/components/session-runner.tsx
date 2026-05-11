@@ -239,7 +239,7 @@ export function SessionRunner({ sessionId, mode, matchedSouls, onDone, sessionDo
           {status === "done" && error && !hasMessages && <ErrorView error={error} onReconnect={reconnect} />}
           {status === "done" && !error && !hasMessages && <RequireApiKeyView />}
           {status === "done" && hasMessages && mode === "single" && <SingleView messages={messages} />}
-          {status === "done" && hasMessages && mode === "conference" && <ConferenceView messages={messages} synthesis={synthesis} collisions={collisions} cost={cost} toolCalls={toolCalls} />}
+          {status === "done" && hasMessages && mode === "conference" && <ConferenceView messages={messages} synthesis={synthesis} collisions={collisions} toolCalls={toolCalls} />}
           {status === "done" && hasMessages && mode === "debate" && <DebateView messages={messages} />}
           {status === "done" && hasMessages && mode === "relay" && <RelayView messages={messages} />}
           {status === "done" && hasMessages && mode === "learn" && <LearnView messages={messages} />}
