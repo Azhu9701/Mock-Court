@@ -7,9 +7,8 @@ import { DebateView } from "@/components/debate-view";
 import { RelayView } from "@/components/relay-view";
 import { LearnView } from "@/components/learn-view";
 import { PracticeOpeningView } from "@/components/practice-opening-view";
-import { Brain, Loader2, AlertTriangle, Key, CheckCircle, Sparkles, Wifi, Zap, MessageCircle, ChevronRight, Globe } from "lucide-react";
+import { Brain, Loader2, AlertTriangle, Key, CheckCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { SoulResponseCard } from "@/components/soul-response-card";
 import { PostSessionReview } from "@/components/post-session-review";
 import FollowUpInput from "@/components/follow-up-input";
 import { useState } from "react";
@@ -29,57 +28,6 @@ interface SessionRunnerProps {
 }
 
 import { modeLabel } from "@/config/possession-modes";
-
-const stepIcons: Record<string, React.ComponentType<{className?: string}>> = {
-  Connected: Wifi,
-  SessionStarted: Zap,
-  EntryClassified: Brain,
-  SoulStarted: Sparkles,
-  SynthesisStarted: Brain,
-  SearchComplete: Globe,
-  SoulDone: CheckCircle,
-  SynthesisDone: CheckCircle,
-  SessionComplete: CheckCircle,
-  SoulError: AlertTriangle,
-};
-
-const stepColors: Record<string, string> = {
-  Connected: "text-blue-400",
-  SessionStarted: "text-green-500",
-  EntryClassified: "text-purple-500",
-  SoulStarted: "text-amber-500",
-  SynthesisStarted: "text-indigo-500",
-  SearchComplete: "text-blue-500",
-  SoulDone: "text-green-500",
-  SynthesisDone: "text-indigo-500",
-  SessionComplete: "text-green-600",
-  SoulError: "text-red-500",
-};
-
-const nonVisual = new Set(["Connected", "SessionComplete", "SynthesisDone", "SoulDone"]);
-
-export function ProcessTimeline({ steps }: { steps: ProcessStep[] }) {
-  if (steps.length === 0) return null;
-  const visual = steps.filter((s) => !nonVisual.has(s.event));
-  if (visual.length === 0) return null;
-  return (
-    <div className="w-10 shrink-0 border-r flex flex-col items-center gap-1.5 pt-4 bg-muted/20" data-testid="process-timeline">
-      {visual.map((step, i) => {
-        const Icon = stepIcons[step.event];
-        const color = stepColors[step.event] || "text-muted-foreground";
-        return (
-          <div key={i} className={cn(
-            "flex items-center justify-center h-7 w-7 rounded-full bg-background border transition-all duration-500",
-            color,
-            step.event === "SoulStarted" && "animate-in zoom-in duration-300"
-          )} title={step.soulName || step.message}>
-            {Icon ? <Icon className="h-3.5 w-3.5" /> : <span className="text-[10px] font-bold">{step.soulName?.charAt(0)}</span>}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 function ConnectingView() {
   return (
@@ -117,11 +65,6 @@ function WaitingSoulsView({ mode, matchedSouls, processSteps, messages }: { mode
 
   return (
     <div className="flex flex-col flex-1 p-4 gap-4 overflow-y-auto">
-      <div className="text-center py-2">
-        <p className="text-sm text-muted-foreground">
-          模式：{modeLabel(mode)} | 正在召唤 AI 生成回应…
-        </p>
-      </div>
       {souls ? (
         <div className="grid gap-3 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {souls.map((soul) => {
@@ -289,9 +232,6 @@ export function SessionRunner({ sessionId, mode, matchedSouls, onDone, sessionDo
       )}
 
       <div className="flex flex-1 overflow-hidden">
-        {(status === "streaming" || status === "done") && (
-          <ProcessTimeline steps={processSteps} />
-        )}
         <div className="flex-1 overflow-hidden flex flex-col">
           {status === "connecting" && !hasMessages && <ConnectingView />}
           {status === "streaming" && <WaitingSoulsView mode={mode} matchedSouls={matchedSouls} processSteps={processSteps} messages={messages} />}
