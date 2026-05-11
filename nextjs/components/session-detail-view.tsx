@@ -10,6 +10,7 @@ import { BreadcrumbSetter } from "@/components/breadcrumb-setter";
 import SessionActions from "@/components/session-actions";
 import FollowUpInput from "@/components/follow-up-input";
 import { fetchSessionDetail, fetchSoul } from "@/lib/api";
+import { popPendingSession } from "@/lib/pending-session";
 import { ArrowLeft, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MODE_LABELS_LONG, modeColorBg } from "@/config/possession-modes";
@@ -18,11 +19,26 @@ export default function SessionDetailView({ id }: { id: string }) {
   const [detail, setDetail] = useState<Awaited<ReturnType<typeof fetchSessionDetail>> | null>(null);
   const [mode, setMode] = useState("single");
   const [matchedSouls, setMatchedSouls] = useState<MatchedSoulInfo[]>([]);
+  const [review, setReview] = useState<{ verdict: string; checks: string[]; notes: string; reviewer: string } | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
+      const pending = popPendingSession();
+      if (pending && pending.sessionId === id) {
+        if (!cancelled) {
+          setMode(pending.mode);
+          setMatchedSouls(pending.matchedSouls.map((s) => ({
+            name: s.name,
+            field: s.field || "",
+            ismism_code: s.ismism_code || "",
+            rationale: s.rationale || "",
+          })));
+          if (pending.review) setReview(pending.review);
+        }
+      }
+
       try {
         const d = await fetchSessionDetail(id);
         if (cancelled) return;
@@ -66,7 +82,7 @@ export default function SessionDetailView({ id }: { id: string }) {
     return (
       <div className="max-w-5xl mx-auto space-y-4">
         <BreadcrumbSetter label={session.title} />
-        <SessionContextHeader task={session.title} mode={mode} matchedSouls={matchedSouls} review={null} />
+        <SessionContextHeader task={session.title} mode={mode} matchedSouls={matchedSouls} review={review} />
         <SessionRunner sessionId={id} mode={mode} matchedSouls={matchedSouls} />
       </div>
     );
