@@ -81,6 +81,7 @@ export function useWebSocket(sessionId: string) {
   const pendingFlushRef = useRef(false);
   const mountedRef = useRef(true);
   const noEventsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const statusRef = useRef<"connecting" | "streaming" | "done" | "error">("connecting");
 
   // forceTick: counter that React sees — incrementing it triggers a re-render
   // This is the ONLY React state for streaming content, avoiding per-token setState overhead
@@ -91,6 +92,7 @@ export function useWebSocket(sessionId: string) {
   const [synthesis, setSynthesis] = useState("");
   const synthesisRef = useRef("");
   const [status, setStatus] = useState<"connecting" | "streaming" | "done" | "error">("connecting");
+  useEffect(() => { statusRef.current = status; }, [status]);
   const [error, setError] = useState<string | null>(null);
   const [processSteps, setProcessSteps] = useState<ProcessStep[]>([]);
   const [cost, setCost] = useState<CostInfo | null>(null);
@@ -170,6 +172,7 @@ export function useWebSocket(sessionId: string) {
         setStatus("done");
         setError("会话已不在运行中，请从会话历史查看结果");
         addLog("未收到实时事件 — 会话可能已结束", 'warning');
+        ws.close();
       }, 8000);
     };
 
@@ -326,11 +329,13 @@ export function useWebSocket(sessionId: string) {
           flushImmediate();
           setStatus("done");
           addLog(`会话完成`, 'success');
+          ws.close();
           break;
       }
     };
 
     ws.onclose = () => {
+      if (statusRef.current === "done") return;
       if (retryRef.current < MAX_RETRIES) {
         setTimeout(connect, Math.pow(2, retryRef.current) * 1000);
         retryRef.current++;
