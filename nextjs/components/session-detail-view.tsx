@@ -11,7 +11,8 @@ import SessionActions from "@/components/session-actions";
 import FollowUpInput from "@/components/follow-up-input";
 import { fetchSessionDetail, fetchSoul, analyzeTask } from "@/lib/api";
 import { readPendingSession, clearPendingSession } from "@/lib/pending-session";
-import { ArrowLeft, User, Brain, Sparkles, ShieldCheck, Zap, Play, Loader2, CheckCircle2, ChevronDown, ChevronUp } from "lucide-react";
+import { ArrowLeft, User, Brain, Sparkles, ShieldCheck, Zap, Play, Loader2, CheckCircle2, ChevronDown, ChevronUp, Clock } from "lucide-react";
+import { VerificationDialog } from "@/components/verification-dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { MODE_LABELS_LONG, modeColorBg } from "@/config/possession-modes";
@@ -33,6 +34,8 @@ export default function SessionDetailView({ id }: { id: string }) {
   const [currentFlowPhase, setCurrentFlowPhase] = useState<string | null>(null);
   const [flowExpanded, setFlowExpanded] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [verificationOpen, setVerificationOpen] = useState(false);
+  const [verificationDone, setVerificationDone] = useState(false);
   const clearRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -283,7 +286,7 @@ export default function SessionDetailView({ id }: { id: string }) {
   const userMsgs = sorted.filter((m) => m.role === "user");
   const soulMsgs = sorted.filter((m) => (m.role === "assistant" || m.role === "soul") && m.soul_name && m.soul_name !== "知识卡片");
   const synthMsgs = sorted.filter((m) => m.role === "synthesis");
-  const sysMsgs = sorted.filter((m) => m.role === "system");
+  const sysMsgs = sorted.filter((m) => m.role === "system" && !m.content.startsWith("[REVIEW]") && !m.content.includes("24小时可检验项"));
 
   const soulResponses: Record<string, string> = {};
   for (const m of soulMsgs) {
@@ -396,7 +399,39 @@ export default function SessionDetailView({ id }: { id: string }) {
         </div>
       )}
 
+      {initSynths.length > 0 && (
+        <div className="flex justify-end">
+          {verificationDone ? (
+            <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400 px-4 py-2 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/20">
+              <CheckCircle2 className="h-4 w-4" />
+              检验项已记录到知识卡片
+            </div>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setVerificationOpen(true)}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <Clock className="mr-1.5 h-4 w-4 text-blue-500" />
+              24小时检验项
+            </Button>
+          )}
+        </div>
+      )}
+
       <FollowUpInput sessionId={id} />
+
+      <VerificationDialog
+        open={verificationOpen}
+        sessionId={id}
+        sessionTitle={session.title}
+        onComplete={() => {
+          setVerificationOpen(false);
+          setVerificationDone(true);
+        }}
+        onClose={() => setVerificationOpen(false)}
+      />
     </div>
   );
 }

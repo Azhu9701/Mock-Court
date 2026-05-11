@@ -585,6 +585,33 @@ export async function fetchKnowledgeCards(params?: {
   );
 }
 
+export async function saveVerificationKnowledgeCard(params: {
+  session_id: string;
+  title: string;
+  action: string;
+  valid_signal: string;
+  revision_signal: string;
+}): Promise<KnowledgeCardItem> {
+  return apiRequest<KnowledgeCardItem>('/knowledge/cards', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      source_session: params.session_id,
+      title: params.title,
+      content: `## ⏳ 24小时检验项
+
+**检验行动：** ${params.action}
+
+**有效信号：** ${params.valid_signal}
+
+**修正信号：** ${params.revision_signal}`,
+      tags: ['实践检验', '24小时'],
+      source_soul: 'user',
+    }),
+    operation: 'saveVerificationKnowledgeCard',
+  });
+}
+
 // ── Synthesis (structured output §9.5) ──
 
 export interface SynthesisOutput {

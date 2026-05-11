@@ -30,7 +30,7 @@ export default async function SessionDetailPage({ params }: { params: Promise<{ 
     (m) => (m.role === "assistant" || m.role === "soul") && m.soul_name && m.soul_name !== "知识卡片"
   );
   const synthMsgs = sorted.filter((m) => m.role === "synthesis");
-  const sysMsgs = sorted.filter((m) => m.role === "system");
+  const sysMsgs = sorted.filter((m) => m.role === "system" && !m.content.startsWith("[REVIEW]"));
 
   // Group soul messages by name
   const soulResponses: Record<string, string> = {};

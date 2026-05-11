@@ -3,43 +3,11 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Sparkles, ArrowUpRight } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import { ArticleModal } from "./article-modal";
 
 function cleanContent(raw: string): string {
   return raw.replace(/<[^>]+>/g, "").trim();
-}
-
-function extractSections(raw: string): { title: string; items: string[] }[] {
-  const cleaned = cleanContent(raw);
-  const sections: { title: string; items: string[] }[] = [];
-  const h3Parts = cleaned.split(/^###\s*/m).slice(1);
-
-  for (const part of h3Parts) {
-    const lines = part.split("\n");
-    const title = lines[0].replace(/\*\*/g, "").trim();
-    const items: string[] = [];
-    const liRe = /^[-*]\s+(.+)/;
-    const boldLiRe = /^[-*]\s+\*\*(.+?)\*\*[：:]\s*(.+)/;
-
-    for (const line of lines.slice(1)) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("---") || trimmed.startsWith("###")) continue;
-
-      const boldMatch = boldLiRe.exec(trimmed);
-      if (boldMatch) {
-        items.push(`**${boldMatch[1]}**：${boldMatch[2]}`);
-        continue;
-      }
-      const liMatch = liRe.exec(trimmed);
-      if (liMatch) {
-        const text = liMatch[1].replace(/\*\*/g, "").trim();
-        if (text.length > 5) items.push(text);
-      }
-    }
-    if (title) sections.push({ title, items });
-  }
-  return sections;
 }
 
 interface SynthMsg {
@@ -57,21 +25,15 @@ export function SynthesisSection({ messages }: SynthesisSectionProps) {
 
   const msg = messages[0];
   const cleanedContent = cleanContent(msg.content);
-  const sections = extractSections(msg.content);
 
   return (
     <>
       <div
-        className="group rounded-xl border bg-background overflow-hidden cursor-pointer transition-all duration-300 hover:shadow-lg hover:shadow-purple-500/5 hover:-translate-y-0.5 hover:border-purple-300"
+        className="group flex flex-col rounded-lg border bg-background overflow-hidden cursor-pointer transition-all duration-500 border-primary/30 shadow-md shadow-primary/10 hover:shadow-lg hover:-translate-y-0.5"
         onClick={() => setIsModalOpen(true)}
       >
-        <div className="h-1 bg-gradient-to-r from-purple-500 via-pink-500 to-purple-500" />
-
-        <div className="px-5 py-3 flex items-center justify-between border-b border-border/30">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center">
-              <Sparkles className="h-4 w-4" />
-            </div>
+        <div className="px-4 py-2 border-b flex items-center justify-between bg-primary/5">
+          <div className="flex items-center gap-2">
             <div>
               <span className="font-semibold text-sm">辩证综合</span>
               <span className="ml-2 text-xs text-muted-foreground">
@@ -79,37 +41,22 @@ export function SynthesisSection({ messages }: SynthesisSectionProps) {
               </span>
             </div>
           </div>
-          <ArrowUpRight className="h-4 w-4 text-muted-foreground/0 group-hover:text-muted-foreground transition-colors" />
+          <ArrowUpRight className="h-3.5 w-3.5 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" />
         </div>
 
-        <div className="p-5 space-y-3">
-          {sections.length > 0 ? (
-            sections.slice(0, 5).map((sec, i) => (
-              <div key={i}>
-                <h4 className="text-sm font-semibold text-foreground/90 mb-1">{sec.title}</h4>
-                {sec.items.length > 0 && (
-                  <ul className="space-y-0.5">
-                    {sec.items.slice(0, 3).map((item, j) => (
-                      <li key={j} className="text-xs text-muted-foreground leading-relaxed flex gap-1.5">
-                        <span className="text-muted-foreground/40 shrink-0">•</span>
-                        <span className="line-clamp-2">{item.length > 80 ? item.substring(0, 80) + "..." : item}</span>
-                      </li>
-                    ))}
-                    {sec.items.length > 3 && (
-                      <li className="text-xs text-primary/60">...还有 {sec.items.length - 3} 条</li>
-                    )}
-                  </ul>
-                )}
-              </div>
-            ))
+        <div className="flex-1 px-4 py-3 overflow-hidden">
+          {cleanedContent ? (
+            <div className="text-xs text-muted-foreground leading-relaxed line-clamp-5 prose prose-xs max-w-none dark:prose-invert [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:text-foreground/90 [&_h3]:mt-0 [&_h3]:mb-1 [&_ul]:my-1 [&_li]:my-0 [&_p]:my-1">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {cleanedContent.slice(0, 800)}
+              </ReactMarkdown>
+            </div>
           ) : (
-            <p className="text-sm text-muted-foreground leading-relaxed line-clamp-4">
-              {cleanedContent.substring(0, 200)}...
-            </p>
+            <p className="text-xs text-muted-foreground/60 italic">暂无内容</p>
           )}
         </div>
 
-        <div className="px-5 py-2 border-t border-border/20 text-center">
+        <div className="px-4 py-1.5 border-t border-border/20 text-center">
           <span className="text-xs text-primary/60 group-hover:text-primary/80 transition-colors">
             点击阅读完整综合报告 →
           </span>

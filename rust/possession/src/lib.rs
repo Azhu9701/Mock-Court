@@ -446,7 +446,7 @@ async fn dispatch_mode(
     }).ok();
 
     if let Some(ref sr) = input.search_results {
-        let preview_len = 100.min(sr.len());
+        let preview_len = if sr.len() <= 100 { sr.len() } else { sr.floor_char_boundary(100) };
         let preview = &sr[..preview_len];
         let line_count = sr.lines().count();
         let _ = system_tx.try_send(WsEvent {

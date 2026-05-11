@@ -204,7 +204,6 @@ export function PossessionEntry() {
       }
 
       const cards = data.task_cards || {};
-      const matchedMode = data.recommended_mode || "conference";
       const souls = data.matched_souls || [];
       setTaskCards(cards);
 
@@ -214,13 +213,15 @@ export function PossessionEntry() {
         return;
       }
 
+      const finalMode = data.recommended_mode || "conference";
+      setMode(finalMode);
       setPhase("starting");
       addLog("🚀 启动附体会话...");
       setProgressLine("正在启动附体会话…");
 
       console.log("=== 调用 startPossession API...");
       const { session_id } = await startPossession({
-        mode: matchedMode, task, souls: souls.map((s: any) => s.name),
+        mode: finalMode, task, souls: souls.map((s: any) => s.name),
         task_cards: Object.keys(cards).length > 0 ? cards : undefined,
         search_topic: searchTopic,
         judgment: judgment || undefined,
@@ -228,13 +229,13 @@ export function PossessionEntry() {
         unknown: unknown || undefined,
       });
       console.log("=== startPossession 完成, session_id:", session_id);
-      
+
       if (isCancelled) {
         console.log("=== 用户取消");
         setPhase("input");
         return;
       }
-      
+
       setSessionId(session_id);
       setPhase("running");
       addLog("🎉 附体会话已启动");
@@ -606,11 +607,11 @@ export function PossessionEntry() {
                     <SoulCarousel />
                   </div>
                 )}
-                
-                <Button 
-                  variant="ghost" 
-                  size="sm" 
-                  onClick={onCancel} 
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onCancel}
                   className="mt-4 w-full text-muted-foreground hover:text-destructive"
                 >
                   取消

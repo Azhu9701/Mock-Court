@@ -69,7 +69,7 @@ function SessionRow({ s, onDelete }: { s: SessionSummary; onDelete: (id: string)
   return (
     <Link
       href={`/sessions/${s.id}`}
-      className={`flex items-center gap-3 p-3 rounded-lg border transition-all hover:shadow-md group ${modeBgColors[s.mode] || "bg-background border-muted"}`}
+      className={`flex items-center gap-3 p-3 rounded-lg border transition-all hover:shadow-md group relative ${modeBgColors[s.mode] || "bg-background border-muted"}`}
       data-testid={`session-item-${s.id}`}
     >
       {/* 模式标识 */}
@@ -103,26 +103,24 @@ function SessionRow({ s, onDelete }: { s: SessionSummary; onDelete: (id: string)
         {new Date(s.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
       </div>
 
-      {/* 导出按钮 */}
-      <button
-        onClick={handleExport}
-        className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-1 hover:bg-muted rounded absolute right-10"
-        title="导出 Markdown"
-      >
-        <Download className="h-4 w-4" />
-      </button>
-
-      {/* 箭头 */}
-      <ChevronRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-
-      {/* 删除按钮 */}
-      <ConfirmButton
-        icon={<Trash2 className="h-4 w-4" />}
-        confirmText="确认"
-        title="删除会话"
-        className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 absolute right-3"
-        onConfirm={handleDelete}
-      />
+      {/* hover 时显示的操作按钮组 */}
+      <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 shrink-0">
+        <button
+          onClick={handleExport}
+          className="p-1 hover:bg-muted rounded"
+          title="导出 Markdown"
+        >
+          <Download className="h-4 w-4" />
+        </button>
+        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+        <ConfirmButton
+          icon={<Trash2 className="h-4 w-4" />}
+          confirmText="确认"
+          title="删除会话"
+          className="shrink-0"
+          onConfirm={handleDelete}
+        />
+      </div>
     </Link>
   );
 }

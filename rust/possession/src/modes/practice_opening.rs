@@ -46,7 +46,7 @@ pub async fn run(
         top.sort_by_key(|s| std::cmp::Reverse(s.summon_count));
         top.into_iter().take(3).map(|s| s.name.clone()).collect()
     } else {
-        matches.into_iter().take(5).map(|m| m.entry.name).collect()
+        matches.into_iter().take(4).map(|m| m.entry.name).collect()
     };
 
     if names.is_empty() {

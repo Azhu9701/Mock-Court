@@ -8,8 +8,9 @@ import { RelayView } from "@/components/relay-view";
 import { SingleView } from "@/components/single-view";
 import { LearnView } from "@/components/learn-view";
 import { PracticeOpeningView } from "@/components/practice-opening-view";
-import { Brain, Loader2, AlertTriangle, Key, CheckCircle } from "lucide-react";
+import { Brain, Loader2, AlertTriangle, Key, CheckCircle, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { VerificationDialog } from "@/components/verification-dialog";
 import Link from "next/link";
 import { PostSessionReview } from "@/components/post-session-review";
 import FollowUpInput from "@/components/follow-up-input";
@@ -190,6 +191,8 @@ export function SessionRunner({ sessionId, mode, matchedSouls, onDone, sessionDo
 
   const hasMessages = Object.keys(messages).length > 0;
   const [reviewDone, setReviewDone] = useState(false);
+  const [verificationOpen, setVerificationOpen] = useState(false);
+  const [verificationDone, setVerificationDone] = useState(false);
 
   const streamingSouls = Object.entries(messages)
     .filter(([, m]) => m.isStreaming)
@@ -280,15 +283,43 @@ export function SessionRunner({ sessionId, mode, matchedSouls, onDone, sessionDo
       {status === "done" && hasMessages && (
         <div className="border-t p-4 space-y-6">
           {!reviewDone ? (
-            <PostSessionReview
-              sessionId={sessionId}
-              onComplete={() => setReviewDone(true)}
-            />
+            <PostSessionReview sessionId={sessionId} onComplete={() => setReviewDone(true)} />
           ) : (
-            <FollowUpInput sessionId={sessionId} />
+            <>
+              <div className="flex justify-end">
+                {verificationDone ? (
+                  <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400 px-4 py-2 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/20">
+                    <CheckCircle className="h-4 w-4" />
+                    检验项已记录到知识卡片
+                  </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setVerificationOpen(true)}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <Clock className="mr-1.5 h-4 w-4 text-blue-500" />
+                    24小时检验项
+                  </Button>
+                )}
+              </div>
+              <FollowUpInput sessionId={sessionId} />
+            </>
           )}
         </div>
       )}
+
+      <VerificationDialog
+        open={verificationOpen}
+        sessionId={sessionId}
+        sessionTitle={task}
+        onComplete={() => {
+          setVerificationOpen(false);
+          setVerificationDone(true);
+        }}
+        onClose={() => setVerificationOpen(false)}
+      />
     </div>
   );
 }

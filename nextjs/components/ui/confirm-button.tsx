@@ -46,13 +46,15 @@ export function ConfirmButton({
 
   if (confirming) {
     return (
-      <div className={`flex items-center gap-1 ${className || ""}`}>
-        <Button size="sm" variant={variant === "ghost" ? "destructive" : variant} onClick={handleConfirm} disabled={loading}>
-          {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : confirmText}
-        </Button>
-        <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
-          {cancelText}
-        </Button>
+      <div className={`relative ${className || ""}`}>
+        <div className="absolute right-0 top-1/2 -translate-y-1/2 flex items-center gap-1 bg-background border rounded-lg p-1 shadow-md z-10">
+          <Button size="sm" variant={variant === "ghost" ? "destructive" : variant} onClick={handleConfirm} disabled={loading}>
+            {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : confirmText}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
+            {cancelText}
+          </Button>
+        </div>
       </div>
     );
   }

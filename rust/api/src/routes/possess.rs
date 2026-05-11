@@ -275,6 +275,245 @@ fn spawn_banner_lord_review(
     })
 }
 
+// ── Ismism Inference Engine ──
+// 主义主义四位坐标体系：基于未明子的哲学分类学，从任务文本中推断
+// 最可能的 ismism 坐标，用于提升匹配精度。
+
+/// 任务中检测到的主义主义信号
+#[derive(Debug, Default)]
+struct TaskIsmismProfile {
+    /// 每个 field (1-4) 的置信度，归一化到 [0, 1]
+    field_weights: [f64; 4],
+    /// 推断的 F-O-E-T 坐标（None 表示该维度不确定）
+    inferred: Option<[u8; 4]>,
+}
+
+/// 主义主义术语 → 坐标映射。每个条目：(关键词, [F, O, E, T] 或 [F, 0, 0, 0])
+/// 坐标来源于「主义主义完整目录_未明子原版」
+const ISMISM_TERMS: &[(&str, [u8; 4])] = &[
+    // ── Field 1: 形而下学（气学）──
+    ("物理主义", [1, 1, 1, 0]),
+    ("科学实在论", [1, 1, 0, 0]),
+    ("建构论", [1, 1, 2, 0]),
+    ("认知主义", [1, 1, 3, 0]),
+    ("行为主义", [1, 1, 4, 0]),
+    ("宗教实在论", [1, 2, 0, 0]),
+    ("神创论", [1, 2, 1, 0]),
+    ("偶像崇拜", [1, 2, 2, 0]),
+    ("唯灵论", [1, 2, 3, 0]),
+    ("反偶像崇拜", [1, 2, 4, 0]),
+    ("唯我论", [1, 3, 0, 0]),
+    ("伪唯心主义", [1, 3, 1, 0]),
+    ("客观唯心", [1, 3, 1, 1]),
+    ("主观唯心", [1, 3, 1, 2]),
+    ("本真主义", [1, 3, 2, 0]),
+    ("唯意志主义", [1, 3, 3, 0]),
+    ("直觉主义", [1, 3, 4, 0]),
+    ("平庸主义", [1, 4, 0, 0]),
+    ("自然主义", [1, 4, 1, 0]),
+    ("世俗人道", [1, 4, 2, 0]),
+    ("心理主义", [1, 4, 3, 0]),
+    ("庸俗主义", [1, 4, 4, 0]),
+
+    // ── Field 2: 形而上学（道学）──
+    ("在场形而上学", [2, 1, 0, 0]),
+    ("普遍主义", [2, 1, 1, 0]),
+    ("本质主义", [2, 1, 2, 0]),
+    ("合理主义", [2, 1, 3, 0]),
+    ("绝对主义", [2, 1, 4, 0]),
+    ("辩证形而上学", [2, 2, 0, 0]),
+    ("无限主义", [2, 2, 1, 0]),
+    ("否定主义", [2, 2, 2, 0]),
+    ("超验主义", [2, 2, 3, 0]),
+    ("我思形而上学", [2, 3, 0, 0]),
+    ("实体一元论", [2, 3, 1, 0]),
+    ("理性主义", [2, 3, 2, 0]),
+    ("反形而上学", [2, 4, 0, 0]),
+    ("经验主义", [2, 4, 1, 0]),
+    ("实证主义", [2, 4, 2, 0]),
+    ("逻辑还原", [2, 4, 3, 0]),
+    ("实用主义", [2, 4, 4, 0]),
+    ("辩证唯物主义", [2, 4, 4, 2]),
+
+    // ── Field 3: 观念论（心学）──
+    ("现象学", [3, 1, 0, 0]),
+    ("先验现象学", [3, 1, 1, 0]),
+    ("象征主义", [3, 1, 2, 0]),
+    ("生活世界", [3, 1, 3, 0]),
+    ("德国观念论", [3, 2, 0, 0]),
+    ("批判哲学", [3, 2, 1, 0]),
+    ("知识学", [3, 2, 2, 0]),
+    ("生存论", [3, 2, 3, 0]),
+    ("辩证法", [3, 2, 4, 0]),
+    ("存在主义", [3, 3, 1, 0]),
+    ("尼采", [3, 3, 3, 0]),
+    ("符号学", [3, 4, 0, 0]),
+    ("结构主义", [3, 4, 1, 0]),
+    ("后结构主义", [3, 4, 2, 0]),
+    ("差异的辩证法", [3, 4, 3, 0]),
+    ("解释学", [3, 4, 4, 0]),
+    ("精神分析", [3, 4, 4, 4]),
+
+    // ── Field 4: 实践 · 辩证唯物主义 ──
+    ("政治经济学批判", [4, 1, 0, 0]),
+    ("资本主义", [4, 1, 1, 0]),
+    ("文化霸权", [4, 1, 3, 4]),
+    ("意识形态批判", [4, 1, 0, 0]),
+    ("列宁", [4, 1, 4, 3]),
+    ("组织建设", [4, 2, 0, 0]),
+    ("国际主义", [4, 2, 3, 0]),
+    ("理想社会", [4, 3, 0, 0]),
+    ("生产活动", [4, 3, 2, 0]),
+    ("乌托邦", [4, 4, 0, 0]),
+    ("去人类中心", [4, 4, 2, 0]),
+
+    // ── 跨域术语 ──
+    ("康德", [3, 2, 1, 0]),
+    ("黑格尔", [3, 2, 4, 0]),
+    ("海德格尔", [3, 2, 3, 0]),
+    ("胡塞尔", [3, 1, 1, 0]),
+    ("马克思", [2, 4, 4, 2]),
+    ("毛泽东", [4, 1, 3, 0]),
+    ("萨特", [3, 3, 1, 2]),
+    ("维特根斯坦", [3, 4, 4, 3]),
+    ("拉康", [3, 4, 4, 4]),
+    ("德勒兹", [3, 4, 3, 0]),
+    ("福柯", [3, 4, 2, 0]),
+    ("葛兰西", [4, 1, 3, 4]),
+    ("柏拉图", [2, 1, 2, 0]),
+    ("亚里士多德", [2, 1, 2, 3]),
+    ("苏格拉底", [2, 1, 2, 1]),
+    ("笛卡尔", [2, 3, 2, 0]),
+    ("斯宾诺莎", [2, 3, 1, 0]),
+    ("莱布尼茨", [2, 3, 1, 0]),
+    ("叔本华", [1, 3, 3, 4]),
+    ("柏格森", [1, 3, 4, 0]),
+    ("巴门尼德", [2, 1, 2, 0]),
+    ("赫拉克利特", [2, 1, 1, 4]),
+    ("毕达哥拉斯", [2, 1, 3, 0]),
+    ("阿多诺", [3, 2, 4, 2]),
+    ("齐泽克", [3, 4, 4, 4]),
+];
+
+/// 从任务文本推断 ismism 坐标
+fn infer_task_ismism(task: &str) -> TaskIsmismProfile {
+    let task_lower = task.to_lowercase();
+    let mut field_hits = [0u32; 4];
+    let mut weighted_coords = [0f64; 4];
+    let mut total_weight = 0f64;
+
+    for &(term, coords) in ISMISM_TERMS {
+        if task_lower.contains(&term.to_lowercase()) {
+            let idx = coords[0] as usize - 1; // field 1→index 0, etc.
+            field_hits[idx] += 1;
+            // Weight: each matched dimension contributes, dim-1 (field) = ×2 weight
+            let term_weight = if coords[3] != 0 { 2.0 } else if coords[2] != 0 { 1.5 } else { 1.0 };
+            for d in 0..4 {
+                if coords[d] != 0 {
+                    weighted_coords[d] += coords[d] as f64 * term_weight;
+                }
+            }
+            total_weight += term_weight;
+        }
+    }
+
+    let total_hits: u32 = field_hits.iter().sum();
+    let field_weights: [f64; 4] = if total_hits > 0 {
+        [
+            field_hits[0] as f64 / total_hits as f64,
+            field_hits[1] as f64 / total_hits as f64,
+            field_hits[2] as f64 / total_hits as f64,
+            field_hits[3] as f64 / total_hits as f64,
+        ]
+    } else {
+        [0.25, 0.25, 0.25, 0.25]
+    };
+
+    let inferred = if total_weight > 0.0 {
+        Some([
+            (weighted_coords[0] / total_weight).round().clamp(1.0, 4.0) as u8,
+            (weighted_coords[1] / total_weight).round().clamp(0.0, 4.0) as u8,
+            (weighted_coords[2] / total_weight).round().clamp(0.0, 4.0) as u8,
+            (weighted_coords[3] / total_weight).round().clamp(0.0, 4.0) as u8,
+        ])
+    } else {
+        None
+    };
+
+    tracing::debug!(
+        "Ismism inference: task=\"{:.80}\" fields={:?} inferred={:?}",
+        task, field_weights, inferred
+    );
+
+    TaskIsmismProfile { field_weights, inferred }
+}
+
+/// 解析 ismism code（如 "1-2-3-4"）为 [u8; 4]
+fn parse_ismism(code: &str) -> Option<[u8; 4]> {
+    let parts: Vec<&str> = code.split('-').collect();
+    if parts.len() < 4 { return None; }
+    let nums: Vec<u8> = parts.iter().filter_map(|p| p.parse().ok()).collect();
+    (nums.len() >= 4).then(|| [nums[0], nums[1], nums[2], nums[3]])
+}
+
+/// 计算魂的 ismism 坐标与任务推断坐标的邻近度 (0.0 ~ 1.0)
+fn ismism_proximity_score(profile: &TaskIsmismProfile, soul: &SoulListEntry) -> f64 {
+    let soul_code = match parse_ismism(&soul.ismism_code) {
+        Some(c) => c,
+        None => return 0.0,
+    };
+
+    // 在场域权重：任务所在的 field 越高，同 field 的魂得分越高
+    let soul_field_idx = soul_code[0].saturating_sub(1) as usize;
+    if soul_field_idx >= 4 { return 0.0; }
+    let field_weight = profile.field_weights[soul_field_idx];
+
+    // 如果有精确的坐标推断，计算各维度邻近度
+    let coord_prox = if let Some(inferred) = profile.inferred {
+        let mut sim = 0.0;
+        // Field dim (×2 weight — most important)
+        let f_diff = (soul_code[0] as f64 - inferred[0] as f64).abs();
+        sim += (1.0 - f_diff / 4.0) * 0.40;
+        // 其余三维
+        for d in 1..4 {
+            if inferred[d] != 0 && soul_code[d] != 0 {
+                let diff = (soul_code[d] as f64 - inferred[d] as f64).abs();
+                sim += (1.0 - diff / 4.0) * 0.20;
+            }
+        }
+        sim
+    } else {
+        // 无精确推断，纯 field 权重
+        field_weight
+    };
+
+    // Mix: 60% field weight + 40% coordinate proximity
+    field_weight * 0.6 + coord_prox * 0.4
+}
+
+/// 统计任务文本命中魂的领域术语的次数
+fn count_domain_term_hits(task_lower: &str, soul: &SoulListEntry) -> usize {
+    let mut hits = 0;
+    for domain in &soul.domains {
+        for word in domain.split(&['/', '、', ',', '，'][..]) {
+            let w = word.trim();
+            if w.len() >= 2 && task_lower.contains(&w.to_lowercase()) {
+                hits += 1;
+                break;
+            }
+        }
+    }
+    // Also check field name
+    for word in soul.field.split(&['/', '、', '.', '·'][..]) {
+        let w = word.trim();
+        if w.len() >= 2 && task_lower.contains(&w.to_lowercase()) {
+            hits += 1;
+            break;
+        }
+    }
+    hits
+}
+
 async fn analyze_task(
     State(state): State<Arc<AppState>>,
     Json(body): Json<AnalyzeRequest>,
@@ -356,29 +595,65 @@ async fn analyze_task(
         send(serde_json::json!({ "phase": "classifying", "entry_type": entry_type }).to_string());
 
         // ── Step 1: Algorithmic matching ──
+        // 1a. FT semantic search
         let ft_results = state.registry.search_souls(&body.task).unwrap_or_default();
         let ft_scores: std::collections::HashMap<String, f64> = ft_results.iter()
             .map(|m| (m.entry.name.clone(), m.relevance))
             .collect();
 
-        let mut scored: Vec<(&SoulListEntry, f64, usize)> = all_souls.iter().map(|s| {
+        // 1b. Task → Ismism inference: scan for known philosophical terms
+        let task_ismism = infer_task_ismism(&body.task);
+
+        // 1c. Multi-factor composite scoring
+        let mut scored: Vec<(&SoulListEntry, f64, &str)> = all_souls.iter().map(|s| {
             let kw_hits = s.trigger_keywords.iter()
                 .filter(|kw| task_lower.contains(&kw.to_lowercase()))
-                .count() as usize;
+                .count();
             let ft_score = ft_scores.get(&s.name).copied().unwrap_or(0.0);
-            let composite = ft_score * 10.0 + (kw_hits as f64);
-            (s, composite, kw_hits)
+            let ismism_prox = ismism_proximity_score(&task_ismism, s);
+            let domain_hits = count_domain_term_hits(&task_lower, s);
+
+            // Composite: FT(35%) + Ismism(30%) + Keywords(20%) + Domain(15%)
+            let composite = ft_score * 0.35
+                + ismism_prox * 0.30
+                + (kw_hits as f64).min(3.0) / 3.0 * 0.20
+                + (domain_hits as f64).min(3.0) / 3.0 * 0.15;
+
+            (s, composite, if kw_hits > 0 { "keyword" } else if ismism_prox > 0.5 { "ismism" } else if ft_score > 0.3 { "semantic" } else { "fallback" })
         }).collect();
 
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| b.0.summon_count.cmp(&a.0.summon_count)));
 
-        let top_n = 8usize.min(scored.len()).max(2);
-        let souls: Vec<SoulMatch> = scored.iter().take(top_n).map(|(s, composite, kw)| {
-            let rationale = if *kw > 0 {
-                format!("命中 {} 个关键词, 全文相关性 {:.1}", kw, composite)
-            } else {
-                format!("全文相关性 {:.1}", composite)
+        // Dynamic top-N selection: stop at relevance floor + elbow + hard cap
+        let relevance_floor = 0.05; // ignore souls with near-zero composite
+        let hard_cap = 5usize;      // never match more than 5 souls, target ~4
+        let mut take_n = 0usize;
+        let mut prev_score = f64::MAX;
+        for (i, (_, score, _)) in scored.iter().enumerate() {
+            if *score < relevance_floor { break; }
+            // Elbow detection: if score drops >50% from previous, stop here
+            if i > 0 && i >= 2 && prev_score > 0.0 && (*score / prev_score) < 0.5 {
+                break;
+            }
+            if i >= hard_cap { break; }
+            take_n = i + 1;
+            prev_score = *score;
+        }
+        // Floor: at least 1 soul if any scored above relevance floor
+        take_n = take_n.max(if scored.first().map(|s| s.1).unwrap_or(0.0) >= relevance_floor { 1 } else { 1 })
+                       .min(scored.len());
+
+        let souls: Vec<SoulMatch> = scored.iter().take(take_n).map(|(s, composite, match_type)| {
+            let kw_hits = s.trigger_keywords.iter()
+                .filter(|kw| task_lower.contains(&kw.to_lowercase()))
+                .count();
+            let ismism_prox = ismism_proximity_score(&task_ismism, s);
+            let rationale = match *match_type {
+                "keyword" => format!("命中 {} 个关键词 | 坐标邻近度 {:.0}% | 综合分 {:.3}", kw_hits, ismism_prox*100.0, composite),
+                "ismism" => format!("坐标邻近度 {:.0}% | 综合分 {:.3}", ismism_prox*100.0, composite),
+                "semantic" => format!("全文相关性 | 坐标邻近度 {:.0}% | 综合分 {:.3}", ismism_prox*100.0, composite),
+                _ => format!("综合相关性 | 坐标邻近度 {:.0}% | 综合分 {:.3}", ismism_prox*100.0, composite),
             };
             SoulMatch {
                 name: s.name.clone(),
@@ -389,15 +664,6 @@ async fn analyze_task(
         }).collect();
 
         // ── Ismism-based mode determination ──
-        // Parse ismism code: format "F-O-E-T" (4 numbers 0-9)
-        fn parse_ismism(code: &str) -> Option<[u8; 4]> {
-            let parts: Vec<&str> = code.split('-').collect();
-            if parts.len() != 4 {
-                return None;
-            }
-            let nums: Option<[u8; 4]> = parts.iter().map(|p| p.parse().ok()).collect::<Option<Vec<_>>>()?.try_into().ok();
-            nums
-        }
 
         // Calculate Ismism diversity score (0.0 = identical, 1.0 = maximum diversity)
         fn calc_ismism_diversity(codes: &[[u8; 4]]) -> (f64, usize, usize) {
@@ -417,10 +683,10 @@ async fn analyze_task(
 
             for i in 0..codes.len() {
                 for j in (i+1)..codes.len() {
-                    let diff0 = codes[i][0].abs_diff(codes[j][0]) as f64 / 9.0;
-                    let diff1 = codes[i][1].abs_diff(codes[j][1]) as f64 / 9.0;
-                    let diff2 = codes[i][2].abs_diff(codes[j][2]) as f64 / 9.0;
-                    let diff3 = codes[i][3].abs_diff(codes[j][3]) as f64 / 9.0;
+                    let diff0 = codes[i][0].abs_diff(codes[j][0]) as f64 / 3.0;
+                    let diff1 = codes[i][1].abs_diff(codes[j][1]) as f64 / 3.0;
+                    let diff2 = codes[i][2].abs_diff(codes[j][2]) as f64 / 3.0;
+                    let diff3 = codes[i][3].abs_diff(codes[j][3]) as f64 / 3.0;
                     total_field_diff += diff0;
                     total_ontology_diff += diff1;
                     total_epistemology_diff += diff2;
@@ -572,7 +838,7 @@ async fn analyze_task(
             send(serde_json::json!({ "phase": "adjusting" }).to_string());
 
             let adjustment_prompt = format!(
-                "## 任务\n{}\n\n## 当前魂组合\n{}\n\n## 幡主审查结果\n裁决：{}\n{}\n备注：{}\n\n## 指令\n根据审查结果调整魂组合。如果是条件通过——增删魂以满足约束。如果是拒绝——完全重新匹配。\n返回JSON：{{\"souls\":[{{\"name\":\"魂名\",\"rationale\":\"调整理由\"}}]}}}",
+                "## 任务\n{}\n\n## 当前魂组合\n{}\n\n## 幡主审查结果\n裁决：{}\n{}\n备注：{}\n\n## 指令\n根据审查结果调整魂组合。如果是条件通过——增删魂以满足约束。如果是拒绝——完全重新匹配。\n返回JSON：{{\"souls\":[{{\"name\":\"魂名\",\"rationale\":\"调整理由\"}}]}}",
                 body.task,
                 souls.iter().map(|s| format!("- {} [{}] {}", s.name, s.field, s.rationale)).collect::<Vec<_>>().join("\n"),
                 verdict, checks.join("\n"), notes
