@@ -81,7 +81,10 @@ export function useWebSocket(sessionId: string) {
   const pendingFlushRef = useRef(false);
   const mountedRef = useRef(true);
   const noEventsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const statusRef = useRef<"connecting" | "streaming" | "done" | "error">("connecting");
+  const connectingRef = useRef(false);
+  const wsIdRef = useRef(0);
 
   // forceTick: counter that React sees — incrementing it triggers a re-render
   // This is the ONLY React state for streaming content, avoiding per-token setState overhead
@@ -137,11 +140,14 @@ export function useWebSocket(sessionId: string) {
   };
 
   const connect = useCallback(() => {
+    if (connectingRef.current) return;
+    connectingRef.current = true;
     wsRef.current?.close();
     const wsHost = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3096").replace("http://", "ws://").replace("/api/v1", "");
     const url = `${wsHost}/ws/possess/${sessionId}/main`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
+    const wsId = ++wsIdRef.current;
     mountedRef.current = true;
     setStatus("connecting");
 
@@ -160,6 +166,8 @@ export function useWebSocket(sessionId: string) {
     }
 
     ws.onopen = () => {
+      if (wsIdRef.current !== wsId) return;
+      connectingRef.current = false;
       retryRef.current = 0;
       hasConnectedBeforeRef.current = true;
       setStatus("streaming");
@@ -177,6 +185,7 @@ export function useWebSocket(sessionId: string) {
     };
 
     ws.onmessage = (e) => {
+      if (wsIdRef.current !== wsId) return;
       const event: WsEvent = JSON.parse(e.data);
 
       if (noEventsTimeoutRef.current) {
@@ -335,9 +344,11 @@ export function useWebSocket(sessionId: string) {
     };
 
     ws.onclose = () => {
-      if (statusRef.current === "done") return;
+      if (wsIdRef.current !== wsId) return;
+      connectingRef.current = false;
+      if (!mountedRef.current || statusRef.current === "done") return;
       if (retryRef.current < MAX_RETRIES) {
-        setTimeout(connect, Math.pow(2, retryRef.current) * 1000);
+        reconnectTimerRef.current = setTimeout(connect, Math.pow(2, retryRef.current) * 1000);
         retryRef.current++;
       } else {
         setStatus("error");
@@ -345,13 +356,17 @@ export function useWebSocket(sessionId: string) {
       }
     };
 
-    ws.onerror = () => ws.close();
+    ws.onerror = () => {
+      if (wsIdRef.current !== wsId) return;
+      ws.close();
+    };
   }, [sessionId, scheduleFlush, flushImmediate]);
 
   useEffect(() => {
     connect();
     return () => {
       mountedRef.current = false;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
       if (noEventsTimeoutRef.current) clearTimeout(noEventsTimeoutRef.current);
       wsRef.current?.close();
