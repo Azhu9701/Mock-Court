@@ -103,123 +103,214 @@ const SYNTHESIS_SYSTEM_PROMPT: &str = r#"你是辩证综合官。你是独立子
 #[derive(Debug, Clone)]
 pub struct PromptBuilder;
 
+/// 动态任务上下文 — 对应 prompt-builder.py 的 --task / --role / --facts / --judgment 等参数。
+/// 静态身份信息（姓名、坐标、summon_prompt、skills 等）从 YAML/SoulProfile 读取，不在此结构体中。
+#[derive(Debug, Clone, Default)]
+pub struct DynamicContext {
+    /// --task   用户提出的总任务/问题
+    pub task: String,
+    /// --role   魂在本次分析中的专属职责/子任务（对应 task_card）
+    pub role: Option<String>,
+    /// --facts  事实背景 / 实时搜索结果
+    pub facts: Option<String>,
+    /// --judgment  使用者判断
+    pub judgment: Option<String>,
+    /// --worry  使用者担忧
+    pub worry: Option<String>,
+    /// --unknown  使用者未知
+    pub unknown: Option<String>,
+    /// --constraint  特殊约束
+    pub constraint: Option<String>,
+    /// --era  时代背景
+    pub era: Option<String>,
+}
+
+impl DynamicContext {
+    pub fn new(task: impl Into<String>) -> Self {
+        DynamicContext { task: task.into(), ..Default::default() }
+    }
+
+    pub fn with_role(mut self, role: impl Into<String>) -> Self { self.role = Some(role.into()); self }
+    pub fn with_facts(mut self, facts: impl Into<String>) -> Self { self.facts = Some(facts.into()); self }
+    pub fn with_judgment(mut self, j: impl Into<String>) -> Self { self.judgment = Some(j.into()); self }
+    pub fn with_worry(mut self, w: impl Into<String>) -> Self { self.worry = Some(w.into()); self }
+    pub fn with_unknown(mut self, u: impl Into<String>) -> Self { self.unknown = Some(u.into()); self }
+    pub fn with_constraint(mut self, c: impl Into<String>) -> Self { self.constraint = Some(c.into()); self }
+    pub fn with_era(mut self, e: impl Into<String>) -> Self { self.era = Some(e.into()); self }
+
+    pub fn with_judgment_opt(mut self, j: Option<&str>) -> Self { if let Some(v) = j { self.judgment = Some(v.into()); } self }
+    pub fn with_worry_opt(mut self, w: Option<&str>) -> Self { if let Some(v) = w { self.worry = Some(v.into()); } self }
+    pub fn with_unknown_opt(mut self, u: Option<&str>) -> Self { if let Some(v) = u { self.unknown = Some(v.into()); } self }
+    pub fn with_facts_opt(mut self, f: Option<&str>) -> Self { if let Some(v) = f { self.facts = Some(v.into()); } self }
+}
+
 impl PromptBuilder {
     pub fn new() -> Self {
         PromptBuilder
     }
 
-    pub fn build_summon_prompt(
+    /// 统一召唤入口。静态身份 → system message，动态上下文 → user message。
+    /// cache 模式下拆分为 3 条消息以提升 DeepSeek prefix cache 命中率。
+    pub fn build_summon(
         &self,
         soul: &SoulProfile,
-        task: &str,
-        judgment: Option<&str>,
-        worry: Option<&str>,
-        unknown: Option<&str>,
-        tier: ModelTier,
-        search_results: Option<&str>,
+        ctx: &DynamicContext,
+        tier: &ModelTier,
+        use_cache: bool,
     ) -> Prompt {
-        let system_content = Self::build_system_content(soul, &tier, "请始终保持角色一致性。用你的立场、术语和风格回应。禁止用括号添加动作/场景描写，直接输出观点。");
-        let mut user_content = Self::build_user_presets_with_search(judgment, worry, unknown, search_results);
-        user_content.push_str(&format!("任务：{}", task));
-        Prompt {
-            messages: vec![
-                PromptMessage { role: "system".into(), content: system_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
-                PromptMessage { role: "user".into(), content: user_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
-            ],
+        let system_content = Self::build_soul_identity(soul, tier);
+
+        if use_cache {
+            let mut shared = Self::build_task_brief(ctx);
+            shared.push_str(&format!("\n任务：{}", ctx.task));
+            let soul_mission = Self::build_soul_mission(soul, ctx);
+            Prompt {
+                messages: vec![
+                    PromptMessage { role: "system".into(), content: system_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
+                    PromptMessage { role: "user".into(), content: shared, reasoning_content: None, tool_call_id: None, tool_calls: None },
+                    PromptMessage { role: "user".into(), content: soul_mission, reasoning_content: None, tool_call_id: None, tool_calls: None },
+                ],
+            }
+        } else {
+            let mut user_content = Self::build_task_brief(ctx);
+            user_content.push_str(&format!("\n任务：{}", ctx.task));
+            user_content.push_str(&format!("\n\n{}", Self::build_soul_mission(soul, ctx)));
+            Prompt {
+                messages: vec![
+                    PromptMessage { role: "system".into(), content: system_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
+                    PromptMessage { role: "user".into(), content: user_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
+                ],
+            }
         }
     }
 
-    /// DeepSeek cache-optimized: 3-message split for prefix cache hit rate.
-    /// Message order: (1) system/summon prompt (static) → (2) shared task context → (3) soul-specific instruction
+    // ── 向后兼容：旧接口委托到 build_summon ──
+
+    pub fn build_summon_prompt(
+        &self, soul: &SoulProfile, task: &str,
+        judgment: Option<&str>, worry: Option<&str>, unknown: Option<&str>,
+        tier: ModelTier, search_results: Option<&str>,
+    ) -> Prompt {
+        let ctx = DynamicContext::new(task)
+            .with_judgment_opt(judgment).with_worry_opt(worry).with_unknown_opt(unknown)
+            .with_facts_opt(search_results);
+        self.build_summon(soul, &ctx, &tier, false)
+    }
+
     pub fn build_summon_cached(
         &self, soul: &SoulProfile, task: &str,
         judgment: Option<&str>, worry: Option<&str>, unknown: Option<&str>,
         tier: ModelTier, search_results: Option<&str>,
     ) -> Prompt {
-        let system_content = Self::build_system_content(soul, &tier, "请始终保持角色一致性。禁止用括号添加动作/场景描写，直接输出观点。");
-        let mut shared = Self::build_user_presets_with_search(judgment, worry, unknown, search_results);
-        shared.push_str(&format!("任务：{}", task));
-        let soul_specific = Self::build_soul_specific_prompt(soul, task, None);
-        Prompt {
-            messages: vec![
-                PromptMessage { role: "system".into(), content: system_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
-                PromptMessage { role: "user".into(), content: shared, reasoning_content: None, tool_call_id: None, tool_calls: None },
-                PromptMessage { role: "user".into(), content: soul_specific, reasoning_content: None, tool_call_id: None, tool_calls: None },
-            ],
-        }
+        let ctx = DynamicContext::new(task)
+            .with_judgment_opt(judgment).with_worry_opt(worry).with_unknown_opt(unknown)
+            .with_facts_opt(search_results);
+        self.build_summon(soul, &ctx, &tier, true)
     }
 
-    /// 带差异化任务分派的召唤。每个魂可以有自己的分析角度/子问题（task_card）。
-    /// 这是产生高质量多视角输出的关键——不是让所有魂分析同一个问题，而是给每个魂
-    /// 分配它在系统中最擅长回答的那个子问题。
     pub fn build_summon_with_task_card(
-        &self, soul: &SoulProfile, shared_task: &str,
-        task_card: &str,
+        &self, soul: &SoulProfile, shared_task: &str, task_card: &str,
         judgment: Option<&str>, worry: Option<&str>, unknown: Option<&str>,
         tier: ModelTier, search_results: Option<&str>,
     ) -> Prompt {
-        let system_content = Self::build_system_content(soul, &tier, "请始终保持角色一致性。禁止用括号添加动作/场景描写，直接输出观点。");
-        let mut shared = Self::build_user_presets_with_search(judgment, worry, unknown, search_results);
-        shared.push_str(&format!("总任务背景：{}", shared_task));
-        let soul_specific = Self::build_soul_specific_prompt(soul, shared_task, Some(task_card));
-        Prompt {
-            messages: vec![
-                PromptMessage { role: "system".into(), content: system_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
-                PromptMessage { role: "user".into(), content: shared, reasoning_content: None, tool_call_id: None, tool_calls: None },
-                PromptMessage { role: "user".into(), content: soul_specific, reasoning_content: None, tool_call_id: None, tool_calls: None },
-            ],
-        }
+        let ctx = DynamicContext::new(shared_task)
+            .with_role(task_card)
+            .with_judgment_opt(judgment).with_worry_opt(worry).with_unknown_opt(unknown)
+            .with_facts_opt(search_results);
+        self.build_summon(soul, &ctx, &tier, true)
     }
 
-    /// 为魂构建专属的任务指令。利用魂的 self_declare、skills_expertise、compat/incompat 信息
-    /// 生成更精准的分析指引，而非通用的一句话"请从你的立场分析"。
-    fn build_soul_specific_prompt(soul: &SoulProfile, _shared_task: &str, task_card: Option<&str>) -> String {
-        let mut prompt = format!(
-            "## 你的角色\n你是 **{}**（ismism 坐标 **{}**）。\n\n",
-            soul.name, soul.ismism_code
+    // ── 静态身份（System Message）—— 从 YAML / SoulProfile 组装 ──
+
+    fn build_soul_identity(soul: &SoulProfile, tier: &ModelTier) -> String {
+        let mut c = format!(
+            "你是 **{}**，主义主义坐标 `{}`。\n\n", soul.name, soul.ismism_code
+        );
+        if !soul.field.is_empty() {
+            c.push_str(&format!("领域：{}\n\n", soul.field));
+        }
+        // summon_prompt 是魂的「出厂设定」——核心身份描述
+        c.push_str(&soul.summon_prompt);
+        c.push_str("\n\n请始终保持角色一致性。用你自己的术语、思维节奏和风格回应。禁止用括号添加动作/场景描写，直接输出观点。");
+        if matches!(tier, ModelTier::Pro | ModelTier::Max) {
+            c.push_str("\n\n推理模式：深度思考，结构化分析。");
+        }
+        c
+    }
+
+    // ── 任务简报（User Message 前半段）—— 所有魂共享的动态上下文 ──
+
+    fn build_task_brief(ctx: &DynamicContext) -> String {
+        let mut b = String::new();
+        if let Some(ref era) = ctx.era {
+            b.push_str(&format!("## 时代背景\n{}\n\n", era));
+        }
+        if let Some(ref facts) = ctx.facts {
+            b.push_str(&format!("## 议题背景\n{}\n\n", facts));
+        }
+        if let Some(ref judgment) = ctx.judgment {
+            b.push_str(&format!("## 使用者判断\n{}\n\n", judgment));
+        }
+        if let Some(ref worry) = ctx.worry {
+            b.push_str(&format!("## 使用者担忧\n{}\n\n", worry));
+        }
+        if let Some(ref unknown) = ctx.unknown {
+            b.push_str(&format!("## 使用者未知\n{}\n\n", unknown));
+        }
+        if let Some(ref constraint) = ctx.constraint {
+            b.push_str(&format!("## 约束条件\n{}\n\n", constraint));
+        }
+        b
+    }
+
+    // ── 魂专属使命（User Message 后半段）—— 魂专属的动态任务指令 ──
+
+    fn build_soul_mission(soul: &SoulProfile, ctx: &DynamicContext) -> String {
+        let mut m = format!(
+            "## 你的分析任务\n\n你是 **{}**（ismism `{}`）。\n\n", soul.name, soul.ismism_code
         );
 
         if !soul.self_declare.is_empty() {
-            prompt.push_str(&format!("**你的自我声明**：{}\n\n", soul.self_declare));
+            m.push_str(&format!("**你的自我声明**：{}\n\n", soul.self_declare));
         }
 
-        if let Some(card) = task_card {
-            prompt.push_str(&format!(
-                "## 你的专属任务\n{}\n\n这是总任务中**只有你能做、其他魂做不到或做不好的部分**。请聚焦你的专属问题，用你的方法论框架深度回答。不要试图覆盖所有方面——覆盖你不擅长的方面反而会稀释你独特视角的价值。\n\n",
-                card
+        if let Some(ref role) = ctx.role {
+            m.push_str(&format!(
+                "### 你的专属职责\n{}\n\n这是总任务中**只有你能做、其他魂做不到或做不好的部分**。请聚焦你的专属问题，用你的方法论框架深度回答。\n\n", role
             ));
         } else {
-            prompt.push_str(&format!(
-                "## 你的分析任务\n请从你（{}）的立场、本体论预设、认识论路径和目的论指向前提出发，对以上总任务进行深度分析。\n\n",
-                soul.name
-            ));
+            m.push_str("请从你的立场、本体论预设、认识论路径和目的论指向前提出发，对以上总任务进行深度分析。\n\n");
         }
 
         if !soul.skills_expertise.is_empty() {
             let skills: Vec<&str> = soul.skills_expertise.iter().map(|s| s.as_str()).take(5).collect();
-            prompt.push_str(&format!("**你的核心能力**：{}\n\n", skills.join(" / ")));
+            m.push_str(&format!("**你的核心能力**：{}\n\n", skills.join(" / ")));
         }
 
-        prompt.push_str("## 分析要求\n\
+        if let Some(ref exclude) = soul.exclude_scenarios.first() {
+            m.push_str(&format!("**排除场景**：{}\n\n", exclude));
+        }
+
+        m.push_str("## 分析要求\n\
 1. **从你的本体论预设出发**——你默认什么是最真实的？这个预设在这次分析中让你看见了什么、又让你必然看不见什么？\n\
 2. **使用你自己的方法论**——不要模仿其他魂的分析方式。你的价值恰恰在于你和别人不同。\n\
 3. **诚实标注你的盲区**——在分析结尾，明确说「以我的框架，我看不见X」「我这套方法在Y条件下会失效」。\n\
 4. **面向实践输出**——你的分析最终要能帮助使用者做决定或看清局面。不要停留在纯理论推演。\n\
 5. **保持角色一致性**——用你自己的术语、风格和思维节奏。你是你，不是ChatGPT。\n");
 
-        if let Some(card) = task_card {
-            if card.contains("地基") || card.contains("是什么") {
-                prompt.push_str("\n**特别注意**：你的任务是打地基——不要说名字，看东西。区分可观测的事实和给事实起的名字。从第一性原理出发。\n");
+        if let Some(ref role) = ctx.role {
+            if role.contains("地基") || role.contains("是什么") {
+                m.push_str("\n**特别注意**：你的任务是打地基——不要说名字，看东西。区分可观测的事实和给事实起的名字。从第一性原理出发。\n");
             }
-            if card.contains("边界") || card.contains("不能") || card.contains("局限") {
-                prompt.push_str("\n**特别注意**：你的任务是画边界——诚实地标注系统/方法论的局限。边界不是缺陷，是不自欺的前提。\n");
+            if role.contains("边界") || role.contains("不能") || role.contains("局限") {
+                m.push_str("\n**特别注意**：你的任务是画边界——诚实地标注系统/方法论的局限。边界不是缺陷，是不自欺的前提。\n");
             }
-            if card.contains("瞒") || card.contains("骗") || card.contains("自欺") || card.contains("解剖") {
-                prompt.push_str("\n**特别注意**：你的任务是自我解剖——不是批判外部，是把刀对准自己。找出系统/方法论最不舒服的盲区。\n");
+            if role.contains("瞒") || role.contains("骗") || role.contains("自欺") || role.contains("解剖") {
+                m.push_str("\n**特别注意**：你的任务是自我解剖——不是批判外部，是把刀对准自己。找出系统/方法论最不舒服的盲区。\n");
             }
         }
 
-        prompt
+        m
     }
 
     /// 构建幡主审查 + 任务分派 Prompt。
@@ -514,46 +605,6 @@ impl PromptBuilder {
         }
     }
 
-    fn build_system_content(soul: &SoulProfile, tier: &ModelTier, suffix: &str) -> String {
-        let mut c = format!(
-            "你是 {}，ismism 坐标 {}。\n\n",
-            soul.name, soul.ismism_code
-        );
-        c.push_str(&soul.summon_prompt);
-        c.push_str("\n\n");
-        c.push_str(suffix);
-        if matches!(tier, ModelTier::Pro | ModelTier::Max) {
-            c.push_str("\n\n推理模式：深度思考，提供结构化分析。");
-        }
-        c
-    }
-
-    fn build_user_presets(judgment: Option<&str>, worry: Option<&str>, unknown: Option<&str>) -> String {
-        Self::build_user_presets_with_search(judgment, worry, unknown, None)
-    }
-
-    fn build_user_presets_with_search(
-        judgment: Option<&str>,
-        worry: Option<&str>,
-        unknown: Option<&str>,
-        search_results: Option<&str>,
-    ) -> String {
-        let mut presets = String::new();
-        if let Some(sr) = search_results {
-            presets.push_str(&format!("## 议题背景（实时搜索）\n{}\n\n", sr));
-        }
-        if let Some(j) = judgment {
-            presets.push_str(&format!("## 判断\n{}\n\n", j));
-        }
-        if let Some(w) = worry {
-            presets.push_str(&format!("## 顾虑\n{}\n\n", w));
-        }
-        if let Some(u) = unknown {
-            presets.push_str(&format!("## 未知\n{}\n\n", u));
-        }
-        presets
-    }
-
     /// 根据任务类型和模型能力选择合适的提示词构建策略
     pub fn build_for_role(
         &self,
@@ -573,7 +624,9 @@ impl PromptBuilder {
             }
             RoutingRole::Soul => {
                 let soul = soul.expect("Soul role requires a soul");
-                self.build_summon_prompt(soul, task, None, None, None, ModelTier::Pro, None)
+                let ctx = DynamicContext::new(task);
+                let tier = ModelTier::Pro;
+                self.build_summon(soul, &ctx, &tier, false)
             }
             RoutingRole::KnowledgeCard => {
                 self.build_collect_prompt(task)
