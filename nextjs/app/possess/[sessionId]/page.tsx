@@ -64,6 +64,7 @@ export default function SessionPage({
         sessionId={sessionId}
         mode={mode}
         matchedSouls={matchedSouls}
+        taskTitle={taskTitle}
         onDone={() => setSessionDone(true)}
         sessionDone={sessionDone}
       />

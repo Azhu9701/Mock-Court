@@ -113,12 +113,25 @@ pub fn fulltext_search(
         .collect();
 
     results.sort_by(|a, b| {
-        b.relevance
-            .partial_cmp(&a.relevance)
+        let score_a = a.relevance + cold_start_boost(a.entry.summon_count);
+        let score_b = b.relevance + cold_start_boost(b.entry.summon_count);
+        score_b
+            .partial_cmp(&score_a)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.entry.summon_count.cmp(&a.entry.summon_count))
     });
     results
+}
+
+/// 冷启动加权：summon_count < 3 的魂获得额外 relevance 加分，打破马太效应。
+///
+/// summon_count = 0 → +2.0, 1 → +1.3, 2 → +0.7, >=3 → 0
+fn cold_start_boost(summon_count: u32) -> f64 {
+    match summon_count {
+        0 => 2.0,
+        1 => 1.3,
+        2 => 0.7,
+        _ => 0.0,
+    }
 }
 
 fn count_token_hits(profile: &SoulProfile, token: &str) -> (f64, Vec<String>) {
@@ -150,6 +163,36 @@ fn count_token_hits(profile: &SoulProfile, token: &str) -> (f64, Vec<String>) {
     (hits, fields)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cold_start_boost() {
+        assert!((cold_start_boost(0) - 2.0).abs() < 0.001);
+        assert!((cold_start_boost(1) - 1.3).abs() < 0.001);
+        assert!((cold_start_boost(2) - 0.7).abs() < 0.001);
+        assert!((cold_start_boost(3) - 0.0).abs() < 0.001);
+        assert!((cold_start_boost(10) - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_cold_start_boost_favors_new_souls() {
+        // 新魂 (summon=0, relevance=3.0) 应该排在老魂 (summon=10, relevance=4.0) 前面
+        let new_score = 3.0 + cold_start_boost(0);  // 5.0
+        let old_score = 4.0 + cold_start_boost(10); // 4.0
+        assert!(new_score > old_score);
+    }
+
+    #[test]
+    fn test_cold_start_boost_does_not_override_strong_relevance() {
+        // 高相关老魂仍然应该排在低相关新魂前面
+        let strong_old = 8.0 + cold_start_boost(10); // 8.0
+        let weak_new = 2.0 + cold_start_boost(0);    // 4.0
+        assert!(strong_old > weak_new);
+    }
+}
+
 pub fn nearest_search(
     target: &IsmismCode,
     profiles: &HashMap<String, SoulProfile>,
@@ -171,10 +214,11 @@ pub fn nearest_search(
         .collect();
 
     results.sort_by(|a, b| {
-        b.relevance
-            .partial_cmp(&a.relevance)
+        let score_a = a.relevance + cold_start_boost(a.entry.summon_count);
+        let score_b = b.relevance + cold_start_boost(b.entry.summon_count);
+        score_b
+            .partial_cmp(&score_a)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.entry.summon_count.cmp(&a.entry.summon_count))
     });
 
     if let Some(n) = limit {

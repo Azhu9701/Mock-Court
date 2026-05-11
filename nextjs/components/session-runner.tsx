@@ -9,6 +9,7 @@ import { SingleView } from "@/components/single-view";
 import { LearnView } from "@/components/learn-view";
 import { PracticeOpeningView } from "@/components/practice-opening-view";
 import { Brain, Loader2, AlertTriangle, Key, CheckCircle, Clock } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { VerificationDialog } from "@/components/verification-dialog";
 import Link from "next/link";
@@ -26,6 +27,7 @@ interface SessionRunnerProps {
   sessionId: string;
   mode: string;
   matchedSouls?: MatchedSoulInfo[];
+  taskTitle?: string;
   onDone?: () => void;
   sessionDone?: boolean;
 }
@@ -185,7 +187,7 @@ function ErrorView({ error, onReconnect }: { error: string; onReconnect: () => v
   );
 }
 
-export function SessionRunner({ sessionId, mode, matchedSouls, onDone, sessionDone }: SessionRunnerProps) {
+export function SessionRunner({ sessionId, mode, matchedSouls, taskTitle, onDone, sessionDone }: SessionRunnerProps) {
   const { messages, synthesis, status, error, processSteps, cost, collisions, toolCalls, reconnect } =
     useWebSocket(sessionId);
 
@@ -313,7 +315,7 @@ export function SessionRunner({ sessionId, mode, matchedSouls, onDone, sessionDo
       <VerificationDialog
         open={verificationOpen}
         sessionId={sessionId}
-        sessionTitle={task}
+        sessionTitle={taskTitle || ""}
         onComplete={() => {
           setVerificationOpen(false);
           setVerificationDone(true);

@@ -44,8 +44,92 @@ pub enum SoulProcessOutput {
         content: String,
         usage: UsageStats,
     },
+    /// 被干预中断，携带已生成的部分内容和干预信息
+    Interrupted {
+        partial_content: String,
+        intervention: Intervention,
+    },
     /// 错误
     Error(String),
+}
+
+/// 运行时干预指令
+///
+/// 由碰撞检测引擎或综合官向推理中的魂发送，实现推理与干预的竞态。
+#[derive(Debug, Clone)]
+pub enum Intervention {
+    /// 矛盾质疑：发现当前魂的推理与其他魂存在矛盾
+    ContradictionQuestion {
+        /// 发起干预的魂名
+        from_soul: String,
+        /// 矛盾描述
+        contradiction: String,
+        /// 追问问题
+        question: String,
+    },
+    /// 盲点重定向：当前魂的推理被其他魂覆盖，建议转向新方向
+    BlindSpotRedirect {
+        /// 覆盖当前视角的魂名
+        covered_by: String,
+        /// 建议的新方向
+        suggested_direction: String,
+    },
+    /// 深化请求：当前魂的推理深度不足，需要深入特定维度
+    DeepenRequest {
+        /// 需要深化的维度
+        aspect: String,
+        /// 深化原因
+        reason: String,
+    },
+}
+
+impl Intervention {
+    /// 将干预指令转换为可注入上下文的消息
+    pub fn to_prompt_message(&self) -> PromptMessage {
+        let content = match self {
+            Intervention::ContradictionQuestion {
+                from_soul,
+                contradiction,
+                question,
+            } => {
+                format!(
+                    "【运行时干预 — 矛盾质疑】\n\
+                     来自魂「{}」的反馈：发现以下矛盾点——\n「{}」\n\n\
+                     请重新审视你的推理，并回应以下问题：\n「{}」\n\n\
+                     注意：你的原有推理方向与此反馈存在张力，请尝试融合或明确指出分歧的根源。",
+                    from_soul, contradiction, question
+                )
+            }
+            Intervention::BlindSpotRedirect {
+                covered_by,
+                suggested_direction,
+            } => {
+                format!(
+                    "【运行时干预 — 盲点重定向】\n\
+                     魂「{}」已经覆盖了你当前的推理角度。\n\n\
+                     请转向以下新方向重新推理：\n「{}」\n\n\
+                     避免与已覆盖内容重复，寻找独特的贡献角度。",
+                    covered_by, suggested_direction
+                )
+            }
+            Intervention::DeepenRequest { aspect, reason } => {
+                format!(
+                    "【运行时干预 — 深化请求】\n\
+                     需要你在「{}」维度上深化分析。\n\n\
+                     原因：{}\n\n\
+                     请在原推理基础上，深入挖掘该维度的内涵、边界条件和实践意义。",
+                    aspect, reason
+                )
+            }
+        };
+
+        PromptMessage {
+            role: "user".to_string(),
+            content,
+            reasoning_content: None,
+            ..Default::default()
+        }
+    }
 }
 
 /// 预设信息（简化版）
@@ -156,21 +240,34 @@ pub struct SoulProcess {
     pub state: RwLock<SoulProcessState>,
     /// 进程上下文
     pub context: RwLock<SoulContext>,
-    /// 事件发送通道
+    /// 事件发送通道（内部）
     tx: mpsc::Sender<SoulProcessEvent>,
+    /// 干预发送通道（外部通过 SoulProcessManager 注入干预指令）
+    pub intervention_tx: mpsc::Sender<Intervention>,
 }
 
 impl SoulProcess {
     /// 创建新的魂进程（不启动）
-    pub fn new(profile: SoulProfile) -> (Self, mpsc::Receiver<SoulProcessEvent>) {
+    ///
+    /// 返回进程实例、事件接收通道和干预接收通道。
+    /// 调用者需要将 `event_rx` 和 `intervention_rx` 传入 `run()` 启动事件循环。
+    pub fn new(
+        profile: SoulProfile,
+    ) -> (
+        Self,
+        mpsc::Receiver<SoulProcessEvent>,
+        mpsc::Receiver<Intervention>,
+    ) {
         let (tx, rx) = mpsc::channel(32);
+        let (intervention_tx, intervention_rx) = mpsc::channel(32);
         let process = SoulProcess {
             soul_name: profile.name.clone(),
             state: RwLock::new(SoulProcessState::Stopped),
             context: RwLock::new(SoulContext::new(profile)),
             tx,
+            intervention_tx,
         };
-        (process, rx)
+        (process, rx, intervention_rx)
     }
 
     /// 发送任务给魂进程
@@ -218,6 +315,7 @@ impl SoulProcess {
     pub async fn run(
         self: Arc<Self>,
         mut rx: mpsc::Receiver<SoulProcessEvent>,
+        mut intervention_rx: mpsc::Receiver<Intervention>,
         gateway: Arc<GatewayRegistry>,
         output_tx: mpsc::Sender<SoulProcessOutput>,
     ) {
@@ -226,7 +324,7 @@ impl SoulProcess {
 
         loop {
             let state = self.get_state().await;
-            
+
             tokio::select! {
                 Some(event) = rx.recv() => {
                     match event {
@@ -235,12 +333,18 @@ impl SoulProcess {
                                 tracing::info!("Waking up soul {} to process task", soul_name);
                                 *self.state.write().await = SoulProcessState::Active;
                             }
-                            
-                            self.process_task(task, presets.unwrap_or(UserPresets {
-                                judgment: None,
-                                worry: None,
-                                unknown: None,
-                            }), &gateway, &output_tx).await;
+
+                            self.process_task(
+                                task,
+                                presets.unwrap_or(UserPresets {
+                                    judgment: None,
+                                    worry: None,
+                                    unknown: None,
+                                }),
+                                &gateway,
+                                &output_tx,
+                                &mut intervention_rx,
+                            ).await;
                         }
                         SoulProcessEvent::Sleep => {
                             tracing::info!("Putting soul {} to sleep", soul_name);
@@ -261,31 +365,44 @@ impl SoulProcess {
         }
     }
 
+    /// 处理任务 — 带干预感知的流式推理
+    ///
+    /// 使用 tokio::select! 在流式接收 LLM token 的同时，
+    /// 监听干预通道。一旦收到干预指令，立即中断当前推理，
+    /// 将干预消息注入上下文后重新启动推理。
     async fn process_task(
         &self,
         task: String,
         presets: UserPresets,
         gateway: &GatewayRegistry,
         output_tx: &mpsc::Sender<SoulProcessOutput>,
+        intervention_rx: &mut mpsc::Receiver<Intervention>,
     ) {
-        let (profile, prompt) = {
+        let (profile, base_prompt) = {
             let ctx = self.context.read().await;
             (ctx.profile.clone(), ctx.build_prompt(&task, &presets))
         };
 
         let provider = if profile.model.contains("deepseek") {
             Provider::DeepSeek
-        } else if profile.model.contains("gpt") || profile.model.contains("o1") || profile.model.contains("o3") {
+        } else if profile.model.contains("gpt")
+            || profile.model.contains("o1")
+            || profile.model.contains("o3")
+        {
             Provider::OpenAI
         } else {
             Provider::Claude
         };
 
-        let config = foundation::CallConfig {
+        let base_config = foundation::CallConfig {
             temperature: 0.7,
             max_tokens: 8192,
             stream: true,
-            model: if profile.model.is_empty() { None } else { Some(profile.model.clone()) },
+            model: if profile.model.is_empty() {
+                None
+            } else {
+                Some(profile.model.clone())
+            },
             tools: None,
             tool_choice: None,
             reasoning_effort: Some(foundation::ReasoningEffort::Think),
@@ -293,57 +410,158 @@ impl SoulProcess {
             thinking_enabled: None,
         };
 
-        let req = LLMRequest {
-            provider,
-            prompt,
-            config,
-        };
+        // 干预重试循环：每次被干预后，用注入干预消息的 prompt 重新推理
+        let mut current_prompt = base_prompt;
+        loop {
+            let req = LLMRequest {
+                provider,
+                prompt: current_prompt.clone(),
+                config: base_config.clone(),
+            };
 
+            let interrupted = self
+                .stream_with_intervention(req, &task, gateway, output_tx, intervention_rx)
+                .await;
+
+            match interrupted {
+                StreamResult::Completed => break,
+                StreamResult::Interrupted {
+                    partial_content,
+                    intervention,
+                } => {
+                    tracing::info!(
+                        "Soul {} interrupted by {:?}, restarting inference",
+                        self.soul_name,
+                        std::mem::discriminant(&intervention)
+                    );
+
+                    // 将干预消息注入当前 prompt
+                    current_prompt
+                        .messages
+                        .push(intervention.to_prompt_message());
+
+                    // 同时注入部分已完成的内容，让魂在已有基础上调整
+                    if !partial_content.is_empty() {
+                        current_prompt.messages.push(PromptMessage {
+                            role: "assistant".to_string(),
+                            content: format!(
+                                "（以下是你被中断前已经生成的部分内容，请在此基础上修正）\n{}",
+                                partial_content
+                            ),
+                            reasoning_content: None,
+                            ..Default::default()
+                        });
+                    }
+                }
+                StreamResult::Error(err_msg) => {
+                    let _ = output_tx.send(SoulProcessOutput::Error(err_msg)).await;
+                    break;
+                }
+            }
+        }
+    }
+
+    /// 流式推理 + 干预感知的 tokio::select! 竞态
+    ///
+    /// 同时等待两个未来：
+    /// - chunk_rx.recv(): LLM token 流
+    /// - intervention_rx.recv(): 干预指令
+    ///
+    /// 任一分支先就绪即执行，另一分支被取消。
+    async fn stream_with_intervention(
+        &self,
+        req: LLMRequest,
+        task: &str,
+        gateway: &GatewayRegistry,
+        output_tx: &mpsc::Sender<SoulProcessOutput>,
+        intervention_rx: &mut mpsc::Receiver<Intervention>,
+    ) -> StreamResult {
         match gateway.call(&req) {
-            Ok(mut rx) => {
+            Ok(mut chunk_rx) => {
                 let mut full_content = String::new();
                 let mut full_reasoning = String::new();
                 let mut final_usage = UsageStats::default();
 
-                while let Some(chunk_result) = rx.recv().await {
-                    match chunk_result {
-                        Ok(chunk) => {
-                            // 收集最终回答内容
-                            if !chunk.content.is_empty() && chunk.reasoning_content.is_none() {
-                                full_content.push_str(&chunk.content);
-                                let _ = output_tx.send(SoulProcessOutput::Chunk(chunk.content)).await;
-                            }
-                            // 收集思维链内容（用于多轮对话）
-                            if let Some(reasoning) = &chunk.reasoning_content {
-                                if !reasoning.is_empty() {
-                                    full_reasoning.push_str(reasoning);
-                                }
-                            }
-                            if let Some(usage) = chunk.usage {
-                                final_usage = usage;
-                            }
-                            if let Some(reason) = &chunk.finish_reason {
-                                if reason == "stop" || reason == "length" {
-                                    // 保存到历史（带思维链用于多轮对话）
-                                    {
-                                        let mut ctx = self.context.write().await;
-                                        ctx.add_message("user".to_string(), task.clone(), None);
-                                        ctx.add_message("assistant".to_string(), full_content.clone(), Some(full_reasoning.clone()));
+                loop {
+                    tokio::select! {
+                        // 分支 A: 收到 LLM token chunk
+                        chunk_opt = chunk_rx.recv() => {
+                            match chunk_opt {
+                                Some(Ok(chunk)) => {
+                                    // 收集回答内容（仅当非 reasoning 时输出）
+                                    if !chunk.content.is_empty() && chunk.reasoning_content.is_none() {
+                                        full_content.push_str(&chunk.content);
+                                        let _ = output_tx
+                                            .send(SoulProcessOutput::Chunk(chunk.content))
+                                            .await;
                                     }
-
-                                    let _ = output_tx.send(SoulProcessOutput::Done {
-                                        content: full_content,
-                                        usage: final_usage,
-                                    }).await;
-                                    break;
+                                    // 收集思维链
+                                    if let Some(reasoning) = &chunk.reasoning_content {
+                                        if !reasoning.is_empty() {
+                                            full_reasoning.push_str(reasoning);
+                                        }
+                                    }
+                                    // 更新 usage
+                                    if let Some(usage) = chunk.usage {
+                                        final_usage = usage;
+                                    }
+                                    // 正常结束
+                                    if let Some(reason) = &chunk.finish_reason {
+                                        if reason == "stop" || reason == "length" {
+                                            {
+                                                let mut ctx = self.context.write().await;
+                                                ctx.add_message(
+                                                    "user".to_string(),
+                                                    task.to_string(),
+                                                    None,
+                                                );
+                                                ctx.add_message(
+                                                    "assistant".to_string(),
+                                                    full_content.clone(),
+                                                    Some(full_reasoning.clone()),
+                                                );
+                                            }
+                                            let _ = output_tx
+                                                .send(SoulProcessOutput::Done {
+                                                    content: full_content,
+                                                    usage: final_usage,
+                                                })
+                                                .await;
+                                            return StreamResult::Completed;
+                                        }
+                                    }
+                                }
+                                Some(Err(e)) => {
+                                    let err_msg = format!("Error calling LLM: {}", e);
+                                    tracing::error!("{}", err_msg);
+                                    return StreamResult::Error(err_msg);
+                                }
+                                None => {
+                                    // 流意外关闭
+                                    return StreamResult::Completed;
                                 }
                             }
                         }
-                        Err(e) => {
-                            let err_msg = format!("Error calling LLM: {}", e);
-                            tracing::error!("{}", err_msg);
-                            let _ = output_tx.send(SoulProcessOutput::Error(err_msg)).await;
-                            break;
+                        // 分支 B: 收到干预指令（推理与干预竞态）
+                        intervention_opt = intervention_rx.recv() => {
+                            match intervention_opt {
+                                Some(intervention) => {
+                                    let _ = output_tx
+                                        .send(SoulProcessOutput::Interrupted {
+                                            partial_content: full_content.clone(),
+                                            intervention: intervention.clone(),
+                                        })
+                                        .await;
+                                    return StreamResult::Interrupted {
+                                        partial_content: full_content,
+                                        intervention,
+                                    };
+                                }
+                                None => {
+                                    // 干预通道已关闭，继续等待流完成
+                                    continue;
+                                }
+                            }
                         }
                     }
                 }
@@ -351,10 +569,23 @@ impl SoulProcess {
             Err(e) => {
                 let err_msg = format!("Failed to start LLM call: {}", e);
                 tracing::error!("{}", err_msg);
-                let _ = output_tx.send(SoulProcessOutput::Error(err_msg)).await;
+                StreamResult::Error(err_msg)
             }
         }
     }
+}
+
+/// 流式推理的返回结果
+enum StreamResult {
+    /// 推理正常完成
+    Completed,
+    /// 被干预中断（携带部分内容）
+    Interrupted {
+        partial_content: String,
+        intervention: Intervention,
+    },
+    /// 发生错误
+    Error(String),
 }
 
 /// 魂进程管理器
@@ -394,27 +625,27 @@ impl SoulProcessManager {
             }
         }
 
-        let (process, rx) = SoulProcess::new(profile);
+        let (process, rx, intervention_rx) = SoulProcess::new(profile);
         let (output_tx, output_rx) = mpsc::channel(256);
         let arc_process = Arc::new(process);
-        
+
         // 保存进程和输出通道
         {
             let mut processes = self.processes.write().await;
             processes.insert(soul_name.clone(), arc_process.clone());
-            
+
             let mut channels = self.output_channels.write().await;
             channels.insert(soul_name.clone(), output_tx.clone());
         }
-        
+
         // 设置状态为活跃
         *arc_process.state.write().await = SoulProcessState::Active;
-        
-        // 启动任务
+
+        // 启动任务 — 传入干预通道使推理与干预可竞态
         let gateway = self.gateway.clone();
         let process_clone = arc_process.clone();
         tokio::spawn(async move {
-            process_clone.run(rx, gateway, output_tx).await;
+            process_clone.run(rx, intervention_rx, gateway, output_tx).await;
         });
 
         Ok((arc_process, output_rx))
@@ -446,6 +677,30 @@ impl SoulProcessManager {
             result.push((name.clone(), process.get_state().await));
         }
         result
+    }
+
+    /// 向指定魂进程注入干预指令
+    ///
+    /// 若魂正在推理中，干预将通过 tokio::select! 竞态
+    /// 被捕获并注入上下文，触发重新推理。
+    pub async fn send_intervention(
+        &self,
+        soul_name: &str,
+        intervention: Intervention,
+    ) -> Result<()> {
+        let process = self
+            .get_process(soul_name)
+            .await
+            .ok_or_else(|| foundation::FoundationError::SoulNotFound(soul_name.to_string()))?;
+        process
+            .intervention_tx
+            .send(intervention)
+            .await
+            .map_err(|e| foundation::FoundationError::InvalidState(format!(
+                "Failed to send intervention to {}: {}",
+                soul_name, e
+            )))?;
+        Ok(())
     }
 }
 

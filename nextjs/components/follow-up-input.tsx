@@ -125,6 +125,11 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
     const question = followUp.trim();
     log("Starting follow-up with question:", question);
 
+    setMsgHistory((prev) => {
+      const next = [question, ...prev.filter((m) => m !== question)].slice(0, 50);
+      return next;
+    });
+    setMsgHistoryIdx(-1);
     setFollowUp("");
     setSending(true);
     sendingRef.current = true;
@@ -228,6 +233,9 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
       localStorage.removeItem(`followup-draft-${sessionId}`);
     }
   }, [followUp, sessionId]);
+
+  const [msgHistory, setMsgHistory] = useState<string[]>([]);
+  const [msgHistoryIdx, setMsgHistoryIdx] = useState(-1);
 
   const dismissError = () => setError("");
 
@@ -346,15 +354,45 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
       <div className="sticky bottom-0 bg-background/95 backdrop-blur-sm border-t pt-4 pb-2 mt-4">
         <div className="flex gap-2 items-end">
           <Textarea
-            placeholder="输入您的追问... (按 Enter 发送，Shift+Enter 换行)"
+            placeholder="输入您的追问... (按 Enter 发送，Shift+Enter 换行，↑ 历史)"
             value={followUp}
-            onChange={(e) => setFollowUp(e.target.value)}
+            onChange={(e) => {
+              setFollowUp(e.target.value);
+              setMsgHistoryIdx(-1);
+            }}
             rows={2}
             className="flex-1 resize-none transition-all focus:ring-2 focus:ring-primary/20"
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 onFollowUp();
+                return;
+              }
+              if (e.key === "ArrowUp" && msgHistory.length > 0) {
+                const textarea = e.currentTarget as HTMLTextAreaElement;
+                if (textarea.selectionStart !== textarea.selectionEnd) return;
+                if (msgHistoryIdx === -1) {
+                  const nextIdx = 0;
+                  setMsgHistoryIdx(nextIdx);
+                  setFollowUp(msgHistory[nextIdx]);
+                } else if (msgHistoryIdx < msgHistory.length - 1) {
+                  const nextIdx = msgHistoryIdx + 1;
+                  setMsgHistoryIdx(nextIdx);
+                  setFollowUp(msgHistory[nextIdx]);
+                }
+                e.preventDefault();
+                return;
+              }
+              if (e.key === "ArrowDown" && msgHistoryIdx >= 0) {
+                if (msgHistoryIdx === 0) {
+                  setMsgHistoryIdx(-1);
+                  setFollowUp("");
+                } else {
+                  const nextIdx = msgHistoryIdx - 1;
+                  setMsgHistoryIdx(nextIdx);
+                  setFollowUp(msgHistory[nextIdx]);
+                }
+                e.preventDefault();
               }
             }}
             disabled={sending}

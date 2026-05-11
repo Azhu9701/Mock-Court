@@ -53,6 +53,11 @@ function classifyLogType(line: string): "key" | "soul" | "review" | "other" {
 
 export function PossessionEntry() {
   const [task, setTask] = useState("");
+  const [taskHistory, setTaskHistory] = useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try { return JSON.parse(localStorage.getItem("possess-task-history") || "[]"); } catch { return []; }
+  });
+  const [taskHistoryIdx, setTaskHistoryIdx] = useState(-1);
   const [phase, setPhase] = useState<Phase>("input");
   const [log, setLog] = useState<string[]>([]);
   const [error, setError] = useState("");
@@ -140,6 +145,15 @@ export function PossessionEntry() {
 
   const onStart = async () => {
     if (!canStart || phase !== "input") return;
+
+    // 保存到历史
+    const taskText = task.trim();
+    setTaskHistory((prev) => {
+      const next = [taskText, ...prev.filter((t) => t !== taskText)].slice(0, 50);
+      localStorage.setItem("possess-task-history", JSON.stringify(next));
+      return next;
+    });
+    setTaskHistoryIdx(-1);
     
     console.log("=== 开始讨论流程");
     setIsCancelled(false);
@@ -369,8 +383,39 @@ export function PossessionEntry() {
               <Textarea
                 placeholder="描述你的问题或任务..."
                 value={task}
-                onChange={(e) => setTask(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onStart(); }}
+                onChange={(e) => {
+                  setTask(e.target.value);
+                  setTaskHistoryIdx(-1);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { onStart(); return; }
+                  if (e.key === "ArrowUp" && taskHistory.length > 0) {
+                    const textarea = e.currentTarget as HTMLTextAreaElement;
+                    if (textarea.selectionStart !== textarea.selectionEnd) return;
+                    if (taskHistoryIdx === -1) {
+                      const nextIdx = 0;
+                      setTaskHistoryIdx(nextIdx);
+                      setTask(taskHistory[nextIdx]);
+                    } else if (taskHistoryIdx < taskHistory.length - 1) {
+                      const nextIdx = taskHistoryIdx + 1;
+                      setTaskHistoryIdx(nextIdx);
+                      setTask(taskHistory[nextIdx]);
+                    }
+                    e.preventDefault();
+                    return;
+                  }
+                  if (e.key === "ArrowDown" && taskHistoryIdx >= 0) {
+                    if (taskHistoryIdx === 0) {
+                      setTaskHistoryIdx(-1);
+                      setTask("");
+                    } else {
+                      const nextIdx = taskHistoryIdx - 1;
+                      setTaskHistoryIdx(nextIdx);
+                      setTask(taskHistory[nextIdx]);
+                    }
+                    e.preventDefault();
+                  }
+                }}
                 rows={5}
                 data-testid="task-input"
                 className="resize-none transition-all focus:ring-2 focus:ring-primary/20"

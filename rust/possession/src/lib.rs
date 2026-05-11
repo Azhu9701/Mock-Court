@@ -6,6 +6,7 @@ pub mod tools;
 pub mod triage;
 mod ws;
 pub mod cross_detector;
+pub mod semantic_collision;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
