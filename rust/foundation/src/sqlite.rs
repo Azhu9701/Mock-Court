@@ -61,7 +61,10 @@ impl SqliteDb {
                 task_summary    TEXT NOT NULL,
                 effectiveness   TEXT NOT NULL,
                 notes           TEXT NOT NULL,
-                created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                prompt_tokens   INTEGER NOT NULL DEFAULT 0,
+                completion_tokens INTEGER NOT NULL DEFAULT 0,
+                total_tokens    INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS soul_revisions (
@@ -134,6 +137,13 @@ impl SqliteDb {
             );
             CREATE INDEX IF NOT EXISTS idx_llm_cache_created ON llm_cache(created_at);",
         )?;
+
+        // Migrate: add token columns to existing call_records tables (ignore error if already exists)
+        for col in &["prompt_tokens", "completion_tokens", "total_tokens"] {
+            let sql = format!("ALTER TABLE call_records ADD COLUMN {} INTEGER NOT NULL DEFAULT 0", col);
+            let _ = conn.execute_batch(&sql);
+        }
+
         Ok(())
     }
 
@@ -354,7 +364,7 @@ impl SqliteDb {
     pub fn insert_call_record(&self, record: &CallRecord) -> Result<()> {
         self.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO call_records (id, session_id, soul_name, mode, task_summary, effectiveness, notes, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT OR REPLACE INTO call_records (id, session_id, soul_name, mode, task_summary, effectiveness, notes, created_at, prompt_tokens, completion_tokens, total_tokens) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     record.id,
                     record.session_id,
@@ -364,6 +374,9 @@ impl SqliteDb {
                     effectiveness_to_str(&record.effectiveness),
                     record.notes,
                     record.created_at.to_rfc3339(),
+                    record.usage.prompt_tokens,
+                    record.usage.completion_tokens,
+                    record.usage.total_tokens,
                 ],
             )?;
             Ok(())
@@ -372,7 +385,7 @@ impl SqliteDb {
 
     pub fn query_call_records(&self, filter: &CallFilter) -> Result<Vec<CallRecord>> {
         self.with_conn(|conn| {
-            let mut sql = String::from("SELECT id, session_id, soul_name, mode, task_summary, effectiveness, notes, created_at FROM call_records WHERE 1=1");
+            let mut sql = String::from("SELECT id, session_id, soul_name, mode, task_summary, effectiveness, notes, created_at, prompt_tokens, completion_tokens, total_tokens FROM call_records WHERE 1=1");
             let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
 
             if let Some(ref soul) = filter.soul_name {
@@ -410,6 +423,11 @@ impl SqliteDb {
                     self_negation: None,
                     empty_chair: None,
                     user_feedback: None,
+                    usage: UsageStats {
+                        prompt_tokens: row.get::<_, u32>(8).unwrap_or(0),
+                        completion_tokens: row.get::<_, u32>(9).unwrap_or(0),
+                        total_tokens: row.get::<_, u32>(10).unwrap_or(0),
+                    },
                 })
             })?;
 
