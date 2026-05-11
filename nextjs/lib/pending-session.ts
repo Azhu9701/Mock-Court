@@ -6,12 +6,12 @@ export interface PendingSessionMeta {
   mode: string | null;
   matchedSouls: { name: string; field: string; ismism_code: string; rationale: string }[];
   review: { verdict: string; checks: string[]; notes: string; reviewer: string } | null;
-  phases: string[];        // already completed phases
+  phases: string[];
   searchTopic: boolean;
   judgment: string;
   worry: string;
   unknown: string;
-  needsAnalysis: boolean;  // true → session page should call analyzeTask
+  needsAnalysis: boolean;
 }
 
 export function storePendingSession(meta: PendingSessionMeta) {

@@ -1,4 +1,3 @@
-import { Suspense } from "react";
 import {
   fetchSummonStats,
   fetchModeDistribution,
@@ -10,39 +9,10 @@ import { StatCard } from "@/components/stat-card";
 import { ModeBarChart, SoulEffectivenessTable } from "@/components/dashboard-charts";
 import { AlertPanel } from "@/components/alert-panel";
 import { SessionTimeline } from "@/components/session-timeline";
-import { Skeleton } from "@/components/ui/skeleton";
 
 export const dynamic = "force-dynamic";
 
-export default function DashboardPage() {
-  return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">仪表盘</h1>
-        <p className="text-sm text-muted-foreground mt-1">万民幡运行概览</p>
-      </div>
-      <Suspense fallback={<DashboardSkeleton />}>
-        <DashboardAsync />
-      </Suspense>
-    </div>
-  );
-}
-
-function DashboardSkeleton() {
-  return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <Skeleton key={i} className="h-24 rounded-xl" />
-        ))}
-      </div>
-      <Skeleton className="h-64 rounded-xl" />
-      <Skeleton className="h-40 rounded-xl" />
-    </div>
-  );
-}
-
-async function DashboardAsync() {
+export default async function DashboardPage() {
   const [stats, modeDist, unsummoned, lowEff, sessions] = await Promise.all([
     fetchSummonStats(),
     fetchModeDistribution(),
@@ -63,7 +33,11 @@ async function DashboardAsync() {
   const alertCount = unsummoned.length + lowEff.length;
 
   return (
-    <>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold">仪表盘</h1>
+        <p className="text-sm text-muted-foreground mt-1">万民幡运行概览</p>
+      </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="总召唤次数"
@@ -96,6 +70,6 @@ async function DashboardAsync() {
       </div>
       <AlertPanel unsummoned={unsummoned} lowEffectiveness={lowEff} />
       <SessionTimeline sessions={sessions} />
-    </>
+    </div>
   );
 }

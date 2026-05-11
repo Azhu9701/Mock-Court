@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { X, Bot, ExternalLink } from "lucide-react";
@@ -20,13 +20,13 @@ function cleanContent(content: string): string {
 }
 
 export function ArticleModal({ isOpen, onClose, title, ismismCode, content }: ArticleModalProps) {
-  const cleanedContent = cleanContent(content);
+  const cleanedContent = useMemo(() => cleanContent(content), [content]);
+
+  const handleEscape = useCallback((e: KeyboardEvent) => {
+    if (e.key === "Escape") onClose();
+  }, [onClose]);
 
   useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    
     if (isOpen) {
       document.body.style.overflow = "hidden";
       document.addEventListener("keydown", handleEscape);
@@ -36,7 +36,11 @@ export function ArticleModal({ isOpen, onClose, title, ismismCode, content }: Ar
       document.body.style.overflow = "";
       document.removeEventListener("keydown", handleEscape);
     };
-  }, [isOpen, onClose]);
+  }, [isOpen, handleEscape]);
+
+  const markdownElement = useMemo(() => (
+    <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanedContent}</ReactMarkdown>
+  ), [cleanedContent]);
 
   if (!isOpen) return null;
 
@@ -204,7 +208,7 @@ export function ArticleModal({ isOpen, onClose, title, ismismCode, content }: Ar
               }
             `}</style>
             
-            <ReactMarkdown remarkPlugins={[remarkGfm]} children={cleanedContent} />
+            {markdownElement}
           </article>
         </div>
 

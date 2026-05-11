@@ -18,36 +18,27 @@ async function apiRequest<T>(
   const url = `${API_BASE}${endpoint}`;
   const opName = operation || endpoint;
 
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) {
-      await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 500));
-    }
+  const res = await fetch(url, fetchOptions);
+
+  if (!res.ok) {
+    let errorDetail = res.statusText;
     try {
-      const res = await fetch(url, fetchOptions);
+      const errorData = await res.json();
+      errorDetail = errorData.message || errorData.error || errorDetail;
+    } catch { }
 
-      if (!res.ok) {
-        let errorDetail = res.statusText;
-        try {
-          const errorData = await res.json();
-          errorDetail = errorData.message || errorData.error || errorDetail;
-        } catch { }
-
-        const error = new Error(`API request failed: ${opName} - ${errorDetail}`) as ApiError;
-        error.status = res.status;
-        error.url = url;
-        error.operation = opName;
-        throw error;
-      }
-
-      return res.json() as T;
-    } catch (e: any) {
-      lastErr = e;
-      if (e.status && e.status < 500) throw e; // 4xx — don't retry
-      // Network errors or 5xx — retry
-    }
+    const error = new Error(`API request failed: ${opName} - ${errorDetail}`) as ApiError;
+    error.status = res.status;
+    error.url = url;
+    error.operation = opName;
+    throw error;
   }
-  throw lastErr;
+
+  if (res.status === 204) {
+    return undefined as T;
+  }
+
+  return res.json();
 }
 
 export interface SoulListEntry {
@@ -384,14 +375,64 @@ export interface AnalyzeResponse {
   task_cards?: Record<string, string>;
 }
 
-export async function analyzeTask(task: string, reviewer?: string, signal?: AbortSignal): Promise<AnalyzeResponse> {
-  return apiRequest<AnalyzeResponse>('/possess/analyze', {
+export interface AnalyzeStreamEvent {
+  phase: "classifying" | "matched" | "reviewing" | "review_done" | "adjusting" | "practice_opening" | "done";
+  entry_type?: string;
+  souls?: { name: string; field: string; ismism_code: string; rationale: string }[];
+  mode?: string;
+  reviewer?: string;
+  review?: { verdict: string; checks: string[]; notes: string; reviewer: string };
+  response?: AnalyzeResponse;
+}
+
+export async function analyzeTask(
+  task: string,
+  reviewer?: string,
+  signal?: AbortSignal,
+  onEvent?: (event: AnalyzeStreamEvent) => void,
+): Promise<AnalyzeResponse> {
+  const url = `${API_BASE}/possess/analyze`;
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ task, reviewer }),
-    operation: 'analyzeTask',
     signal,
   });
+
+  if (!res.ok) {
+    let errorDetail = res.statusText;
+    try { const ed = await res.json(); errorDetail = ed.message || ed.error || errorDetail; } catch {}
+    throw new Error(`API request failed: analyzeTask - ${errorDetail}`);
+  }
+
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResponse: AnalyzeResponse | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      try {
+        const event: AnalyzeStreamEvent = JSON.parse(trimmed.slice(5).trim());
+        if (event.phase === "done" && event.response) {
+          finalResponse = event.response;
+        }
+        onEvent?.(event);
+      } catch {}
+    }
+  }
+
+  if (!finalResponse) throw new Error("analyzeTask: stream ended without done event");
+  return finalResponse;
 }
 
 export interface StartPossessionResponse {

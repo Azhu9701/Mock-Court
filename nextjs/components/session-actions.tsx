@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Pencil, Trash2, Check, X, Download } from "lucide-react";
 import { ConfirmButton } from "@/components/ui/confirm-button";
 import { renameSession, deleteSession, exportSessionMarkdown } from "@/lib/api";
+import { triggerSessionsUpdate } from "@/components/sidebar-sessions";
 
 export default function SessionActions({ sessionId, title }: { sessionId: string; title: string }) {
   const router = useRouter();
@@ -17,7 +18,7 @@ export default function SessionActions({ sessionId, title }: { sessionId: string
 
   const onRename = async () => {
     if (!newTitle.trim()) return;
-    try { await renameSession(sessionId, newTitle.trim()); setEditing(false); router.refresh(); }
+    try { await renameSession(sessionId, newTitle.trim()); triggerSessionsUpdate(); setEditing(false); router.refresh(); }
     catch (e: any) { setError(e.message); }
   };
 
@@ -52,7 +53,7 @@ export default function SessionActions({ sessionId, title }: { sessionId: string
         icon={<Trash2 className="h-4 w-4 text-red-500" />}
         confirmText="确认删除"
         title="删除会话"
-        onConfirm={async () => { await deleteSession(sessionId); router.push("/sessions"); }}
+        onConfirm={async () => { await deleteSession(sessionId); triggerSessionsUpdate(); router.push("/sessions"); }}
       />
       {error && <span className="text-xs text-red-500 ml-2">{error}</span>}
     </div>

@@ -492,4 +492,47 @@ mod tests {
         assert_eq!(deserialized.from_soul, "A");
         assert_eq!(deserialized.to_soul, "B");
     }
+
+    #[test]
+    fn test_empty_buffer_no_collision() {
+        let detector = CrossDetector::new();
+        detector.register_soul("A".to_string());
+        detector.register_soul("B".to_string());
+
+        let collisions = detector.detect_collisions();
+        assert!(collisions.is_empty());
+
+        let stored = detector.get_collisions();
+        assert!(stored.is_empty());
+    }
+
+    #[test]
+    fn test_same_soul_no_self_collision() {
+        let detector = CrossDetector::new();
+        detector.register_soul("A".to_string());
+        detector.add_token("A", "这个方案很好");
+        detector.add_token("A", "但是也有不足");
+
+        let collisions = detector.detect_collisions();
+        assert!(collisions.is_empty());
+    }
+
+    #[test]
+    fn test_multiple_collision_types() {
+        let detector = CrossDetector::new();
+        detector.register_soul("马克思".to_string());
+        detector.register_soul("费曼".to_string());
+
+        detector.add_token("马克思", "剩余价值理论是科学的，但是剩余价值理论有缺陷");
+        detector.add_token("费曼", "这个假设有问题，需要重新审视");
+
+        let collisions = detector.detect_collisions();
+        assert!(!collisions.is_empty());
+
+        let has_contradiction = collisions.iter().any(|c| c.collision_type == CollisionType::Contradiction);
+        let has_premise = collisions.iter().any(|c| c.collision_type == CollisionType::PremiseDisagreement);
+
+        assert!(has_contradiction, "Expected at least one Contradiction collision");
+        assert!(has_premise, "Expected at least one PremiseDisagreement collision");
+    }
 }

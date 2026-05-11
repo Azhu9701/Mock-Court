@@ -104,7 +104,7 @@ const SYNTHESIS_SYSTEM_PROMPT: &str = r#"你是辩证综合官。你是独立子
 pub struct PromptBuilder;
 
 /// 动态任务上下文 — 对应 prompt-builder.py 的 --task / --role / --facts / --judgment 等参数。
-/// 静态身份信息（姓名、坐标、summon_prompt、skills 等）从 YAML/SoulProfile 读取，不在此结构体中。
+/// 静态身份信息（姓名、坐标、summon_prompt、skills 等）从 SoulProfile（由数据库/registry 加载）读取，不在此结构体中。
 #[derive(Debug, Clone, Default)]
 pub struct DynamicContext {
     /// --task   用户提出的总任务/问题
@@ -220,7 +220,7 @@ impl PromptBuilder {
         self.build_summon(soul, &ctx, &tier, true)
     }
 
-    // ── 静态身份（System Message）—— 从 YAML / SoulProfile 组装 ──
+    // ── 静态身份（System Message）—— 从 SoulProfile（数据库/registry）组装 ──
 
     fn build_soul_identity(soul: &SoulProfile, tier: &ModelTier) -> String {
         let mut c = format!(

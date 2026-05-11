@@ -1,11 +1,14 @@
 use std::sync::Arc;
 
 use axum::extract::{Multipart, Path, State};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use foundation::{LLMRequest, CallConfig, Prompt, PromptMessage, Provider, SoulListEntry, SoulProfile};
 use possession::PossessionInput;
 use serde::{Deserialize, Serialize};
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_stream::StreamExt as _;
 
 use crate::error::{map_api_error, ApiError};
 use crate::ocr;
@@ -133,7 +136,6 @@ fn build_soul_match(js: &serde_json::Value, all_souls: &[SoulListEntry]) -> Opti
         rationale: js["rationale"].as_str().unwrap_or("").into(),
     })
 }
-
 async fn llm_call_json(state: &AppState, provider: Provider, system_prompt: Option<&str>, user_prompt: &str, temp: f64, max_tokens: u32, model: Option<&str>) -> Result<serde_json::Value, (axum::http::StatusCode, Json<ApiError>)> {
     let mut messages = Vec::new();
     if let Some(sys) = system_prompt {
@@ -276,201 +278,263 @@ fn spawn_banner_lord_review(
 async fn analyze_task(
     State(state): State<Arc<AppState>>,
     Json(body): Json<AnalyzeRequest>,
-) -> Result<Json<AnalyzeResponse>, (axum::http::StatusCode, Json<ApiError>)> {
-    // Safely truncate to avoid char boundary errors
-    let trunc_len = body.task.len().min(50);
-    let safe_idx = (0..=trunc_len).rev().find(|&i| body.task.is_char_boundary(i)).unwrap_or(0);
-    tracing::info!("Starting task analysis for: {}", &body.task[..safe_idx]);
-    
-    // Entry classification with improved detection
-    let has_specific = body.task.contains("我") && (body.task.contains("做了") || body.task.contains("正在") || body.task.contains("经历过") || body.task.contains("我公司") || body.task.contains("我的项目") || body.task.contains("我的工厂"));
-    let has_first_person = body.task.starts_with("我");
-    let has_concrete = !body.task.contains("通常") && !body.task.contains("一般") && (body.task.contains("上次") || body.task.contains("最近") || body.task.contains("今天") || body.task.contains("昨天") || body.task.contains("这周"));
-    let score = [has_specific, has_first_person, has_concrete].iter().filter(|&&x| x).count();
+) -> Sse<UnboundedReceiverStream<Result<Event, std::convert::Infallible>>> {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<Event, std::convert::Infallible>>();
 
-    tracing::debug!("Practice opening score: {}", score);
+    tokio::spawn(async move {
+        let send = |data: String| {
+            let _ = tx.send(Ok(Event::default().data(data)));
+        };
 
-    if score >= 2 {
-        tracing::info!("Practice opening detected");
-        return Ok(Json(AnalyzeResponse { 
-            entry_type: "practice_opening".into(), 
-            matched_souls: vec![], 
-            recommended_mode: "practice_opening".into(), 
-            review: ReviewResult { 
-                verdict: "practice_opening".into(), 
-                checks: vec![], 
-                notes: String::new(), 
-                reviewer: String::new() 
-            },
-            task_cards: Default::default(),
-        }));
-    }
+        let trunc_len = body.task.len().min(50);
+        let safe_idx = (0..=trunc_len).rev().find(|&i| body.task.is_char_boundary(i)).unwrap_or(0);
+        tracing::info!("Starting task analysis for: {}", &body.task[..safe_idx]);
 
-    let provider = pick_provider(&state)?;
-    tracing::debug!("Using provider: {:?}", provider);
-    
-    let all_souls = state.registry.list_souls(&foundation::IsmismFilter::default()).map_err(map_api_error)?;
-    let task_lower = body.task.to_lowercase();
+        // Entry classification
+        let has_specific = body.task.contains("我") && (body.task.contains("做了") || body.task.contains("正在") || body.task.contains("经历过") || body.task.contains("我公司") || body.task.contains("我的项目") || body.task.contains("我的工厂"));
+        let has_first_person = body.task.starts_with("我");
+        let has_concrete = !body.task.contains("通常") && !body.task.contains("一般") && (body.task.contains("上次") || body.task.contains("最近") || body.task.contains("今天") || body.task.contains("昨天") || body.task.contains("这周"));
+        let score = [has_specific, has_first_person, has_concrete].iter().filter(|&&x| x).count();
 
-    // Pre-filter: score by trigger keyword overlap, include self_declare boundary info
-    let soul_list: Vec<String> = all_souls.iter().map(|s| {
-        let kw_hits = s.trigger_keywords.iter().filter(|kw| task_lower.contains(&kw.to_lowercase())).count();
-        let kws: Vec<&str> = s.trigger_keywords.iter().take(4).map(|x| x.as_str()).collect();
-        let declare_short: String = s.self_declare.chars().take(60).collect();
-        format!("- {} field={} code={} kw_hits={} kws=[{}] self=\"{}\"",
-            s.name, s.field, s.ismism_code, kw_hits, kws.join(","), declare_short)
-    }).collect();
+        if score >= 2 {
+            send(serde_json::json!({
+                "phase": "practice_opening"
+            }).to_string());
+            send(serde_json::json!({
+                "phase": "done",
+                "response": {
+                    "entry_type": "practice_opening",
+                    "matched_souls": serde_json::json!([]),
+                    "recommended_mode": "practice_opening",
+                    "review": { "verdict": "practice_opening", "checks": [], "notes": "", "reviewer": "" },
+                    "task_cards": {}
+                }
+            }).to_string());
+            return;
+        }
 
-    let provider3 = provider.clone();
+        let entry_type = if score == 1 { "hybrid" } else { "conventional" };
 
-    // ── Step 1: Match (matcher agent) ──
-    tracing::info!("Step 1: Matching souls");
-    let match_prompt = format!("## 任务\n{}\n\n## 魂列表（含触发关键词命中数和 self_declare 边界声明）\n{}\n\n## 指令\n根据任务和魂的触发关键词命中数、边界声明，选择最匹配的2-5个魂。优先选 kw_hits 高的。每个魂的 self_declare 声明了该魂的能力边界——如果任务超出边界则不应选择。返回JSON：{{\"souls\":[{{\"name\":\"魂名\",\"rationale\":\"理由\"}}],\"mode\":\"single|conference|debate\"}}", body.task, soul_list.join("\n"));
-    let matched = llm_call_json(&state, provider.clone(), None, &match_prompt, 0.3, 4096, None).await?;
+        let provider = match pick_provider(&state) {
+            Ok(p) => p,
+            Err(_) => { return; }
+        };
 
-    let souls: Vec<SoulMatch> = matched["souls"].as_array()
-        .map(|arr| arr.iter().filter_map(|s| build_soul_match(s, &all_souls)).collect())
-        .unwrap_or_default();
-    let mode = matched["mode"].as_str().unwrap_or("conference").to_string();
-    
-    tracing::info!("Matched {} souls, mode: {}", souls.len(), mode);
+        let all_souls = match state.registry.list_souls(&foundation::IsmismFilter::default()) {
+            Ok(s) => s,
+            Err(_) => { return; }
+        };
+        let task_lower = body.task.to_lowercase();
 
-    // ── Step 2: 幡主审查 + 差异化任务分派 (independent sub-agent via tokio::spawn) ──
-    tracing::info!("Step 2: Spawning banner lord review sub-agent");
-    let reviewer_name = body.reviewer.clone()
-        .unwrap_or_else(|| std::env::var("AIONUI_REVIEWER_SOUL").unwrap_or_else(|_| "未明子".to_string()));
-    let mut task_cards: std::collections::HashMap<String, String> = Default::default();
+        // ── Phase: classifying ──
+        send(serde_json::json!({ "phase": "classifying", "entry_type": entry_type }).to_string());
 
-    let (verdict, checks, notes) = if let Ok(banner_lord) = state.registry.get_soul(&reviewer_name) {
-        let candidate_profiles: Vec<SoulProfile> = souls.iter()
-            .filter_map(|s| state.registry.get_soul(&s.name).ok())
+        // ── Step 1: Algorithmic matching ──
+        let ft_results = state.registry.search_souls(&body.task).unwrap_or_default();
+        let ft_scores: std::collections::HashMap<String, f64> = ft_results.iter()
+            .map(|m| (m.entry.name.clone(), m.relevance))
             .collect();
 
-        let review_handle = spawn_banner_lord_review(
-            state.engine.gateway().clone(),
-            banner_lord,
-            body.task.clone(),
-            candidate_profiles,
-            body.judgment.clone().unwrap_or_default(),
-            body.worry.clone().unwrap_or_default(),
-            body.unknown.clone().unwrap_or_default(),
-        );
+        let mut scored: Vec<(&SoulListEntry, f64, usize)> = all_souls.iter().map(|s| {
+            let kw_hits = s.trigger_keywords.iter()
+                .filter(|kw| task_lower.contains(&kw.to_lowercase()))
+                .count() as usize;
+            let ft_score = ft_scores.get(&s.name).copied().unwrap_or(0.0);
+            let composite = ft_score * 10.0 + (kw_hits as f64);
+            (s, composite, kw_hits)
+        }).collect();
 
-        let result = match review_handle.await {
-            Ok(Ok(json)) => json,
-            Ok(Err(e)) => {
-                tracing::error!("Banner lord review sub-agent failed: {}", e);
-                serde_json::Value::default()
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.0.summon_count.cmp(&a.0.summon_count)));
+
+        let top_n = 8usize.min(scored.len()).max(2);
+        let souls: Vec<SoulMatch> = scored.iter().take(top_n).map(|(s, composite, kw)| {
+            let rationale = if *kw > 0 {
+                format!("命中 {} 个关键词, 全文相关性 {:.1}", kw, composite)
+            } else {
+                format!("全文相关性 {:.1}", composite)
+            };
+            SoulMatch {
+                name: s.name.clone(),
+                field: s.field.clone(),
+                ismism_code: s.ismism_code.clone(),
+                rationale,
             }
-            Err(e) => {
-                tracing::error!("Banner lord review sub-agent panicked: {}", e);
-                serde_json::Value::default()
-            }
+        }).collect();
+
+        let mode = if souls.len() <= 1 {
+            "single".to_string()
+        } else {
+            let unique_fields: std::collections::HashSet<&str> = souls.iter()
+                .filter_map(|s| if s.field.is_empty() { None } else { Some(s.field.as_str()) })
+                .collect();
+            if unique_fields.len() >= 3 { "debate".to_string() } else { "conference".to_string() }
         };
 
-        // Parse task cards
-        if let Some(cards) = result["task_cards"].as_object() {
-            for (k, v) in cards {
-                if let Some(val) = v.as_str() {
-                    task_cards.insert(k.clone(), val.to_string());
+        // ── Phase: matched ──
+        send(serde_json::json!({
+            "phase": "matched",
+            "souls": souls.iter().map(|s| serde_json::json!({
+                "name": s.name, "field": s.field, "ismism_code": s.ismism_code, "rationale": s.rationale,
+            })).collect::<Vec<_>>(),
+            "mode": mode,
+        }).to_string());
+
+        // ── Step 2: Banner lord review ──
+        let reviewer_name = body.reviewer.clone()
+            .unwrap_or_else(|| std::env::var("AIONUI_REVIEWER_SOUL").unwrap_or_else(|_| "未明子".to_string()));
+        let mut task_cards: std::collections::HashMap<String, String> = Default::default();
+
+        // ── Phase: reviewing (stream before waiting for LLM) ──
+        send(serde_json::json!({
+            "phase": "reviewing",
+            "reviewer": reviewer_name,
+        }).to_string());
+
+        let (verdict, checks, notes) = if let Ok(banner_lord) = state.registry.get_soul(&reviewer_name) {
+            let candidate_profiles: Vec<SoulProfile> = souls.iter()
+                .filter_map(|s| state.registry.get_soul(&s.name).ok())
+                .collect();
+
+            let review_handle = spawn_banner_lord_review(
+                state.engine.gateway().clone(),
+                banner_lord,
+                body.task.clone(),
+                candidate_profiles,
+                body.judgment.clone().unwrap_or_default(),
+                body.worry.clone().unwrap_or_default(),
+                body.unknown.clone().unwrap_or_default(),
+            );
+
+            let result = match review_handle.await {
+                Ok(Ok(json)) => json,
+                Ok(Err(e)) => {
+                    tracing::error!("Banner lord review sub-agent failed: {}", e);
+                    serde_json::Value::default()
+                }
+                Err(e) => {
+                    tracing::error!("Banner lord review sub-agent panicked: {}", e);
+                    serde_json::Value::default()
+                }
+            };
+
+            if let Some(cards) = result["task_cards"].as_object() {
+                for (k, v) in cards {
+                    if let Some(val) = v.as_str() {
+                        task_cards.insert(k.clone(), val.to_string());
+                    }
                 }
             }
-        }
-        let missing_perspectives: Vec<String> = result["missing_perspectives"].as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-            .unwrap_or_default();
-        let boundary_risks: Vec<String> = result["boundary_risks"].as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-            .unwrap_or_default();
+            let missing_perspectives: Vec<String> = result["missing_perspectives"].as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let boundary_risks: Vec<String> = result["boundary_risks"].as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
 
-        let v = result["verdict"].as_str().unwrap_or("pass").to_string();
-        let c: Vec<String> = result["checks"].as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-            .unwrap_or_default();
-        let n = if !missing_perspectives.is_empty() {
-            format!("{} | 缺失视角：{} | 边界风险：{}", 
-                result["notes"].as_str().unwrap_or(""),
-                missing_perspectives.join("、"),
-                boundary_risks.join("、"))
+            let v = result["verdict"].as_str().unwrap_or("pass").to_string();
+            let c: Vec<String> = result["checks"].as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let n = if !missing_perspectives.is_empty() {
+                format!("{} | 缺失视角：{} | 边界风险：{}",
+                    result["notes"].as_str().unwrap_or(""),
+                    missing_perspectives.join("、"),
+                    boundary_risks.join("、"))
+            } else {
+                result["notes"].as_str().unwrap_or("").to_string()
+            };
+            (v, c, n)
         } else {
-            result["notes"].as_str().unwrap_or("").to_string()
+            ("pass".to_string(), vec!["审查官不可用，默认通过".into()], String::new())
         };
-        (v, c, n)
-    } else {
-        tracing::warn!("Reviewer soul not found, defaulting to pass");
-        ("pass".to_string(), vec!["审查官不可用，默认通过".into()], String::new())
-    };
 
-    tracing::info!("Review verdict: {}, task cards for {} souls", verdict, task_cards.len());
+        // ── Phase: review_done ──
+        send(serde_json::json!({
+            "phase": "review_done",
+            "review": {
+                "verdict": verdict,
+                "checks": checks,
+                "notes": notes,
+                "reviewer": reviewer_name,
+            }
+        }).to_string());
 
-    // ── Step 3: Apply Review Verdict ──
-    let final_souls = if verdict == "pass" {
-        souls
-    } else {
-        tracing::info!("Step 3: Adjusting soul combination based on review");
-        let adjustment_prompt = format!(
-            "## 任务\n{}\n\n## 当前魂组合\n{}\n\n## 幡主审查结果\n裁决：{}\n{}\n备注：{}\n\n## 指令\n根据审查结果调整魂组合。如果是条件通过——增删魂以满足约束。如果是拒绝——完全重新匹配。\n返回JSON：{{\"souls\":[{{\"name\":\"魂名\",\"rationale\":\"调整理由\"}}]}}",
-            body.task,
-            souls.iter().map(|s| format!("- {} [{}] {}", s.name, s.field, s.rationale)).collect::<Vec<_>>().join("\n"),
-            verdict, checks.join("\n"), notes
-        );
-        match llm_call_json(&state, provider3, None, &adjustment_prompt, 0.3, 4096, None).await {
-            Ok(adjusted) => {
-                let adjusted_souls = adjusted["souls"].as_array()
-                    .map(|arr| arr.iter().filter_map(|s| build_soul_match(s, &all_souls)).collect())
-                    .unwrap_or(souls.clone());
-                // Re-assign task cards for adjusted set
-                let souls_changed = adjusted_souls.iter().any(|s| !souls.iter().any(|orig| orig.name == s.name))
-                    || souls.iter().any(|orig| !adjusted_souls.iter().any(|s| s.name == orig.name));
-                if souls_changed && !adjusted_souls.is_empty() {
-                    let adjusted_names: Vec<String> = adjusted_souls.iter().map(|s| s.name.clone()).collect();
-                    let adjusted_profiles: Vec<SoulProfile> = adjusted_souls.iter()
-                        .filter_map(|s| state.registry.get_soul(&s.name).ok())
-                        .collect();
-                    if let Ok(banner_lord) = state.registry.get_soul(&reviewer_name) {
-                        let rs = format!(
-                            "{}你是{}，ismism坐标{}。你作为幡主审查官，为调整后的魂组合分配差异化子问题。",
-                            banner_lord.summon_prompt, banner_lord.name, banner_lord.ismism_code
-                        );
-                        let p_info: Vec<String> = adjusted_profiles.iter().map(|p| {
-                            format!("- {} [{}] ismism={}", p.name, p.field, p.ismism_code)
-                        }).collect();
-                        let ru = format!(
-                            "## 总任务\n{}\n\n## 调整后的魂组合\n{}\n\n为每个魂分配一个只有他能回答好的子问题。\n返回JSON：{{\"task_cards\":{{\"魂名\":\"专属子问题\"}}}}",
-                            body.task, p_info.join("\n")
-                        );
-                        if let Ok(tc) = llm_call_json(&state, provider.clone(), Some(&rs), &ru, 0.3, 4096, None).await {
-                            if let Some(cards) = tc["task_cards"].as_object() {
-                                task_cards.clear();
-                                for (k, v) in cards {
-                                    if let Some(val) = v.as_str() {
-                                        task_cards.insert(k.clone(), val.to_string());
+        // ── Step 3: Apply Review Verdict ──
+        let final_souls = if verdict == "pass" {
+            souls
+        } else {
+            // ── Phase: adjusting ──
+            send(serde_json::json!({ "phase": "adjusting" }).to_string());
+
+            let adjustment_prompt = format!(
+                "## 任务\n{}\n\n## 当前魂组合\n{}\n\n## 幡主审查结果\n裁决：{}\n{}\n备注：{}\n\n## 指令\n根据审查结果调整魂组合。如果是条件通过——增删魂以满足约束。如果是拒绝——完全重新匹配。\n返回JSON：{{\"souls\":[{{\"name\":\"魂名\",\"rationale\":\"调整理由\"}}]}}",
+                body.task,
+                souls.iter().map(|s| format!("- {} [{}] {}", s.name, s.field, s.rationale)).collect::<Vec<_>>().join("\n"),
+                verdict, checks.join("\n"), notes
+            );
+            let provider3 = provider.clone();
+            match llm_call_json(&state, provider3, None, &adjustment_prompt, 0.3, 4096, None).await {
+                Ok(adjusted) => {
+                    let adjusted_souls = adjusted["souls"].as_array()
+                        .map(|arr| arr.iter().filter_map(|s| build_soul_match(s, &all_souls)).collect())
+                        .unwrap_or(souls.clone());
+                    if adjusted_souls.iter().any(|s| !souls.iter().any(|orig| orig.name == s.name))
+                        || souls.iter().any(|orig| !adjusted_souls.iter().any(|s| s.name == orig.name))
+                    {
+                        if !adjusted_souls.is_empty() {
+                            let adjusted_profiles: Vec<SoulProfile> = adjusted_souls.iter()
+                                .filter_map(|s| state.registry.get_soul(&s.name).ok())
+                                .collect();
+                            if let Ok(banner_lord) = state.registry.get_soul(&reviewer_name) {
+                                let rs = format!(
+                                    "{}你是{}，ismism坐标{}。你作为幡主审查官，为调整后的魂组合分配差异化子问题。",
+                                    banner_lord.summon_prompt, banner_lord.name, banner_lord.ismism_code
+                                );
+                                let p_info: Vec<String> = adjusted_profiles.iter().map(|p| {
+                                    format!("- {} [{}] ismism={}", p.name, p.field, p.ismism_code)
+                                }).collect();
+                                let ru = format!(
+                                    "## 总任务\n{}\n\n## 调整后的魂组合\n{}\n\n为每个魂分配一个只有他能回答好的子问题。\n返回JSON：{{\"task_cards\":{{\"魂名\":\"专属子问题\"}}}}",
+                                    body.task, p_info.join("\n")
+                                );
+                                if let Ok(tc) = llm_call_json(&state, provider.clone(), Some(&rs), &ru, 0.3, 4096, None).await {
+                                    if let Some(cards) = tc["task_cards"].as_object() {
+                                        task_cards.clear();
+                                        for (k, v) in cards {
+                                            if let Some(val) = v.as_str() {
+                                                task_cards.insert(k.clone(), val.to_string());
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
+                        adjusted_souls
+                    } else {
+                        souls
                     }
-                    tracing::info!("Re-assigned task cards for {} adjusted souls", adjusted_names.len());
                 }
-                tracing::info!("Adjusted to {} souls", adjusted_souls.len());
-                adjusted_souls
+                Err(_) => souls,
             }
-            Err(e) => {
-                tracing::warn!("Adjustment failed, falling back to original: {:?}", e);
-                souls
+        };
+
+        // ── Phase: done ──
+        send(serde_json::json!({
+            "phase": "done",
+            "response": {
+                "entry_type": entry_type,
+                "matched_souls": final_souls.iter().map(|s| serde_json::json!({
+                    "name": s.name, "field": s.field, "ismism_code": s.ismism_code, "rationale": s.rationale,
+                })).collect::<Vec<_>>(),
+                "recommended_mode": mode,
+                "review": { "verdict": verdict, "checks": checks, "notes": notes, "reviewer": reviewer_name },
+                "task_cards": task_cards,
             }
-        }
-    };
+        }).to_string());
+    });
 
-    tracing::info!("Analysis complete, returning {} souls", final_souls.len());
-
-    Ok(Json(AnalyzeResponse {
-        entry_type: if score == 1 { "hybrid".into() } else { "conventional".into() },
-        matched_souls: final_souls,
-        recommended_mode: mode,
-        review: ReviewResult { verdict, checks, notes, reviewer: reviewer_name.into() },
-        task_cards,
-    }))
+    Sse::new(UnboundedReceiverStream::new(rx)).keep_alive(KeepAlive::default())
 }
 
 fn spawn_follow_up_agent(

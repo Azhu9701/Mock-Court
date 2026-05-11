@@ -132,7 +132,7 @@ export function SoulPanel({
               <p className="line-clamp-2 text-muted-foreground">{firstParagraph}...</p>
             ) : (
               <>
-                <ReactMarkdown remarkPlugins={[remarkGfm]} children={cleanedContent} />
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanedContent}</ReactMarkdown>
                 {isStreaming && <span className="inline-block w-2 h-4 bg-primary animate-pulse ml-0.5 align-middle" />}
               </>
             )}

@@ -81,10 +81,6 @@ export function useWebSocket(sessionId: string) {
   const pendingFlushRef = useRef(false);
   const mountedRef = useRef(true);
   const noEventsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const statusRef = useRef<"connecting" | "streaming" | "done" | "error">("connecting");
-  const connectingRef = useRef(false);
-  const wsIdRef = useRef(0);
 
   // forceTick: counter that React sees — incrementing it triggers a re-render
   // This is the ONLY React state for streaming content, avoiding per-token setState overhead
@@ -95,7 +91,6 @@ export function useWebSocket(sessionId: string) {
   const [synthesis, setSynthesis] = useState("");
   const synthesisRef = useRef("");
   const [status, setStatus] = useState<"connecting" | "streaming" | "done" | "error">("connecting");
-  useEffect(() => { statusRef.current = status; }, [status]);
   const [error, setError] = useState<string | null>(null);
   const [processSteps, setProcessSteps] = useState<ProcessStep[]>([]);
   const [cost, setCost] = useState<CostInfo | null>(null);
@@ -140,14 +135,10 @@ export function useWebSocket(sessionId: string) {
   };
 
   const connect = useCallback(() => {
-    if (connectingRef.current) return;
-    connectingRef.current = true;
-    wsRef.current?.close();
     const wsHost = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3096").replace("http://", "ws://").replace("/api/v1", "");
     const url = `${wsHost}/ws/possess/${sessionId}/main`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
-    const wsId = ++wsIdRef.current;
     mountedRef.current = true;
     setStatus("connecting");
 
@@ -166,8 +157,6 @@ export function useWebSocket(sessionId: string) {
     }
 
     ws.onopen = () => {
-      if (wsIdRef.current !== wsId) return;
-      connectingRef.current = false;
       retryRef.current = 0;
       hasConnectedBeforeRef.current = true;
       setStatus("streaming");
@@ -180,12 +169,10 @@ export function useWebSocket(sessionId: string) {
         setStatus("done");
         setError("会话已不在运行中，请从会话历史查看结果");
         addLog("未收到实时事件 — 会话可能已结束", 'warning');
-        ws.close();
       }, 8000);
     };
 
     ws.onmessage = (e) => {
-      if (wsIdRef.current !== wsId) return;
       const event: WsEvent = JSON.parse(e.data);
 
       if (noEventsTimeoutRef.current) {
@@ -338,17 +325,13 @@ export function useWebSocket(sessionId: string) {
           flushImmediate();
           setStatus("done");
           addLog(`会话完成`, 'success');
-          ws.close();
           break;
       }
     };
 
     ws.onclose = () => {
-      if (wsIdRef.current !== wsId) return;
-      connectingRef.current = false;
-      if (!mountedRef.current || statusRef.current === "done") return;
       if (retryRef.current < MAX_RETRIES) {
-        reconnectTimerRef.current = setTimeout(connect, Math.pow(2, retryRef.current) * 1000);
+        setTimeout(connect, Math.pow(2, retryRef.current) * 1000);
         retryRef.current++;
       } else {
         setStatus("error");
@@ -356,17 +339,13 @@ export function useWebSocket(sessionId: string) {
       }
     };
 
-    ws.onerror = () => {
-      if (wsIdRef.current !== wsId) return;
-      ws.close();
-    };
+    ws.onerror = () => ws.close();
   }, [sessionId, scheduleFlush, flushImmediate]);
 
   useEffect(() => {
     connect();
     return () => {
       mountedRef.current = false;
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
       if (noEventsTimeoutRef.current) clearTimeout(noEventsTimeoutRef.current);
       wsRef.current?.close();

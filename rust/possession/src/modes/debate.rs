@@ -18,7 +18,7 @@ pub async fn run(
     soul_b: &str,
     topic: &str,
     _presets: &UserPresets,
-    _system_tx: &mpsc::Sender<WsEvent>,
+    system_tx: &mpsc::Sender<WsEvent>,
     _tool_registry: &ToolRegistry,
 ) -> Result<(SoulOutput, SoulOutput)> {
     let profile_a = registry.get_soul(soul_a)?;
@@ -43,6 +43,8 @@ pub async fn run(
         stream::stream_single_soul(rx_b, &sid, &sb, &ws_b),
     );
 
+    crate::emit_soul_cost(system_tx, soul_a, &out_a.usage, Some(&info.model));
+    crate::emit_soul_cost(system_tx, soul_b, &out_b.usage, Some(&info.model));
     crate::finalize_output(store, session_id, &out_a, foundation::PossessionMode::Debate, topic).await?;
     crate::finalize_output(store, session_id, &out_b, foundation::PossessionMode::Debate, topic).await?;
 

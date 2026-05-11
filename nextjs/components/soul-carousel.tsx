@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { fetchSouls, type SoulListEntry } from "@/lib/api";
 import { getSoulAvatarBg } from "@/lib/soul-utils";
 import { Sparkles } from "lucide-react";
@@ -10,7 +10,14 @@ export function SoulCarousel() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [visible, setVisible] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setInterval>>();
+  const timerRef = useRef<ReturnType<typeof setInterval>>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout>>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   useEffect(() => {
     fetchSouls()
@@ -32,11 +39,11 @@ export function SoulCarousel() {
     if (souls.length === 0) return;
 
     setVisible(true);
-    const enterTimer = setTimeout(() => {}, 50);
 
     timerRef.current = setInterval(() => {
       setVisible(false);
-      setTimeout(() => {
+      timeoutRef.current = setTimeout(() => {
+        if (!mountedRef.current) return;
         setCurrentIndex((prev) => (prev + 1) % souls.length);
         setVisible(true);
       }, 300);
@@ -44,6 +51,7 @@ export function SoulCarousel() {
 
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
   }, [souls.length]);
 
@@ -127,8 +135,10 @@ export function SoulCarousel() {
                   : "w-1.5 bg-muted-foreground/30 hover:bg-muted-foreground/50"
               }`}
               onClick={() => {
+                if (timerRef.current) clearInterval(timerRef.current);
                 setVisible(false);
-                setTimeout(() => {
+                timeoutRef.current = setTimeout(() => {
+                  if (!mountedRef.current) return;
                   setCurrentIndex(i);
                   setVisible(true);
                 }, 200);

@@ -78,6 +78,8 @@ pub async fn run(
         audit_notes = format!("自审发现: {:?}", audit.contradictions);
     }
 
+    crate::emit_soul_cost(system_tx, soul_name, &output.usage, Some(&info.model));
+
     crate::finalize_output_with_notes(
         store, session_id, &output,
         foundation::PossessionMode::Single, task, &audit_notes,

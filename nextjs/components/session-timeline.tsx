@@ -1,13 +1,17 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Trash2, Brain, Users, ChevronRight, Download } from "lucide-react";
 import { ConfirmButton } from "@/components/ui/confirm-button";
-import { deleteSession, exportSessionMarkdown } from "@/lib/api";
+import { deleteSession, exportSessionMarkdown, fetchSessions } from "@/lib/api";
+import { triggerSessionsUpdate } from "@/components/sidebar-sessions";
 import type { SessionSummary } from "@/lib/api";
 import { modeLabel, MODE_COLORS_BG, MODE_COLORS_TEXT } from "@/config/possession-modes";
 import type { PossessionMode } from "@/config/possession-modes";
+
+const SESSIONS_UPDATED_EVENT = "aionui-sessions-updated";
 
 interface SessionTimelineProps {
   sessions: SessionSummary[];
@@ -46,7 +50,7 @@ function groupByDate(sessions: SessionSummary[]): Map<string, SessionSummary[]> 
   return groups;
 }
 
-function SessionRow({ s }: { s: SessionSummary }) {
+function SessionRow({ s, onDelete }: { s: SessionSummary; onDelete: (id: string) => void }) {
   const router = useRouter();
 
   const handleExport = async (e: React.MouseEvent) => {
@@ -54,6 +58,14 @@ function SessionRow({ s }: { s: SessionSummary }) {
     e.stopPropagation();
     try { await exportSessionMarkdown(s.id, s.title); }
     catch { }
+  };
+
+  const handleDelete = async () => {
+    try {
+      await deleteSession(s.id);
+      triggerSessionsUpdate();
+      onDelete(s.id);
+    } catch {}
   };
 
   return (
@@ -111,13 +123,26 @@ function SessionRow({ s }: { s: SessionSummary }) {
         confirmText="确认"
         title="删除会话"
         className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 absolute right-3"
-        onConfirm={async () => { await deleteSession(s.id); router.refresh(); }}
+        onConfirm={handleDelete}
       />
     </Link>
   );
 }
 
-export function SessionTimeline({ sessions }: SessionTimelineProps) {
+export function SessionTimeline({ sessions: initialSessions }: SessionTimelineProps) {
+  const [sessions, setSessions] = useState<SessionSummary[]>(initialSessions);
+
+  useEffect(() => {
+    const handle = () => {
+      fetchSessions(200).then(setSessions).catch(() => {});
+    };
+    window.addEventListener(SESSIONS_UPDATED_EVENT, handle);
+    return () => window.removeEventListener(SESSIONS_UPDATED_EVENT, handle);
+  }, []);
+
+  const handleDelete = (id: string) => {
+    setSessions((prev) => prev.filter((s) => s.id !== id));
+  };
   if (sessions.length === 0) {
     return (
       <div data-testid="session-timeline" className="flex flex-col items-center justify-center py-12">
@@ -152,7 +177,7 @@ export function SessionTimeline({ sessions }: SessionTimelineProps) {
             <div className="space-y-2">
               {items.map((s) => (
                 <div key={s.id} className="relative">
-                  <SessionRow s={s} />
+                  <SessionRow s={s} onDelete={handleDelete} />
                 </div>
               ))}
             </div>

@@ -34,6 +34,7 @@ export default function SessionDetailView({ id }: { id: string }) {
   const [flowExpanded, setFlowExpanded] = useState(true);
   const [loading, setLoading] = useState(true);
   const clearRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,14 +51,31 @@ export default function SessionDetailView({ id }: { id: string }) {
           if (pending.phases?.length) setPhases(pending.phases);
         }
 
-        // ── Run analyzeTask in background if needed ──
         if (pending.needsAnalysis && !cancelled) {
           setPhases(["starting"]);
           setCurrentFlowPhase("classifying");
 
           const reviewer = localStorage.getItem("aionui-banner-lord") || undefined;
           try {
-            const data = await analyzeTask(pending.task, reviewer);
+            abortRef.current = new AbortController();
+            const data = await analyzeTask(pending.task, reviewer, abortRef.current.signal, (event) => {
+              if (cancelled) return;
+              if (event.phase === "classifying") {
+                // Already showing
+              }
+              if (event.phase === "matched") {
+                setCurrentFlowPhase("matching");
+              }
+              if (event.phase === "reviewing") {
+                setCurrentFlowPhase("reviewing");
+              }
+              if (event.phase === "adjusting") {
+                setCurrentFlowPhase("adjusting");
+              }
+              if (event.phase === "review_done" && event.review) {
+                setCurrentFlowPhase("reviewing");
+              }
+            });
 
             if (cancelled) return;
 
@@ -77,8 +95,7 @@ export default function SessionDetailView({ id }: { id: string }) {
             if (reviewData.reviewer) setReview(reviewData);
 
           } catch (e: any) {
-            if (cancelled) return;
-            // Fallback: mark steps as completed anyway
+            if (cancelled || e?.name === "AbortError") return;
             setPhases(["classifying", "matching", "starting"]);
             setCurrentFlowPhase(null);
           }
@@ -111,7 +128,7 @@ export default function SessionDetailView({ id }: { id: string }) {
       }
     }
     load();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; abortRef.current?.abort(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -262,7 +279,6 @@ export default function SessionDetailView({ id }: { id: string }) {
     );
   }
 
-  // ── History view (completed/archived) ──
   const sorted = [...messages].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   const userMsgs = sorted.filter((m) => m.role === "user");
   const soulMsgs = sorted.filter((m) => (m.role === "assistant" || m.role === "soul") && m.soul_name && m.soul_name !== "知识卡片");

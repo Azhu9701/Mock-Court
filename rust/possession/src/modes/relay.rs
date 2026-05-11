@@ -17,7 +17,7 @@ pub async fn run(
     task: &str,
     soul_chain: &[String],
     _presets: &UserPresets,
-    _system_tx: &mpsc::Sender<WsEvent>,
+    system_tx: &mpsc::Sender<WsEvent>,
     _tool_registry: &ToolRegistry,
 ) -> Result<Vec<SoulOutput>> {
     let info = stream::pick_provider_info(gateway);
@@ -35,6 +35,8 @@ pub async fn run(
         let rx = gateway.call(&LLMRequest { provider: info.provider.clone(), prompt, config: CallConfig::default() })?;
 
         let output = stream::stream_single_soul(rx, session_id, soul_name, ws).await;
+
+        crate::emit_soul_cost(system_tx, soul_name, &output.usage, Some(&info.model));
 
         crate::finalize_output(store, session_id, &output, foundation::PossessionMode::Relay, task).await?;
 

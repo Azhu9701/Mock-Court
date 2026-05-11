@@ -17,7 +17,7 @@ pub async fn run(
     soul_name: &str,
     task: &str,
     presets: &UserPresets,
-    _system_tx: &mpsc::Sender<WsEvent>,
+    system_tx: &mpsc::Sender<WsEvent>,
     _tool_registry: &ToolRegistry,
 ) -> Result<SoulOutput> {
     let profile = registry.get_soul(soul_name)?;
@@ -40,6 +40,7 @@ pub async fn run(
         return Err(foundation::FoundationError::Validation(err.clone()));
     }
 
+    crate::emit_soul_cost(system_tx, soul_name, &output.usage, Some(&info.model));
     crate::finalize_output(store, session_id, &output, foundation::PossessionMode::Learn, task).await?;
 
     Ok(output)

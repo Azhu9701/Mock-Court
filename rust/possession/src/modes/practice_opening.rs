@@ -21,7 +21,7 @@ pub async fn run(
     session_id: &str,
     task: &str,
     _presets: &UserPresets,
-    _system_tx: &mpsc::Sender<WsEvent>,
+    system_tx: &mpsc::Sender<WsEvent>,
     _tool_registry: &ToolRegistry,
 ) -> Result<()> {
     let info = stream::pick_provider_info(gateway);
@@ -102,6 +102,7 @@ pub async fn run(
     };
 
     for output in &outputs {
+        crate::emit_soul_cost(system_tx, &output.soul_name, &output.usage, Some(&info.model));
         let _ = crate::finalize_output(store, session_id, output, foundation::PossessionMode::PracticeOpening, task).await;
     }
 

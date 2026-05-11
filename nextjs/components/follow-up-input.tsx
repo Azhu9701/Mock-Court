@@ -42,6 +42,7 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const lastScrollRef = useRef(0);
   const mountedRef = useRef(true);
+  const sendingRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const log = (msg: string, ...args: any[]) => {
@@ -112,6 +113,7 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
       wsRef.current.close();
       wsRef.current = null;
     }
+    sendingRef.current = false;
     setSending(false);
     flushImmediate();
     cleanup();
@@ -125,6 +127,7 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
 
     setFollowUp("");
     setSending(true);
+    sendingRef.current = true;
     setError("");
     contentRef.current = "";
     reasoningContentRef.current = "";
@@ -158,6 +161,7 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
       }).catch((err) => {
         log("Error sending follow-up request:", err);
         setError(`发送失败: ${err.message}`);
+        sendingRef.current = false;
         setSending(false);
         cleanup();
       });
@@ -194,13 +198,15 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
     ws.onerror = () => {
       log("WebSocket error");
       setError("WebSocket 连接失败");
+      sendingRef.current = false;
       flushImmediate();
       setSending(false);
     };
 
     ws.onclose = () => {
       log("WebSocket closed");
-      if (sending) {
+      if (sendingRef.current) {
+        sendingRef.current = false;
         flushImmediate();
         setSending(false);
       }
@@ -320,7 +326,7 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
 
                 <div className="prose prose-slate prose-sm max-w-none [&_h1]:text-base [&_h1]:font-bold [&_h1]:mt-4 [&_h1]:mb-2 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mt-2.5 [&_h3]:mb-1 [&_p]:my-1.5 [&_p]:leading-relaxed [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_li]:leading-relaxed [&_blockquote]:my-2 [&_blockquote]:pl-3 [&_blockquote]:border-l-2 [&_blockquote]:border-purple-400 [&_blockquote]:text-muted-foreground [&_blockquote]:italic [&_strong]:font-semibold [&_code]:text-xs [&_code]:px-1 [&_code]:py-0.5 [&_code]:bg-muted [&_code]:rounded [&_pre]:my-2 [&_pre]:p-3 [&_pre]:bg-muted [&_pre]:rounded-lg [&_hr]:my-3 [&_hr]:border-border">
                   {msg.content ? (
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} children={msg.content.replace(/<[^>]+>/g, "")} />
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content.replace(/<[^>]+>/g, "")}</ReactMarkdown>
                   ) : msg.streaming ? (
                     <span className="inline-block text-muted-foreground">
                       思考中<span className="animate-pulse">...</span>
