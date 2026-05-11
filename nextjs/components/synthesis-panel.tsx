@@ -24,11 +24,22 @@ interface Section {
 function extractSections(raw: string): Section[] {
   const cleaned = cleanContent(raw);
   const sections: Section[] = [];
-  const h3Parts = cleaned.split(/^###\s*/m).slice(1);
+  // 同时支持 ### 和 ## 标题，以及中文数字序号标题
+  const h3Parts = cleaned.split(/^#{2,3}\s*/m).slice(1);
+  // 如果 h3 分割后也没内容，尝试按"共识"/"分歧"/"盲区"/"矛盾"/"行动"关键词分割
+  const parts = h3Parts.length > 0 ? h3Parts : (
+    cleaned.split(/\n(?=(?:共识|分歧|盲区|矛盾|行动[纲政]|主要矛盾))/g).length > 1
+      ? cleaned.split(/\n(?=(?:共识|分歧|盲区|矛盾|行动[纲政]|主要矛盾))/g)
+      : []
+  );
 
-  for (const part of h3Parts) {
+  for (const part of (parts.length > 0 ? parts : [cleaned])) {
     const lines = part.split("\n");
-    const title = lines[0].replace(/\*\*/g, "").trim();
+    let title = lines[0].replace(/\*\*/g, "").replace(/^[\d一二三四五]+[.、．]\s*/, "").trim();
+    if (!title && parts.length <= 1 && cleaned.length > 50) {
+      title = "综合报告";
+    }
+    if (!title) continue;
     const items: string[] = [];
     const liRe = /^[-*]\s+(.+)/;
     const boldLiRe = /^[-*]\s+\*\*(.+?)\*\*[：:]\s*(.+)/;
@@ -187,8 +198,20 @@ export function SynthesisPanel({ content, cost }: SynthesisPanelProps) {
             </div>
           ) : (
             content && (
-              <div className="text-xs text-muted-foreground/60 text-center py-4">
-                等待综合报告生成...
+              <div className="text-xs text-muted-foreground/60 text-center py-2">
+                <div className="prose prose-slate prose-sm max-w-none text-left
+                  [&_h1]:text-base [&_h1]:font-bold [&_h1]:mt-4 [&_h1]:mb-2
+                  [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:mt-3 [&_h2]:mb-1.5
+                  [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mt-3 [&_h3]:mb-1.5 [&_h3]:text-foreground/90
+                  [&_p]:my-1.5 [&_p]:leading-relaxed [&_p]:text-sm
+                  [&_ul]:my-1 [&_ol]:my-1
+                  [&_li]:my-1 [&_li]:text-sm [&_li]:leading-relaxed
+                  [&_strong]:font-semibold [&_strong]:text-foreground/90
+                ">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {cleanedContent}
+                  </ReactMarkdown>
+                </div>
               </div>
             )
           )}
