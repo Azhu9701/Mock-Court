@@ -135,6 +135,7 @@ export function useWebSocket(sessionId: string) {
   };
 
   const connect = useCallback(() => {
+    wsRef.current?.close();
     const wsHost = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3096").replace("http://", "ws://").replace("/api/v1", "");
     const url = `${wsHost}/ws/possess/${sessionId}/main`;
     const ws = new WebSocket(url);
