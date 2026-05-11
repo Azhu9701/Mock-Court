@@ -13,13 +13,23 @@ export function storePendingSession(meta: PendingSessionMeta) {
   sessionStorage.setItem(STORAGE_KEY, JSON.stringify(meta));
 }
 
-export function popPendingSession(): PendingSessionMeta | null {
+export function readPendingSession(sessionId: string): PendingSessionMeta | null {
   const raw = sessionStorage.getItem(STORAGE_KEY);
   if (!raw) return null;
-  sessionStorage.removeItem(STORAGE_KEY);
   try {
-    return JSON.parse(raw) as PendingSessionMeta;
+    const meta = JSON.parse(raw) as PendingSessionMeta;
+    if (meta.sessionId === sessionId) return meta;
+  } catch {}
+  return null;
+}
+
+export function clearPendingSession(sessionId: string) {
+  const raw = sessionStorage.getItem(STORAGE_KEY);
+  if (!raw) return;
+  try {
+    const meta = JSON.parse(raw);
+    if (meta.sessionId === sessionId) sessionStorage.removeItem(STORAGE_KEY);
   } catch {
-    return null;
+    sessionStorage.removeItem(STORAGE_KEY);
   }
 }

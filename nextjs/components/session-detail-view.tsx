@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { SessionRunner } from "@/components/session-runner";
 import { SessionContextHeader, type MatchedSoulInfo } from "@/components/session-context-header";
@@ -10,7 +10,7 @@ import { BreadcrumbSetter } from "@/components/breadcrumb-setter";
 import SessionActions from "@/components/session-actions";
 import FollowUpInput from "@/components/follow-up-input";
 import { fetchSessionDetail, fetchSoul } from "@/lib/api";
-import { popPendingSession } from "@/lib/pending-session";
+import { readPendingSession, clearPendingSession } from "@/lib/pending-session";
 import { ArrowLeft, User, Brain, Sparkles, ShieldCheck, Zap, Play, Loader2, CheckCircle2, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -32,11 +32,13 @@ export default function SessionDetailView({ id }: { id: string }) {
   const [phases, setPhases] = useState<string[]>([]);
   const [flowExpanded, setFlowExpanded] = useState(true);
   const [loading, setLoading] = useState(true);
+  const clearRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
+
     async function load() {
-      const pending = popPendingSession();
+      const pending = readPendingSession(id);
       if (pending && pending.sessionId === id) {
         if (!cancelled) {
           setMode(pending.mode);
@@ -48,6 +50,7 @@ export default function SessionDetailView({ id }: { id: string }) {
           })));
           if (pending.review) setReview(pending.review);
           if (pending.phases?.length) setPhases(pending.phases);
+          if (!clearRef.current) { clearRef.current = true; clearPendingSession(id); }
         }
       }
 
