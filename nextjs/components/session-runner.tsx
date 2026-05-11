@@ -102,10 +102,26 @@ const SOUL_QUOTES = [
 ];
 
 function WaitingSoulsView({ mode, matchedSouls, processSteps, messages }: { mode: string; matchedSouls?: MatchedSoulInfo[]; processSteps?: ProcessStep[]; messages: Record<string, SoulMessage> }) {
-  const souls = matchedSouls && matchedSouls.length > 0 ? matchedSouls : null;
-  const arrivedSouls = new Set(
-    (processSteps || []).filter((s) => s.event === "SoulStarted" || s.event === "SoulDone").map((s) => s.soulName || "")
-  );
+  const steps = processSteps || [];
+  const arrivedSouls = steps
+    .filter((s) => s.event === "SoulStarted" || s.event === "SoulDone")
+    .map((s) => s.soulName || "");
+
+  const classified = steps.find((s) => s.event === "EntryClassified");
+  const parsedFromClassified: string[] = [];
+  if (classified) {
+    const match = classified.message.match(/匹配魂[：:]\s*(.+)/);
+    if (match) {
+      match[1].split(/[,，、]\s*/).forEach((n) => { if (n.trim()) parsedFromClassified.push(n.trim()); });
+    }
+  }
+
+  const allSoulNames = Array.from(new Set([...arrivedSouls, ...parsedFromClassified]));
+  const dynamicSouls: MatchedSoulInfo[] = allSoulNames.map((name) => ({
+    name, field: arrivedSouls.includes(name) ? "已召唤" : "等待召唤…", ismism_code: "",
+  }));
+  const souls = matchedSouls && matchedSouls.length > 0 ? matchedSouls : (dynamicSouls.length > 0 ? dynamicSouls : null);
+  const arrivedSet = new Set(arrivedSouls);
 
   return (
     <div className="flex flex-col flex-1 p-4 gap-4 overflow-y-auto">
@@ -117,7 +133,7 @@ function WaitingSoulsView({ mode, matchedSouls, processSteps, messages }: { mode
       {souls ? (
         <div className="grid gap-3 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {souls.map((soul) => {
-            const hasArrived = arrivedSouls.has(soul.name);
+            const hasArrived = arrivedSet.has(soul.name);
             const quote = SOUL_QUOTES[Math.floor(Math.random() * SOUL_QUOTES.length)].replace("{name}", soul.name);
             const soulMsg = messages[soul.name];
             const streamingContent = soulMsg?.content || "";
@@ -241,10 +257,15 @@ export function SessionRunner({ sessionId, mode, matchedSouls, onDone, sessionDo
     .map(([name]) => name);
 
   const lastStep = processSteps[processSteps.length - 1];
+  const classifiedStep = processSteps.find((s) => s.event === "EntryClassified");
   let progressText = "";
   if (status === "streaming") {
     if (streamingSouls.length > 0) {
       progressText = `${streamingSouls.join("、")} 生成中…`;
+    } else if (classifiedStep) {
+      const soulsInMsg = classifiedStep.message.match(/匹配魂[：:]\s*(.+)/);
+      const soulCount = soulsInMsg ? soulsInMsg[1].split(/[,，、]/).length : 0;
+      progressText = `已匹配 ${soulCount} 魂，等待 DeepSeek 回应…`;
     } else if (lastStep) {
       progressText = lastStep.message;
     } else {
