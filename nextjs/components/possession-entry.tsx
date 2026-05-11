@@ -543,12 +543,6 @@ export function PossessionEntry() {
                   </div>
                 </div>
 
-                {progressLine && (
-                  <p className="text-sm text-primary mb-4 px-3 py-2 bg-primary/5 rounded-lg border border-primary/20 animate-in fade-in">
-                    {progressLine}
-                  </p>
-                )}
-
                 <div className="flex items-center justify-center gap-0 mt-5 mb-2 overflow-x-auto">
                   {PHASES.map((p, i) => {
                     const Icon = p.icon;
@@ -647,6 +641,12 @@ export function PossessionEntry() {
                 </div>
                 {!logsCollapsed && (
                   <div className="bg-background rounded-lg p-3 max-h-64 overflow-y-auto font-mono text-xs space-y-1">
+                    {progressLine && (
+                      <div className="text-primary font-medium flex items-center gap-2 pb-2 mb-2 border-b border-primary/10">
+                        <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                        <span>{progressLine}</span>
+                      </div>
+                    )}
                     {filteredLogs.map((l, i) => {
                       const type = classifyLogType(l);
                       return (
