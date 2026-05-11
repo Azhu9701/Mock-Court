@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, use } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { SessionRunner } from "@/components/session-runner";
 import { SessionContextHeader, type MatchedSoulInfo } from "@/components/session-context-header";
@@ -11,15 +11,26 @@ import SessionActions from "@/components/session-actions";
 import FollowUpInput from "@/components/follow-up-input";
 import { fetchSessionDetail, fetchSoul } from "@/lib/api";
 import { popPendingSession } from "@/lib/pending-session";
-import { ArrowLeft, User } from "lucide-react";
+import { ArrowLeft, User, Brain, Sparkles, ShieldCheck, Zap, Play, Loader2, CheckCircle2, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { MODE_LABELS_LONG, modeColorBg } from "@/config/possession-modes";
+
+const FLOW_PHASES: { key: string; icon: React.ComponentType<{ className?: string }>; label: string; desc: string }[] = [
+  { key: "classifying", icon: Brain, label: "入口分流", desc: "分析任务类型" },
+  { key: "matching", icon: Sparkles, label: "匹配魂", desc: "智能匹配思想者" },
+  { key: "reviewing", icon: ShieldCheck, label: "审查", desc: "审查魂组合" },
+  { key: "adjusting", icon: Zap, label: "调整", desc: "优化魂搭配" },
+  { key: "starting", icon: Play, label: "启动", desc: "启动讨论会话" },
+];
 
 export default function SessionDetailView({ id }: { id: string }) {
   const [detail, setDetail] = useState<Awaited<ReturnType<typeof fetchSessionDetail>> | null>(null);
   const [mode, setMode] = useState("single");
   const [matchedSouls, setMatchedSouls] = useState<MatchedSoulInfo[]>([]);
   const [review, setReview] = useState<{ verdict: string; checks: string[]; notes: string; reviewer: string } | null>(null);
+  const [phases, setPhases] = useState<string[]>([]);
+  const [flowExpanded, setFlowExpanded] = useState(true);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -36,6 +47,7 @@ export default function SessionDetailView({ id }: { id: string }) {
             rationale: s.rationale || "",
           })));
           if (pending.review) setReview(pending.review);
+          if (pending.phases?.length) setPhases(pending.phases);
         }
       }
 
@@ -79,10 +91,121 @@ export default function SessionDetailView({ id }: { id: string }) {
   const isActive = session.status === "active" || session.status === "running";
 
   if (isActive) {
+    const completedPhases = new Set(phases);
+    const totalFlowPhases = FLOW_PHASES.length;
+
     return (
       <div className="max-w-5xl mx-auto space-y-4">
         <BreadcrumbSetter label={session.title} />
         <SessionContextHeader task={session.title} mode={mode} matchedSouls={matchedSouls} review={review} />
+
+        {/* 5 步流程进度条 — 仅在从 /possess 刚跳转过来时显示 */}
+        {phases.length > 0 && (
+          <div className="rounded-xl border bg-background p-6 shadow-sm space-y-4 animate-in fade-in duration-300">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                讨论流程
+              </h2>
+              <Button variant="ghost" size="sm" onClick={() => setFlowExpanded(!flowExpanded)}>
+                {flowExpanded ? <ChevronUp className="h-4 w-4 mr-1" /> : <ChevronDown className="h-4 w-4 mr-1" />}
+                {flowExpanded ? "收起" : "展开"}
+              </Button>
+            </div>
+
+            {flowExpanded && (
+              <>
+                <div className="mb-1">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground mb-1.5">
+                    <span>{completedPhases.size}/{totalFlowPhases} 步骤</span>
+                    <span className="text-emerald-600 font-medium">全部完成</span>
+                  </div>
+                  <div className="h-2 bg-muted rounded-full overflow-hidden">
+                    <div className="h-full bg-gradient-to-r from-primary to-emerald-500 rounded-full w-full" />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-center gap-0 overflow-x-auto">
+                  {FLOW_PHASES.map((p, i) => {
+                    const Icon = p.icon;
+                    const isDone = completedPhases.has(p.key);
+                    return (
+                      <div key={p.key} className="flex items-center">
+                        <div className="flex flex-col items-center gap-1.5">
+                          <div className={cn(
+                            "flex items-center justify-center w-10 h-10 rounded-full transition-all duration-300",
+                            isDone ? "bg-emerald-500 text-white shadow-sm" : "bg-muted text-muted-foreground/40"
+                          )}>
+                            {isDone ? <CheckCircle2 className="h-5 w-5" /> : <Icon className="h-4 w-4" />}
+                          </div>
+                          <span className={cn(
+                            "text-[10px] leading-tight text-center max-w-[60px]",
+                            isDone ? "text-emerald-600 font-medium" : "text-muted-foreground/40"
+                          )}>
+                            {p.label}
+                          </span>
+                        </div>
+                        {i < FLOW_PHASES.length - 1 && (
+                          <div className={cn(
+                            "h-0.5 w-8 sm:w-12 mx-0.5 rounded-full transition-colors duration-500",
+                            isDone ? "bg-emerald-400" : "bg-muted"
+                          )} />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Matched souls summary */}
+                {matchedSouls.length > 0 && (
+                  <div className="mt-4 space-y-4 text-sm border-t pt-4">
+                    <div>
+                      <h4 className="font-medium text-muted-foreground mb-3 flex items-center gap-2">
+                        <Sparkles className="h-4 w-4" />匹配魂
+                      </h4>
+                      <div className="grid gap-3">
+                        {matchedSouls.map((s) => (
+                          <div key={s.name} className="rounded-lg border p-3 bg-background transition-all hover:shadow-sm">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-semibold text-base">{s.name}</span>
+                              <span className="text-xs bg-muted px-2 py-0.5 rounded">{s.field}</span>
+                              {s.ismism_code && <span className="text-xs text-muted-foreground font-mono">{s.ismism_code}</span>}
+                            </div>
+                            <p className="text-muted-foreground mt-2 text-sm leading-relaxed">{s.rationale}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {review?.reviewer && (
+                      <div>
+                        <h4 className="font-medium text-muted-foreground mb-3 flex items-center gap-2">
+                          <ShieldCheck className="h-4 w-4" />审查 · {review.reviewer}
+                        </h4>
+                        <div className={cn("rounded-lg border p-3",
+                          review.verdict === "pass" ? "border-green-200 bg-green-50 dark:bg-green-950/20" :
+                          review.verdict === "conditional" ? "border-yellow-200 bg-yellow-50 dark:bg-yellow-950/20" :
+                          "border-red-200 bg-red-50 dark:bg-red-950/20"
+                        )}>
+                          <div className="font-medium mb-2">裁决: {
+                            review.verdict === "pass" ? "✅ 通过" : review.verdict === "conditional" ? "⚠️ 条件通过" : "❌ 拒绝"
+                          }</div>
+                          <ul className="space-y-1">
+                            {review.checks.map((c, i) => (
+                              <li key={i} className="text-sm flex items-start gap-2"><span>→</span><span>{c}</span></li>
+                            ))}
+                          </ul>
+                          {review.notes && <p className="text-sm mt-2 italic text-muted-foreground border-t pt-2">📝 {review.notes}</p>}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
         <SessionRunner sessionId={id} mode={mode} matchedSouls={matchedSouls} />
       </div>
     );

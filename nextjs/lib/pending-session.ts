@@ -6,6 +6,7 @@ export interface PendingSessionMeta {
   mode: string;
   matchedSouls: { name: string; field: string; ismism_code: string; rationale: string }[];
   review: { verdict: string; checks: string[]; notes: string; reviewer: string } | null;
+  phases: string[];
 }
 
 export function storePendingSession(meta: PendingSessionMeta) {
@@ -21,8 +22,4 @@ export function popPendingSession(): PendingSessionMeta | null {
   } catch {
     return null;
   }
-}
-
-export function keepPendingSession() {
-  // Called when the user refreshes the page; don't consume the metadata yet
 }
