@@ -18,27 +18,36 @@ async function apiRequest<T>(
   const url = `${API_BASE}${endpoint}`;
   const opName = operation || endpoint;
 
-  const res = await fetch(url, fetchOptions);
-
-  if (!res.ok) {
-    let errorDetail = res.statusText;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 500));
+    }
     try {
-      const errorData = await res.json();
-      errorDetail = errorData.message || errorData.error || errorDetail;
-    } catch { }
+      const res = await fetch(url, fetchOptions);
 
-    const error = new Error(`API request failed: ${opName} - ${errorDetail}`) as ApiError;
-    error.status = res.status;
-    error.url = url;
-    error.operation = opName;
-    throw error;
+      if (!res.ok) {
+        let errorDetail = res.statusText;
+        try {
+          const errorData = await res.json();
+          errorDetail = errorData.message || errorData.error || errorDetail;
+        } catch { }
+
+        const error = new Error(`API request failed: ${opName} - ${errorDetail}`) as ApiError;
+        error.status = res.status;
+        error.url = url;
+        error.operation = opName;
+        throw error;
+      }
+
+      return res.json() as T;
+    } catch (e: any) {
+      lastErr = e;
+      if (e.status && e.status < 500) throw e; // 4xx — don't retry
+      // Network errors or 5xx — retry
+    }
   }
-
-  if (res.status === 204) {
-    return undefined as T;
-  }
-
-  return res.json();
+  throw lastErr;
 }
 
 export interface SoulListEntry {
