@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{Path, WebSocketUpgrade};
 use axum::response::IntoResponse;
+use foundation::SessionStatus;
 use futures_util::SinkExt;
 use futures_util::StreamExt;
 
@@ -20,8 +21,23 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>, session_id: String, 
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (tx, mut rx) = tokio::sync::mpsc::channel::<possession::WsEvent>(256);
 
-    state.engine.ws_manager().subscribe(&session_id, &channel, tx);
-    tracing::info!("WS connected: session={} channel={}", session_id, channel);
+    let existed = state.engine.ws_manager().subscribe(&session_id, &channel, tx);
+    tracing::info!("WS connected: session={} channel={} existed={}", session_id, channel, existed);
+
+    if !existed {
+        if let Ok(detail) = state.archive.get_session_detail(&session_id).await {
+            if detail.session.status == SessionStatus::Completed {
+                let _ = state.engine.ws_manager().broadcast_system(&session_id, &possession::WsEvent {
+                    event_type: possession::WsEventType::SessionComplete,
+                    payload: String::new(),
+                    reasoning_content: None,
+                    soul_name: None,
+                    seq: 0,
+                });
+                tracing::info!("Sent SessionComplete for completed session {}", session_id);
+            }
+        }
+    }
 
     let mut send_task = tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
@@ -32,6 +48,9 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>, session_id: String, 
                         .await
                         .is_err()
                     {
+                        let _ = ws_tx
+                            .send(Message::Close(None))
+                            .await;
                         break;
                     }
                 }

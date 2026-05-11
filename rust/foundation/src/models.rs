@@ -266,7 +266,7 @@ impl PossessionMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SessionStatus {
     #[serde(rename = "active")]
     Active,
@@ -317,6 +317,8 @@ pub struct CallRecord {
     pub empty_chair: Option<String>,
     #[serde(default)]
     pub user_feedback: Option<String>,
+    #[serde(default)]
+    pub usage: UsageStats,
 }
 
 /// 模型能力等级 — 决定 prompt 注入量

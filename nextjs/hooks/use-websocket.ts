@@ -30,10 +30,19 @@ export interface SoulMessage {
   ismismCode?: string;
 }
 
+export interface SoulCostBreakdown {
+  soul_name: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  provider?: string;
+}
+
 export interface CostInfo {
   llm_calls: number;
   tokens_used: number;
-  estimated_cost: string;
+  estimated_cost?: string;
+  per_soul?: SoulCostBreakdown[];
 }
 
 export interface CollisionEvent {
@@ -71,6 +80,7 @@ export function useWebSocket(sessionId: string) {
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingFlushRef = useRef(false);
   const mountedRef = useRef(true);
+  const noEventsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // forceTick: counter that React sees — incrementing it triggers a re-render
   // This is the ONLY React state for streaming content, avoiding per-token setState overhead
@@ -84,6 +94,7 @@ export function useWebSocket(sessionId: string) {
   const [error, setError] = useState<string | null>(null);
   const [processSteps, setProcessSteps] = useState<ProcessStep[]>([]);
   const [cost, setCost] = useState<CostInfo | null>(null);
+  const costPerSoulRef = useRef<SoulCostBreakdown[]>([]);
   const [collisions, setCollisions] = useState<CollisionEvent[]>([]);
   const [toolCalls, setToolCalls] = useState<ToolCallEvent[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -139,6 +150,7 @@ export function useWebSocket(sessionId: string) {
       setMessages({});
       setSynthesis("");
       setCost(null);
+      costPerSoulRef.current = [];
       setCollisions([]);
       setToolCalls([]);
       setLogs([]);
@@ -151,10 +163,22 @@ export function useWebSocket(sessionId: string) {
       setError(null);
       const suffix = retryRef.current > 0 ? `（第 ${hasConnectedBeforeRef.current ? '2+' : '1'} 次连接）` : "";
       addLog(`WebSocket 连接已建立${suffix}`, 'success');
+      if (noEventsTimeoutRef.current) clearTimeout(noEventsTimeoutRef.current);
+      noEventsTimeoutRef.current = setTimeout(() => {
+        if (!mountedRef.current) return;
+        setStatus("done");
+        setError("会话已不在运行中，请从会话历史查看结果");
+        addLog("未收到实时事件 — 会话可能已结束", 'warning');
+      }, 8000);
     };
 
     ws.onmessage = (e) => {
       const event: WsEvent = JSON.parse(e.data);
+
+      if (noEventsTimeoutRef.current) {
+        clearTimeout(noEventsTimeoutRef.current);
+        noEventsTimeoutRef.current = null;
+      }
 
       switch (event.event_type) {
         // Process events — update React state directly (low frequency)
@@ -245,8 +269,13 @@ export function useWebSocket(sessionId: string) {
 
         case "cost":
           try {
-            const c = JSON.parse(event.payload) as CostInfo;
-            setCost(c);
+            const payload = JSON.parse(event.payload);
+            if (payload.soul_name) {
+              costPerSoulRef.current = [...costPerSoulRef.current, payload as SoulCostBreakdown];
+            } else {
+              const perSoul = payload.per_soul || costPerSoulRef.current;
+              setCost({ llm_calls: payload.llm_calls || 0, tokens_used: payload.tokens_used || 0, per_soul: perSoul });
+            }
           } catch {}
           break;
 
@@ -318,6 +347,7 @@ export function useWebSocket(sessionId: string) {
     return () => {
       mountedRef.current = false;
       if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+      if (noEventsTimeoutRef.current) clearTimeout(noEventsTimeoutRef.current);
       wsRef.current?.close();
     };
   }, [connect]);

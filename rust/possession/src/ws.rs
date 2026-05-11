@@ -1,8 +1,10 @@
 use dashmap::DashMap;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use tokio::sync::mpsc;
 
 use crate::WsEvent;
+
+const MAX_BUFFERED_EVENTS: usize = 200;
 
 #[derive(Debug, Clone, Default)]
 pub struct WsSessionManager {
@@ -13,6 +15,7 @@ pub struct WsSessionManager {
 struct WsSessionState {
     soul_channels: HashMap<String, Vec<mpsc::Sender<WsEvent>>>,
     system_channel: Vec<mpsc::Sender<WsEvent>>,
+    event_buffer: VecDeque<WsEvent>,
 }
 
 impl WsSessionManager {
@@ -26,6 +29,7 @@ impl WsSessionManager {
         self.sessions.entry(session_id.to_string()).or_insert_with(|| WsSessionState {
             soul_channels: HashMap::new(),
             system_channel: Vec::new(),
+            event_buffer: VecDeque::with_capacity(MAX_BUFFERED_EVENTS),
         });
     }
 
@@ -56,22 +60,19 @@ impl WsSessionManager {
                     let _ = tx.try_send(event.clone());
                 }
             }
-            for tx in &state.system_channel {
-                let _ = tx.try_send(event.clone());
-            }
         }
+        self.broadcast_system(session_id, event);
     }
 
     pub fn broadcast_system(&self, session_id: &str, event: &WsEvent) {
-        if let Some(state) = self.sessions.get(session_id) {
-            tracing::info!("Broadcasting to {} system subscribers for session {}", state.system_channel.len(), session_id);
-            for tx in &state.system_channel {
-                if let Err(e) = tx.try_send(event.clone()) {
-                    tracing::warn!("Failed to send event to subscriber: {}", e);
-                }
+        if let Some(mut state) = self.sessions.get_mut(session_id) {
+            state.event_buffer.push_back(event.clone());
+            while state.event_buffer.len() > MAX_BUFFERED_EVENTS {
+                state.event_buffer.pop_front();
             }
-        } else {
-            tracing::warn!("No session found for broadcasting: {}", session_id);
+            for tx in &state.system_channel {
+                let _ = tx.try_send(event.clone());
+            }
         }
     }
 
@@ -85,6 +86,9 @@ impl WsSessionManager {
         new_system_tx: mpsc::Sender<WsEvent>,
     ) {
         self.sessions.entry(session_id.to_string()).and_modify(|state| {
+            for event in &state.event_buffer {
+                let _ = new_system_tx.try_send(event.clone());
+            }
             state.system_channel.push(new_system_tx);
         });
     }
@@ -94,23 +98,45 @@ impl WsSessionManager {
         session_id: &str,
         channel: &str,
         tx: mpsc::Sender<WsEvent>,
-    ) {
+    ) -> bool {
         tracing::info!("New subscription: session={}, channel={}", session_id, channel);
-        self.sessions.entry(session_id.to_string()).and_modify(|state| {
-            match channel {
-                "main" => {
-                    state.system_channel.push(tx);
-                    tracing::info!("Added to system channel, now {} subscribers", state.system_channel.len());
+        let existed = self.sessions.contains_key(session_id);
+        let tx2 = tx.clone();
+        if existed {
+            self.sessions.entry(session_id.to_string()).and_modify(|state| {
+                match channel {
+                    "main" => {
+                        for event in &state.event_buffer {
+                            let _ = tx.try_send(event.clone());
+                        }
+                        state.system_channel.push(tx);
+                        tracing::info!("Added to system channel, now {} subscribers (replayed {} buffered events)", state.system_channel.len(), state.event_buffer.len());
+                    }
+                    _ => {
+                        state
+                            .soul_channels
+                            .entry(channel.to_string())
+                            .or_default()
+                            .push(tx);
+                    }
                 }
-                _ => {
-                    state
-                        .soul_channels
-                        .entry(channel.to_string())
-                        .or_default()
-                        .push(tx);
-                }
+            });
+        } else {
+            let sid = session_id.to_string();
+            if channel == "main" {
+                self.sessions.insert(sid, WsSessionState {
+                    soul_channels: HashMap::new(),
+                    system_channel: vec![tx2],
+                    event_buffer: VecDeque::with_capacity(MAX_BUFFERED_EVENTS),
+                });
+            } else {
+                let mut state = WsSessionState::default();
+                state.soul_channels.entry(channel.to_string()).or_default().push(tx2);
+                self.sessions.insert(sid, state);
             }
-        });
+            tracing::info!("Created new session entry for {} (session not in memory)", session_id);
+        }
+        existed
     }
 
     pub fn unsubscribe(&self, session_id: &str, channel: &str) {
