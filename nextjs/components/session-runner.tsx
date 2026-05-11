@@ -10,9 +10,10 @@ import { LearnView } from "@/components/learn-view";
 import { PracticeOpeningView } from "@/components/practice-opening-view";
 import { Brain, Loader2, AlertTriangle, Key, CheckCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import Link from "next/link";
 import { PostSessionReview } from "@/components/post-session-review";
 import FollowUpInput from "@/components/follow-up-input";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 interface MatchedSoulInfo {
   name: string;
@@ -220,17 +221,19 @@ export function SessionRunner({ sessionId, mode, matchedSouls, onDone, sessionDo
     progressText = "连接中断";
   }
 
-  if (status === "done" && hasMessages && onDone && !sessionDone) {
-    onDone();
-  }
-
   const showCards = status === "streaming" && hasMessages;
+
+  useEffect(() => {
+    if (status === "done" && hasMessages && onDone && !sessionDone) {
+      onDone();
+    }
+  }, [status, hasMessages, onDone, sessionDone]);
 
   return (
     <div className="flex flex-col flex-1" data-testid="session-runner">
       {progressText && (
         <div className={cn(
-          "px-4 py-2 text-sm border-b transition-colors",
+          "px-4 py-2 text-sm border-b transition-colors flex items-center justify-between",
           (status === "done" || (status === "streaming" && synthesis)) ? "bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-300 border-green-200 dark:border-green-800" :
           status === "error" ? "bg-red-50 dark:bg-red-950/20 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800" :
           "bg-primary/5 text-primary border-primary/20"
@@ -242,6 +245,14 @@ export function SessionRunner({ sessionId, mode, matchedSouls, onDone, sessionDo
             {(status === "streaming" && synthesis) && <CheckCircle className="h-3 w-3 text-green-500" />}
             <span className="font-medium">{progressText}</span>
           </span>
+          {(status === "done" || (status === "streaming" && synthesis)) && (
+            <Link
+              href={`/sessions/${sessionId}`}
+              className="text-xs text-green-600 dark:text-green-400 hover:text-green-800 dark:hover:text-green-200 underline underline-offset-2 transition-colors"
+            >
+              查看会话 →
+            </Link>
+          )}
         </div>
       )}
 
