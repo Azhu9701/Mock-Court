@@ -226,8 +226,6 @@ export function SessionRunner({ sessionId, mode, matchedSouls, taskTitle, onDone
     progressText = "连接中断";
   }
 
-  const showCards = status === "streaming" && hasMessages;
-
   useEffect(() => {
     if (status === "done" && hasMessages && onDone && !sessionDone) {
       onDone();
@@ -269,8 +267,7 @@ export function SessionRunner({ sessionId, mode, matchedSouls, taskTitle, onDone
         {status === "error" && !hasMessages && <ErrorView error={error || "未知错误"} onReconnect={reconnect} />}
         {status === "done" && error && !hasMessages && <ErrorView error={error} onReconnect={reconnect} />}
         {status === "done" && !error && !hasMessages && <RequireApiKeyView />}
-        {showCards && <SoulCardGridFromMessages messages={messages} />}
-        {status === "done" && hasMessages && (
+        {hasMessages && (
           <div className="px-4 pb-4 space-y-4">
             {mode === "conference" && <ConferenceView messages={messages} synthesis={synthesis} collisions={collisions} toolCalls={toolCalls} />}
             {mode === "debate" && <DebateView messages={messages} />}

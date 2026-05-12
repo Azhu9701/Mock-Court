@@ -1,4 +1,7 @@
-import { notFound } from "next/navigation";
+"use client";
+
+import { useEffect, useState } from "react";
+import { useParams, notFound } from "next/navigation";
 import Link from "next/link";
 import { fetchSessionDetail, type SessionDetail } from "@/lib/api";
 import { ArrowLeft, User } from "lucide-react";
@@ -9,14 +12,20 @@ import { SoulResponseCard } from "@/components/soul-response-card";
 import { SynthesisSection } from "@/components/synthesis-section";
 import { BreadcrumbSetter } from "@/components/breadcrumb-setter";
 import { MODE_LABELS_LONG, modeColorBg } from "@/config/possession-modes";
+import { Skeleton } from "@/components/ui/skeleton";
 
-export const dynamic = "force-dynamic";
+export default function SessionDetailPage() {
+  const params = useParams<{ id: string }>();
+  const id = params.id;
+  const [detail, setDetail] = useState<SessionDetail | null>(null);
+  const [error, setError] = useState(false);
 
-export default async function SessionDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+  useEffect(() => {
+    fetchSessionDetail(id).then(setDetail).catch(() => setError(true));
+  }, [id]);
 
-  let detail: SessionDetail;
-  try { detail = await fetchSessionDetail(id); } catch { notFound(); }
+  if (error) return notFound();
+  if (!detail) return <Skeleton className="h-96" />;
 
   const { session, messages } = detail;
 
@@ -24,7 +33,6 @@ export default async function SessionDetailPage({ params }: { params: Promise<{ 
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
   );
 
-  // Group into: initial section (user → souls → synthesis) then follow-up Q&A pairs
   const userMsgs = sorted.filter((m) => m.role === "user");
   const soulMsgs = sorted.filter(
     (m) => (m.role === "assistant" || m.role === "soul") && m.soul_name && m.soul_name !== "知识卡片"
@@ -32,15 +40,12 @@ export default async function SessionDetailPage({ params }: { params: Promise<{ 
   const synthMsgs = sorted.filter((m) => m.role === "synthesis");
   const sysMsgs = sorted.filter((m) => m.role === "system" && !m.content.startsWith("[REVIEW]"));
 
-  // Group soul messages by name
   const soulResponses: Record<string, string> = {};
   for (const m of soulMsgs) {
     const name = m.soul_name!;
     soulResponses[name] = (soulResponses[name] ? soulResponses[name] + "\n\n" : "") + m.content;
   }
 
-  // Separate initial user messages from follow-up user messages
-  // First synthesis marks the boundary
   const firstSynth = synthMsgs[0];
   const initUserMsgs = firstSynth
     ? userMsgs.filter((m) => new Date(m.created_at).getTime() < new Date(firstSynth.created_at).getTime())
@@ -49,16 +54,13 @@ export default async function SessionDetailPage({ params }: { params: Promise<{ 
     ? userMsgs.filter((m) => new Date(m.created_at).getTime() > new Date(firstSynth.created_at).getTime())
     : [];
 
-  // Pair follow-up user messages with their synthesis responses
   const followPairs: { question: typeof userMsgs[number]; answer: typeof synthMsgs[number] | null }[] = [];
   for (const q of followUserMsgs) {
     const qTime = new Date(q.created_at).getTime();
-    // Find the next synthesis after this question
     const answer = synthMsgs.find((s) => new Date(s.created_at).getTime() > qTime);
     followPairs.push({ question: q, answer: answer || null });
   }
 
-  // Remove follow-up syntheses from the main synthesis list
   const followSynthIds = new Set(followPairs.filter((p) => p.answer).map((p) => p.answer!.id));
   const initSynths = synthMsgs.filter((s) => !followSynthIds.has(s.id));
 
@@ -85,7 +87,6 @@ export default async function SessionDetailPage({ params }: { params: Promise<{ 
         <SessionActions sessionId={id} title={session.title} />
       </div>
 
-      {/* Initial user messages */}
       {initUserMsgs.map((msg) => (
         <div key={msg.id} className="flex gap-3 flex-row-reverse">
           <div className="shrink-0">
@@ -107,7 +108,6 @@ export default async function SessionDetailPage({ params }: { params: Promise<{ 
         </div>
       ))}
 
-      {/* Soul responses grid */}
       {Object.keys(soulResponses).length > 0 && (
         <div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -118,14 +118,12 @@ export default async function SessionDetailPage({ params }: { params: Promise<{ 
         </div>
       )}
 
-      {/* System messages */}
       {sysMsgs.map((msg) => (
         <div key={msg.id} className="text-center py-2">
           <span className="text-xs text-muted-foreground">{msg.content}</span>
         </div>
       ))}
 
-      {/* Initial synthesis */}
       {initSynths.map((msg) => (
         <SynthesisSection
           key={msg.id}
@@ -137,7 +135,6 @@ export default async function SessionDetailPage({ params }: { params: Promise<{ 
         />
       ))}
 
-      {/* Follow-up Q&A timeline */}
       {followPairs.length > 0 && (
         <div className="space-y-6 border-t pt-6">
           <h3 className="text-sm font-semibold text-muted-foreground">追问记录</h3>

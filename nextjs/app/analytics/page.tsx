@@ -1,25 +1,63 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import {
   fetchSummonStats,
   fetchModeDistribution,
   fetchUnsummonedAlerts,
   fetchLowEffectiveness,
   fetchSessions,
+  type SummonStatsResponse,
+  type SessionSummary,
+  type SoulAlert,
+  type BoundaryReview,
 } from "@/lib/api";
 import { StatCard } from "@/components/stat-card";
 import { ModeBarChart, SoulEffectivenessTable } from "@/components/dashboard-charts";
 import { AlertPanel } from "@/components/alert-panel";
 import { SessionTimeline } from "@/components/session-timeline";
+import { Skeleton } from "@/components/ui/skeleton";
 
-export const dynamic = "force-dynamic";
+export default function DashboardPage() {
+  const [stats, setStats] = useState<SummonStatsResponse | null>(null);
+  const [modeDist, setModeDist] = useState<Record<string, number>>({});
+  const [unsummoned, setUnsummoned] = useState<SoulAlert[]>([]);
+  const [lowEff, setLowEff] = useState<BoundaryReview[]>([]);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [loading, setLoading] = useState(true);
 
-export default async function DashboardPage() {
-  const [stats, modeDist, unsummoned, lowEff, sessions] = await Promise.all([
-    fetchSummonStats(),
-    fetchModeDistribution(),
-    fetchUnsummonedAlerts(),
-    fetchLowEffectiveness(),
-    fetchSessions(10),
-  ]);
+  useEffect(() => {
+    Promise.all([
+      fetchSummonStats(),
+      fetchModeDistribution(),
+      fetchUnsummonedAlerts(),
+      fetchLowEffectiveness(),
+      fetchSessions(10),
+    ]).then(([s, m, u, l, ss]) => {
+      setStats(s);
+      setModeDist(m);
+      setUnsummoned(u);
+      setLowEff(l);
+      setSessions(ss);
+      setLoading(false);
+    });
+  }, []);
+
+  if (loading || !stats) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold">仪表盘</h1>
+          <p className="text-sm text-muted-foreground mt-1">万民幡运行概览</p>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <Skeleton key={i} className="h-24 rounded-xl" />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   const participationRate =
     stats.total_souls_available > 0

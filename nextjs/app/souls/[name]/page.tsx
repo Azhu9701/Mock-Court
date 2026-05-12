@@ -1,5 +1,8 @@
-import { notFound } from "next/navigation";
-import { fetchSoul } from "@/lib/api";
+"use client";
+
+import { useEffect, useState } from "react";
+import { useParams, notFound } from "next/navigation";
+import { fetchSoul, type SoulProfile } from "@/lib/api";
 import { IsmismRadar } from "@/components/ismism-radar";
 import { SoulPrompt } from "@/components/soul-prompt";
 import { PracticeObservations } from "@/components/practice-observations";
@@ -7,23 +10,20 @@ import { SummonButton } from "@/components/summon-button";
 import { SoulModelConfig } from "@/components/soul-model-config";
 import { DeleteSoulButton } from "@/components/delete-soul-button";
 import { Calendar } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 
-export const dynamic = "force-dynamic";
+export default function SoulDetailPage() {
+  const params = useParams<{ name: string }>();
+  const decodedName = decodeURIComponent(params.name);
+  const [profile, setProfile] = useState<SoulProfile | null>(null);
+  const [error, setError] = useState(false);
 
-interface SoulDetailPageProps {
-  params: Promise<{ name: string }>;
-}
+  useEffect(() => {
+    fetchSoul(decodedName).then(setProfile).catch(() => setError(true));
+  }, [decodedName]);
 
-export default async function SoulDetailPage({ params }: SoulDetailPageProps) {
-  const { name } = await params;
-  const decodedName = decodeURIComponent(name);
-
-  let profile;
-  try {
-    profile = await fetchSoul(decodedName);
-  } catch {
-    notFound();
-  }
+  if (error) return notFound();
+  if (!profile) return <Skeleton className="h-96" />;
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -45,12 +45,7 @@ export default async function SoulDetailPage({ params }: SoulDetailPageProps) {
       {profile.domains.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {profile.domains.map((d) => (
-            <span
-              key={d}
-              className="rounded-md bg-muted px-2.5 py-1 text-xs"
-            >
-              {d}
-            </span>
+            <span key={d} className="rounded-md bg-muted px-2.5 py-1 text-xs">{d}</span>
           ))}
         </div>
       )}
@@ -58,12 +53,7 @@ export default async function SoulDetailPage({ params }: SoulDetailPageProps) {
       {profile.tags.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {profile.tags.map((t) => (
-            <span
-              key={t}
-              className="rounded-full border px-2.5 py-1 text-xs text-muted-foreground"
-            >
-              {t}
-            </span>
+            <span key={t} className="rounded-full border px-2.5 py-1 text-xs text-muted-foreground">{t}</span>
           ))}
         </div>
       )}

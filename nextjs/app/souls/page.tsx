@@ -1,23 +1,28 @@
-import { Suspense } from "react";
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { fetchSouls } from "@/lib/api";
+import { fetchSouls, type SoulListEntry } from "@/lib/api";
 import { SoulCardGrid } from "@/components/soul-card-grid";
 import { SoulFilterBar } from "@/components/soul-filter-bar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Search, Wand2 } from "lucide-react";
 
-export const dynamic = "force-dynamic";
-
 export default function SoulListPage() {
+  const [souls, setSouls] = useState<SoulListEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchSouls().then(setSouls).finally(() => setLoading(false));
+  }, []);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">魂览</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Soul
-          </p>
+          <p className="text-sm text-muted-foreground mt-1">Soul</p>
         </div>
         <div className="flex gap-2">
           <Link href="/souls/collect">
@@ -32,36 +37,24 @@ export default function SoulListPage() {
           </Link>
         </div>
       </div>
-      <Suspense fallback={<ListSkeleton />}>
-        <SoulListAsync />
-      </Suspense>
+      {loading ? (
+        <div className="space-y-4">
+          <div className="flex gap-3">
+            <Skeleton className="h-10 flex-1" />
+            <Skeleton className="h-10 w-28" />
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <Skeleton key={i} className="h-36 rounded-lg" />
+            ))}
+          </div>
+        </div>
+      ) : (
+        <>
+          <SoulFilterBar totalCount={souls.length} />
+          <SoulCardGrid souls={souls} />
+        </>
+      )}
     </div>
-  );
-}
-
-function ListSkeleton() {
-  return (
-    <div className="space-y-4">
-      <div className="flex gap-3">
-        <Skeleton className="h-10 flex-1" />
-        <Skeleton className="h-10 w-28" />
-      </div>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {Array.from({ length: 8 }).map((_, i) => (
-          <Skeleton key={i} className="h-36 rounded-lg" />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-async function SoulListAsync() {
-  const souls = await fetchSouls();
-
-  return (
-    <>
-      <SoulFilterBar totalCount={souls.length} />
-      <SoulCardGrid souls={souls} />
-    </>
   );
 }

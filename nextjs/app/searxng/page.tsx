@@ -1,3 +1,5 @@
+"use client";
+
 import { SearxngSearch } from "@/components/searxng-search";
 
 export default function SearxngPage() {

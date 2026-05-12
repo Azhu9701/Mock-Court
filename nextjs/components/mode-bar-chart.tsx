@@ -30,7 +30,7 @@ export function ModeBarChart({ data }: ModeBarChartProps) {
   return (
     <div data-testid="mode-bar-chart" className="h-64">
       <h3 className="text-sm font-semibold mb-3">模式分布</h3>
-      <ResponsiveContainer>
+      <ResponsiveContainer width="100%" height={200}>
         <BarChart data={chartData}>
           <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
           <XAxis

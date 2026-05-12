@@ -1,6 +1,6 @@
-import { PossessionEntry } from "@/components/possession-entry";
+"use client";
 
-export const dynamic = "force-dynamic";
+import { PossessionEntry } from "@/components/possession-entry";
 
 export default function PossessPage() {
   return (

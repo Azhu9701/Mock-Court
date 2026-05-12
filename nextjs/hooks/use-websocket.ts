@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3096/api/v1";
+
 export interface ProcessStep {
   event: string;
   message: string;
@@ -161,29 +163,28 @@ export function useWebSocket(sessionId: string) {
       setLogs([]);
     }
 
+    // Reset idle timer — fires if no events arrive for 8s (session already complete)
+    const resetIdleTimer = () => {
+      if (noEventsTimeoutRef.current) clearTimeout(noEventsTimeoutRef.current);
+      noEventsTimeoutRef.current = setTimeout(() => {
+        if (!mountedRef.current) return;
+        setStatus("done");
+        addLog("会话可能已结束 — 尝试从 API 恢复", 'info');
+      }, 8000);
+    };
+
     ws.onopen = () => {
       retryRef.current = 0;
       hasConnectedBeforeRef.current = true;
       setStatus("streaming");
       setError(null);
-      const suffix = retryRef.current > 0 ? `（第 ${hasConnectedBeforeRef.current ? '2+' : '1'} 次连接）` : "";
-      addLog(`WebSocket 连接已建立${suffix}`, 'success');
-      if (noEventsTimeoutRef.current) clearTimeout(noEventsTimeoutRef.current);
-      noEventsTimeoutRef.current = setTimeout(() => {
-        if (!mountedRef.current) return;
-        setStatus("done");
-        setError("会话已不在运行中，请从会话历史查看结果");
-        addLog("未收到实时事件 — 会话可能已结束", 'warning');
-      }, 8000);
+      addLog("WebSocket 连接已建立", 'success');
+      resetIdleTimer();
     };
 
     ws.onmessage = (e) => {
       const event: WsEvent = JSON.parse(e.data);
-
-      if (noEventsTimeoutRef.current) {
-        clearTimeout(noEventsTimeoutRef.current);
-        noEventsTimeoutRef.current = null;
-      }
+      resetIdleTimer();
 
       switch (event.event_type) {
         // Process events — update React state directly (low frequency)
@@ -348,6 +349,52 @@ export function useWebSocket(sessionId: string) {
     ws.onerror = () => ws.close();
   }, [sessionId, scheduleFlush, flushImmediate]);
 
+  // Recover session content from REST API when WebSocket can't replay stream chunks
+  const recoverFromApi = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/sessions/${sessionId}`);
+      if (!res.ok) return;
+      const detail = await res.json();
+      const msgs = detail.messages || [];
+
+      // Group soul messages by name
+      const soulContent: Record<string, string> = {};
+      let synthContent = "";
+      const recoveredMessages: Record<string, SoulMessage> = {};
+
+      for (const m of msgs) {
+        if (m.role === "synthesis") {
+          synthContent += (synthContent ? "\n\n" : "") + m.content;
+        } else if ((m.role === "soul" || m.role === "assistant") && m.soul_name) {
+          soulContent[m.soul_name] = (soulContent[m.soul_name] || "") + m.content;
+        }
+      }
+
+      for (const [name, content] of Object.entries(soulContent)) {
+        recoveredMessages[name] = {
+          soulName: name,
+          content,
+          isStreaming: false,
+          error: null,
+        };
+      }
+
+      if (!mountedRef.current) return;
+
+      if (Object.keys(recoveredMessages).length > 0) {
+        bufferRef.current = recoveredMessages;
+        setMessages({ ...recoveredMessages });
+      }
+      if (synthContent) {
+        synthesisRef.current = synthContent;
+        setSynthesis(synthContent);
+      }
+      if (Object.keys(recoveredMessages).length > 0 || synthContent) {
+        setTick((t) => t + 1);
+      }
+    } catch {}
+  }, [sessionId]);
+
   useEffect(() => {
     connect();
     return () => {
@@ -357,6 +404,14 @@ export function useWebSocket(sessionId: string) {
       wsRef.current?.close();
     };
   }, [connect]);
+
+  // Trigger API recovery when session completes but content is missing
+  const hasContent = Object.keys(messages).length > 0 || synthesis.length > 0;
+  useEffect(() => {
+    if (status === "done" && !hasContent) {
+      recoverFromApi();
+    }
+  }, [status, hasContent, recoverFromApi]);
 
   return {
     messages,

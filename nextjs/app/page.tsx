@@ -1,3 +1,5 @@
+"use client";
+
 import Link from "next/link";
 import { Brain, History, Search, BarChart3, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
