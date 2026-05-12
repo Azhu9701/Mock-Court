@@ -3,10 +3,10 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { MessageCircle, Loader2, Trash2, Pencil, Check, X, RefreshCw } from "lucide-react";
+import { Trash2, Pencil, Check, X, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fetchSessions, deleteSession, renameSession, type SessionSummary } from "@/lib/api";
-import { modeLabel } from "@/config/possession-modes";
+import { modeLabel, MODE_COLORS_BG } from "@/config/possession-modes";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmButton } from "@/components/ui/confirm-button";
@@ -21,7 +21,6 @@ export function triggerSessionsUpdate() {
 
 export function SidebarSessions() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -35,7 +34,6 @@ export function SidebarSessions() {
       .then(setSessions)
       .catch(() => {})
       .finally(() => {
-        setLoading(false);
         setRefreshing(false);
         setClientReady(true);
       });
@@ -130,60 +128,54 @@ export function SidebarSessions() {
           return (
             <div key={s.id} className="group relative">
               {isEditing ? (
-                <div className="flex items-center gap-1 px-3 py-1.5">
+                <div className="flex items-center gap-1 px-2 py-1">
                   <Input
                     value={editingTitle}
                     onChange={(e) => setEditingTitle(e.target.value)}
-                    className="h-6 text-xs px-2"
+                    className="h-5 text-xs px-1.5"
                     autoFocus
                     onKeyDown={(e) => {
                       if (e.key === "Enter") handleRename(s.id);
                       if (e.key === "Escape") setEditingId(null);
                     }}
                   />
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-6 w-6"
-                    onClick={() => handleRename(s.id)}
-                  >
+                  <Button size="icon" variant="ghost" className="h-5 w-5" onClick={() => handleRename(s.id)}>
                     <Check className="h-3 w-3" />
                   </Button>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-6 w-6"
-                    onClick={() => setEditingId(null)}
-                  >
+                  <Button size="icon" variant="ghost" className="h-5 w-5" onClick={() => setEditingId(null)}>
                     <X className="h-3 w-3" />
                   </Button>
                 </div>
               ) : (
                 <div className={cn(
-                  "flex items-center gap-2 rounded-md px-3 py-1.5 text-xs transition-colors",
+                  "flex items-center gap-1.5 rounded-md pl-2 pr-1 py-1 text-xs transition-colors",
                   active ? "bg-primary/10" : "hover:bg-muted"
                 )}>
+                  {/* 模式色点 */}
+                  <div className={cn(
+                    "w-1.5 h-1.5 rounded-full shrink-0",
+                    (MODE_COLORS_BG as Record<string, string>)[s.mode] || "bg-gray-400"
+                  )} />
                   <Link
                     href={href}
                     data-testid={`sidebar-session-${s.id}`}
                     className={cn(
-                      "flex items-center gap-2 flex-1",
+                      "flex-1 min-w-0 truncate",
                       active
                         ? "text-primary font-medium"
                         : "text-muted-foreground hover:text-foreground"
                     )}
                   >
-                    <MessageCircle className="h-3 w-3 shrink-0" />
-                    <span className="truncate flex-1">{s.title}</span>
-                    <span className="text-[10px] text-muted-foreground shrink-0">
-                      {modeLabel(s.mode)}
-                    </span>
+                    {s.title}
                   </Link>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <span className="text-[10px] text-muted-foreground/50 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                    {modeLabel(s.mode)}
+                  </span>
+                  <div className="flex items-center shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                     <Button
                       size="icon"
                       variant="ghost"
-                      className="h-6 w-6"
+                      className="h-5 w-5"
                       title="重命名"
                       onClick={(e) => {
                         e.preventDefault();
@@ -199,7 +191,7 @@ export function SidebarSessions() {
                       confirmText="确认删除"
                       title="删除会话"
                       size="icon"
-                      className="h-6 w-6"
+                      className="h-5 w-5"
                       onConfirm={async () => {
                         await handleDelete(s.id);
                       }}

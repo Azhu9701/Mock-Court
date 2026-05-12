@@ -285,13 +285,13 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
                     <div
                       className={cn(
                         "px-4 transition-all duration-300 overflow-hidden",
-                        expandedMsgId === msg.id ? "max-h-40 py-2" : "max-h-12 py-1"
+                        expandedMsgId === msg.id ? "max-h-40 py-2" : "max-h-6 py-1"
                       )}
                     >
                       <p
                         className={cn(
                           "text-sm text-muted-foreground/60 dark:text-muted-foreground/50 leading-relaxed",
-                          expandedMsgId === msg.id ? "whitespace-pre-wrap" : "line-clamp-2 whitespace-pre-wrap"
+                          expandedMsgId === msg.id ? "whitespace-pre-wrap" : "line-clamp-1"
                         )}
                       >
                         {msg.reasoningContent}
