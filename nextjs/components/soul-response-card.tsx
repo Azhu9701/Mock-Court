@@ -1,8 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useState, useMemo } from "react";
 import { Brain, CheckCircle, ArrowUpRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ArticleModal } from "./article-modal";
@@ -20,7 +18,7 @@ interface SoulResponseCardProps {
 
 export function SoulResponseCard({ name, content, ismismCode = "", isStreaming = false }: SoulResponseCardProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const cleanedContent = cleanContent(content);
+  const cleanedContent = useMemo(() => cleanContent(content), [content]);
   const hasContent = cleanedContent.length > 0;
   const isArrived = hasContent || !isStreaming;
 

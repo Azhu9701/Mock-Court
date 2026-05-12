@@ -34,7 +34,13 @@ export function SoulEffectivenessTable({ stats }: SoulEffectivenessTableProps) {
   return (
     <div data-testid="effectiveness-table">
       <h3 className="text-sm font-semibold mb-3">魂有效性</h3>
-      <div className="space-y-2 max-h-80 overflow-y-auto">
+      <div className="flex items-center gap-3 px-2 py-1 text-xs text-muted-foreground border-b mb-1">
+        <span className="w-24 font-medium">魂名</span>
+        <span className="w-12 text-right">次数</span>
+        <span className="flex-1">有效率</span>
+        <span className="w-16 text-right">Tokens</span>
+      </div>
+      <div className="space-y-1 max-h-80 overflow-y-auto">
         {stats
           .sort((a, b) => {
             const ar = a.call_count > 0 ? a.effective_count / a.call_count : 0;
@@ -56,6 +62,11 @@ export function SoulEffectivenessTable({ stats }: SoulEffectivenessTableProps) {
                   total={s.call_count}
                 />
               </div>
+              <span className="w-16 text-xs text-muted-foreground text-right tabular-nums">
+                {(s.total_tokens ?? 0) > 1000
+                  ? ((s.total_tokens ?? 0) / 1000).toFixed(1) + "K"
+                  : (s.total_tokens ?? 0).toLocaleString()}
+              </span>
             </div>
           ))}
       </div>

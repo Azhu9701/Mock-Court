@@ -13,7 +13,7 @@ pub async fn compute_summon_stats(store: &dyn Storage, period: &Period) -> Resul
         .query_call_records(&CallFilter::default())
         .await?;
 
-    let registry = store.read_registry().await?;
+    let total_souls_available = store.list_soul_names().await?.len();
 
     let filtered: Vec<_> = records
         .into_iter()
@@ -21,6 +21,7 @@ pub async fn compute_summon_stats(store: &dyn Storage, period: &Period) -> Resul
         .collect();
 
     let total_calls = filtered.len();
+    let total_tokens: u64 = filtered.iter().map(|r| r.usage.total_tokens as u64).sum();
     let mut soul_names = std::collections::HashSet::new();
     let mut by_mode: HashMap<PossessionMode, usize> = HashMap::new();
     let mut by_soul_map: HashMap<String, SoulCallStats> = HashMap::new();
@@ -37,8 +38,10 @@ pub async fn compute_summon_stats(store: &dyn Storage, period: &Period) -> Resul
                 effective_count: 0,
                 partial_count: 0,
                 invalid_count: 0,
+                total_tokens: 0,
             });
         entry.call_count += 1;
+        entry.total_tokens += r.usage.total_tokens as u64;
         match r.effectiveness {
             Effectiveness::Effective => entry.effective_count += 1,
             Effectiveness::Partial => entry.partial_count += 1,
@@ -52,7 +55,8 @@ pub async fn compute_summon_stats(store: &dyn Storage, period: &Period) -> Resul
     Ok(SummonStats {
         total_calls,
         unique_souls_called: soul_names.len(),
-        total_souls_available: registry.souls.len(),
+        total_souls_available,
+        total_tokens,
         by_mode,
         by_soul,
         period_start: period.start,
@@ -119,7 +123,6 @@ pub async fn detect_unsummoned_souls_impl(
     store: &dyn Storage,
     threshold_days: u32,
 ) -> Result<Vec<SoulAlert>> {
-    let registry = store.read_registry().await?;
     let records = store
         .query_call_records(&CallFilter::default())
         .await?;
@@ -136,9 +139,10 @@ pub async fn detect_unsummoned_souls_impl(
         }
     }
 
+    let soul_names = store.list_soul_names().await?;
     let mut alerts = Vec::new();
 
-    for name in registry.souls.keys() {
+    for name in &soul_names {
         match called_souls.get(name) {
             None => {
                 alerts.push(SoulAlert {

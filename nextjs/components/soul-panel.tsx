@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Brain, AlertCircle, CheckCircle2, Zap, ChevronRight, ChevronDown } from "lucide-react";
@@ -48,8 +48,13 @@ export function SoulPanel({
   }[status];
 
   const progress = content.length > 0 ? Math.min(100, (content.length / 3000) * 100) : 0;
-  const firstParagraph = content.split("\n\n")[0]?.substring(0, 100) || "";
-  const hasMore = content.length > 100 || content.split("\n\n").length > 1;
+  const { firstParagraph, hasMore } = useMemo(() => {
+    const paragraphs = content.split("\n\n");
+    return {
+      firstParagraph: paragraphs[0]?.substring(0, 100) || "",
+      hasMore: content.length > 100 || paragraphs.length > 1,
+    };
+  }, [content]);
 
   return (
     <div

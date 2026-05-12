@@ -85,11 +85,10 @@ function SessionRow({ s, onDelete }: { s: SessionSummary; onDelete: (id: string)
         <h4 className="text-sm font-medium truncate group-hover:text-primary transition-colors">
           {s.title}
         </h4>
-        {s.message_count > 0 && (
-          <p className="text-xs text-muted-foreground mt-0.5 truncate">
-            {s.message_count} 条消息
-          </p>
-        )}
+        <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
+          {s.message_count > 0 && <span>{s.message_count} 条消息</span>}
+          {s.total_tokens > 0 && <span>{s.total_tokens.toLocaleString()} tokens</span>}
+        </div>
       </div>
 
       {/* 参与魂数量 */}

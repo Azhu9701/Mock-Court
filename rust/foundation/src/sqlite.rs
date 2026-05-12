@@ -213,8 +213,14 @@ impl SqliteDb {
     pub fn list_sessions(&self, filter: &SessionFilter) -> Result<Vec<SessionSummary>> {
         self.with_conn(|conn| {
             let mut sql = String::from(
-                "SELECT s.id, s.title, s.mode, s.status, s.created_at, COUNT(m.id) as msg_count
-                 FROM sessions s LEFT JOIN messages m ON s.id = m.session_id WHERE 1=1"
+                "SELECT s.id, s.title, s.mode, s.status, s.created_at,
+                        COUNT(DISTINCT m.id) as msg_count,
+                        COUNT(DISTINCT cr.soul_name) as soul_count,
+                        COALESCE(SUM(cr.total_tokens), 0) as total_tokens
+                 FROM sessions s
+                 LEFT JOIN messages m ON s.id = m.session_id
+                 LEFT JOIN call_records cr ON s.id = cr.session_id
+                 WHERE 1=1"
             );
             let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
 
@@ -248,6 +254,8 @@ impl SqliteDb {
                     status: str_to_status(&row.get::<_, String>(3)?),
                     created_at: DateTime::parse_from_rfc3339(&created_at).unwrap().with_timezone(&Utc),
                     message_count: row.get(5)?,
+                    soul_count: row.get::<_, i64>(6)? as u32,
+                    total_tokens: row.get::<_, i64>(7)? as u32,
                 })
             })?;
 

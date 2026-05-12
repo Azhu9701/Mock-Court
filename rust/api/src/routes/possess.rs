@@ -456,6 +456,20 @@ fn parse_ismism(code: &str) -> Option<[u8; 4]> {
     (nums.len() >= 4).then(|| [nums[0], nums[1], nums[2], nums[3]])
 }
 
+/// 两个字符串的 trigram Jaccard 重叠度，用于缺失视角→候选魂的轻量匹配
+fn jaccard_trigram_overlap(a: &str, b: &str) -> f64 {
+    fn trigrams(s: &str) -> std::collections::HashSet<[char; 3]> {
+        let chars: Vec<char> = s.chars().collect();
+        chars.windows(3).filter_map(|w| <[char; 3]>::try_from(w).ok()).collect()
+    }
+    let ta = trigrams(a);
+    let tb = trigrams(b);
+    if ta.is_empty() || tb.is_empty() { return 0.0; }
+    let intersection = ta.intersection(&tb).count();
+    let union = ta.union(&tb).count();
+    intersection as f64 / union as f64
+}
+
 /// 计算魂的 ismism 坐标与任务推断坐标的邻近度 (0.0 ~ 1.0)
 fn ismism_proximity_score(profile: &TaskIsmismProfile, soul: &SoulListEntry) -> f64 {
     let soul_code = match parse_ismism(&soul.ismism_code) {
@@ -761,7 +775,7 @@ async fn analyze_task(
             "reviewer": reviewer_name,
         }).to_string());
 
-        let (verdict, checks, notes) = if let Ok(banner_lord) = state.registry.get_soul(&reviewer_name) {
+        let (verdict, checks, notes, verified_souls, missing_perspectives) = if let Ok(banner_lord) = state.registry.get_soul(&reviewer_name) {
             let candidate_profiles: Vec<SoulProfile> = souls.iter()
                 .filter_map(|s| state.registry.get_soul(&s.name).ok())
                 .collect();
@@ -801,6 +815,9 @@ async fn analyze_task(
             let boundary_risks: Vec<String> = result["boundary_risks"].as_array()
                 .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default();
+            let verified_souls: Vec<String> = result["verified_souls"].as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
 
             let v = result["verdict"].as_str().unwrap_or("pass").to_string();
             let c: Vec<String> = result["checks"].as_array()
@@ -814,9 +831,9 @@ async fn analyze_task(
             } else {
                 result["notes"].as_str().unwrap_or("").to_string()
             };
-            (v, c, n)
+            (v, c, n, verified_souls, missing_perspectives)
         } else {
-            ("pass".to_string(), vec!["审查官不可用，默认通过".into()], String::new())
+            ("pass".to_string(), vec!["审查官不可用，默认通过".into()], String::new(), vec![], vec![])
         };
 
         // ── Phase: review_done ──
@@ -830,8 +847,148 @@ async fn analyze_task(
             }
         }).to_string());
 
-        // ── Step 3: Apply Review Verdict ──
-        let final_souls = if verdict == "pass" {
+        // ── Step 3: 根据审查反馈重新匹配，再最终裁决 ──
+        // 审查官先对算法结果做初裁（谁 pass/reject，缺什么视角），
+        // 系统根据缺失视角补充候选魂，审查官再做终裁。
+        let (final_verdict, final_checks, final_notes, final_verified_souls) =
+            if !missing_perspectives.is_empty() {
+                // 审查官发现了缺失视角 → 搜索补充魂
+                let rejected_names: Vec<&str> = souls.iter()
+                    .map(|s| s.name.as_str())
+                    .filter(|n| !verified_souls.iter().any(|v| v == *n))
+                    .collect();
+
+                let mut complementary: Vec<SoulMatch> = Vec::new();
+                for perspective in &missing_perspectives {
+                    let perspective_lower = perspective.to_lowercase();
+                    for entry in &all_souls {
+                        // 跳过已在 verified_souls 或 rejected 中的魂
+                        if verified_souls.iter().any(|v| v == &entry.name) { continue; }
+                        if rejected_names.contains(&entry.name.as_str()) { continue; }
+                        if complementary.iter().any(|s| s.name == entry.name) { continue; }
+
+                        // 用关键词匹配判断魂是否覆盖该视角
+                        let search_text = format!("{} {} {} {}",
+                            entry.field, entry.ismism_code,
+                            entry.self_declare,
+                            entry.tags.join(" ")
+                        ).to_lowercase();
+
+                        // 简单 trigram 重叠匹配
+                        let overlap = jaccard_trigram_overlap(&perspective_lower, &search_text);
+                        if overlap > 0.08 {
+                            let ismism_prox = ismism_proximity_score(&task_ismism, entry);
+                            complementary.push(SoulMatch {
+                                name: entry.name.clone(),
+                                field: entry.field.clone(),
+                                ismism_code: entry.ismism_code.clone(),
+                                rationale: format!("补充视角「{}」| trigram重叠 {:.0}% | 坐标邻近度 {:.0}%",
+                                    perspective, overlap * 100.0, ismism_prox * 100.0),
+                            });
+                        }
+                    }
+                }
+                complementary.sort_by(|a, b| {
+                    b.rationale.len().partial_cmp(&a.rationale.len()).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                complementary.truncate(5);
+
+                if !complementary.is_empty() {
+                    // ── 二轮审查：将补充魂加入候选，审查官终裁 ──
+                    send(serde_json::json!({
+                        "phase": "rematching",
+                        "missing": missing_perspectives,
+                        "complementary": complementary.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
+                    }).to_string());
+
+                    let mut final_candidates: Vec<SoulProfile> = verified_souls.iter()
+                        .filter_map(|name| state.registry.get_soul(name).ok())
+                        .collect();
+                    for s in &complementary {
+                        if let Ok(profile) = state.registry.get_soul(&s.name) {
+                            final_candidates.push(profile);
+                        }
+                    }
+
+                    if let Ok(banner_lord2) = state.registry.get_soul(&reviewer_name) {
+                        let r2_handle = spawn_banner_lord_review(
+                            state.engine.gateway().clone(),
+                            banner_lord2,
+                            body.task.clone(),
+                            final_candidates,
+                            body.judgment.clone().unwrap_or_default(),
+                            body.worry.clone().unwrap_or_default(),
+                            body.unknown.clone().unwrap_or_default(),
+                        );
+                        match r2_handle.await {
+                            Ok(Ok(ref result2)) => {
+                                let v2 = result2["verdict"].as_str().unwrap_or("pass").to_string();
+                                let vs2: Vec<String> = result2["verified_souls"].as_array()
+                                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                                    .unwrap_or_default();
+                                let c2: Vec<String> = result2["checks"].as_array()
+                                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                                    .unwrap_or_default();
+                                let n2 = result2["notes"].as_str().unwrap_or("").to_string();
+                                if let Some(cards) = result2["task_cards"].as_object() {
+                                    for (k, v) in cards {
+                                        if let Some(val) = v.as_str() {
+                                            task_cards.insert(k.clone(), val.to_string());
+                                        }
+                                    }
+                                }
+                                tracing::info!("Round 2 review complete: verdict={}, verified_souls={:?}", v2, vs2);
+                                (v2, c2, n2, vs2)
+                            }
+                            _ => {
+                                tracing::warn!("Round 2 review failed, using round 1 results");
+                                (verdict.clone(), checks.clone(), notes.clone(), verified_souls.clone())
+                            }
+                        }
+                    } else {
+                        (verdict.clone(), checks.clone(), notes.clone(), verified_souls.clone())
+                    }
+                } else {
+                    (verdict.clone(), checks.clone(), notes.clone(), verified_souls.clone())
+                }
+            } else {
+                (verdict.clone(), checks.clone(), notes.clone(), verified_souls.clone())
+            };
+
+        // ── Step 4: 以审查官终裁的 verified_souls 为准 ──
+        // 审查官是唯一权威。算法匹配只是参考，终裁的 verified_souls 决定最终阵容。
+        let final_souls = if !final_verified_souls.is_empty() {
+            let chosen: Vec<SoulMatch> = final_verified_souls.iter()
+                .filter_map(|name| {
+                    // 先在算法匹配结果中找
+                    if let Some(s) = souls.iter().find(|s| s.name == *name).cloned() {
+                        return Some(s);
+                    }
+                    // 算法没匹配到但审查官指定了——从 registry 补齐
+                    all_souls.iter().find(|e| e.name == *name).map(|entry| {
+                        let ismism_prox = ismism_proximity_score(&task_ismism, entry);
+                        SoulMatch {
+                            name: entry.name.clone(),
+                            field: entry.field.clone(),
+                            ismism_code: entry.ismism_code.clone(),
+                            rationale: format!("审查官指定 | 领域 {} | 坐标邻近度 {:.0}%", entry.field, ismism_prox * 100.0),
+                        }
+                    })
+                })
+                .collect();
+
+            if chosen.is_empty() {
+                tracing::warn!("final_verified_souls={:?} not found in registry or matched, keeping all", final_verified_souls);
+                souls
+            } else {
+                tracing::info!(
+                    "Banner lord final authority: final_verified_souls={:?}, final {} souls (algorithm matched {})",
+                    final_verified_souls, chosen.len(), souls.len()
+                );
+                chosen
+            }
+        } else if final_verdict == "pass" {
+            tracing::info!("No verified_souls from review, pass → using all {} algorithm-matched souls", souls.len());
             souls
         } else {
             // ── Phase: adjusting ──
@@ -841,7 +998,7 @@ async fn analyze_task(
                 "## 任务\n{}\n\n## 当前魂组合\n{}\n\n## 幡主审查结果\n裁决：{}\n{}\n备注：{}\n\n## 指令\n根据审查结果调整魂组合。如果是条件通过——增删魂以满足约束。如果是拒绝——完全重新匹配。\n返回JSON：{{\"souls\":[{{\"name\":\"魂名\",\"rationale\":\"调整理由\"}}]}}",
                 body.task,
                 souls.iter().map(|s| format!("- {} [{}] {}", s.name, s.field, s.rationale)).collect::<Vec<_>>().join("\n"),
-                verdict, checks.join("\n"), notes
+                final_verdict, final_checks.join("\n"), final_notes
             );
             let provider3 = provider.clone();
             match llm_call_json(&state, provider3, None, &adjustment_prompt, 0.3, 4096, None).await {
@@ -898,7 +1055,7 @@ async fn analyze_task(
                     "name": s.name, "field": s.field, "ismism_code": s.ismism_code, "rationale": s.rationale,
                 })).collect::<Vec<_>>(),
                 "recommended_mode": mode,
-                "review": { "verdict": verdict, "checks": checks, "notes": notes, "reviewer": reviewer_name },
+                "review": { "verdict": final_verdict, "checks": final_checks, "notes": final_notes, "reviewer": reviewer_name },
                 "task_cards": task_cards,
             }
         }).to_string());

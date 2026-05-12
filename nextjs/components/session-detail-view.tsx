@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import Link from "next/link";
 import { SessionRunner } from "@/components/session-runner";
 import { SessionContextHeader, type MatchedSoulInfo } from "@/components/session-context-header";
@@ -135,6 +135,11 @@ export default function SessionDetailView({ id }: { id: string }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  const sorted = useMemo(
+    () => detail ? [...detail.messages].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) : [],
+    [detail]
+  );
+
   if (loading || !detail) {
     return (
       <div className="max-w-5xl mx-auto space-y-4 animate-pulse">
@@ -144,7 +149,7 @@ export default function SessionDetailView({ id }: { id: string }) {
     );
   }
 
-  const { session, messages } = detail;
+  const { session } = detail;
   const isActive = session.status === "active" || session.status === "running";
 
   if (isActive) {
@@ -282,7 +287,6 @@ export default function SessionDetailView({ id }: { id: string }) {
     );
   }
 
-  const sorted = [...messages].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   const userMsgs = sorted.filter((m) => m.role === "user");
   const soulMsgs = sorted.filter((m) => (m.role === "assistant" || m.role === "soul") && m.soul_name && m.soul_name !== "知识卡片");
   const synthMsgs = sorted.filter((m) => m.role === "synthesis");

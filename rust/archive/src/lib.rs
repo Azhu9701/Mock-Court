@@ -36,6 +36,7 @@ pub struct SummonStats {
     pub total_calls: usize,
     pub unique_souls_called: usize,
     pub total_souls_available: usize,
+    pub total_tokens: u64,
     pub by_mode: HashMap<PossessionMode, usize>,
     pub by_soul: Vec<SoulCallStats>,
     pub period_start: DateTime<Utc>,
@@ -49,6 +50,7 @@ pub struct SoulCallStats {
     pub effective_count: usize,
     pub partial_count: usize,
     pub invalid_count: usize,
+    pub total_tokens: u64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

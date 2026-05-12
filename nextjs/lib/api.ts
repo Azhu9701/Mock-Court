@@ -220,6 +220,7 @@ export interface SummonStatsResponse {
   total_calls: number;
   unique_souls_called: number;
   total_souls_available: number;
+  total_tokens: number;
   by_mode: Record<string, number>;
   by_soul: SoulCallStats[];
 }
@@ -230,6 +231,7 @@ export interface SoulCallStats {
   effective_count: number;
   partial_count: number;
   invalid_count: number;
+  total_tokens: number;
 }
 
 export interface SoulAlert {
@@ -307,7 +309,8 @@ export interface SessionSummary {
   status: string;
   created_at: string;
   message_count: number;
-  soul_count?: number;
+  soul_count: number;
+  total_tokens: number;
 }
 
 export interface SessionDetail {

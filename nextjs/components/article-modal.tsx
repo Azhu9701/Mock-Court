@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { X, Bot, ExternalLink } from "lucide-react";
+import { X, Bot, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface ArticleModalProps {
@@ -41,6 +41,19 @@ export function ArticleModal({ isOpen, onClose, title, ismismCode, content }: Ar
   const markdownElement = useMemo(() => (
     <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanedContent}</ReactMarkdown>
   ), [cleanedContent]);
+
+  const handleDownload = useCallback(() => {
+    const safeName = title.replace(/[\\/:*?"<>|]/g, "_").slice(0, 80) || "魂回应";
+    const blob = new Blob([cleanedContent], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${safeName}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [title, cleanedContent]);
 
   if (!isOpen) return null;
 
@@ -219,10 +232,16 @@ export function ArticleModal({ isOpen, onClose, title, ismismCode, content }: Ar
             <span className="text-border">|</span>
             <span>点击外部关闭</span>
           </div>
-          <Button onClick={onClose} className="gap-2">
-            <X className="h-4 w-4" />
-            关闭
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={handleDownload} className="gap-1.5">
+              <Download className="h-3.5 w-3.5" />
+              下载 .md
+            </Button>
+            <Button onClick={onClose} className="gap-2">
+              <X className="h-4 w-4" />
+              关闭
+            </Button>
+          </div>
         </div>
       </div>
     </div>

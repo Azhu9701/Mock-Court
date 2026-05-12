@@ -36,17 +36,7 @@ export default function RootLayout({
         <meta name="mobile-web-app-capable" content="yes" />
       </head>
       <body className="antialiased">
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              if ('serviceWorker' in navigator) {
-                window.addEventListener('load', () => {
-                  navigator.serviceWorker.register('/sw.js').catch(() => {});
-                });
-              }
-            `,
-          }}
-        />
+        <script src="/sw-register.js" defer />
         <Providers>
           <BreadcrumbProvider>
             <ShellLayout>{children}</ShellLayout>

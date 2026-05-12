@@ -1,5 +1,5 @@
-import { BarChart3, Users, CheckCircle, AlertTriangle } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { BarChart3, Users, CheckCircle, AlertTriangle, Zap } from "lucide-react";
+
 
 interface StatCardProps {
   title: string;
@@ -13,6 +13,7 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   users: Users,
   "check-circle": CheckCircle,
   "alert-triangle": AlertTriangle,
+  zap: Zap,
 };
 
 export function StatCard({ title, value, subtitle, icon }: StatCardProps) {

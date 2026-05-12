@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use ai_gateway::model_router::{ModelRouter, RoutingRole};
@@ -11,6 +13,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio::sync::broadcast;
 use crate::cross_detector::{CrossDetector, CollisionEvent};
+use crate::soul::intervention::{InterventionGate, InterventionDecision};
 
 use crate::stream;
 use crate::tools::ToolRegistry;
@@ -18,6 +21,7 @@ use crate::{SoulOutput, UserPresets, WsEvent, WsEventType, WsSessionManager};
 
 const MAX_PARALLEL_SOULS: usize = 10;
 const SOUL_TIMEOUT_SECS: u64 = 300;
+const MAX_INTERVENTION_ROUNDS: usize = 3;
 
 // 用于魂流式输出的消息
 #[derive(Debug, Clone)]
@@ -134,14 +138,27 @@ pub async fn run(
     let gateway_owned = GatewayRegistry::clone(gateway);
     let ws_c = ws.clone();
     let s_id = session_id.to_string();
-    
-    // 启动碰撞检测任务
+
+    // ── 创建 InterventionGate + 干预通道 ──
+    let intervention_gate = InterventionGate::new(Some(Arc::new(gateway_owned.clone())));
+    let mut intervention_txs: HashMap<String, mpsc::Sender<InterventionDecision>> = HashMap::new();
+    let mut intervention_rxs: HashMap<String, mpsc::Receiver<InterventionDecision>> = HashMap::new();
+    for soul_name in &limited {
+        let (tx, rx) = mpsc::channel::<InterventionDecision>(8);
+        intervention_txs.insert(soul_name.clone(), tx);
+        intervention_rxs.insert(soul_name.clone(), rx);
+    }
+
+    // 启动碰撞检测任务（带实时干预门控）
     let detector = cross_detector.clone();
     let ws_clone = ws_c.clone();
     let session_id_clone = s_id.clone();
     let system_tx_clone = system_tx.clone();
     let _collision_handle = tokio::spawn(async move {
-        detect_collisions_async(detector, chunk_rx, ws_clone, session_id_clone, system_tx_clone).await;
+        detect_collisions_async(
+            detector, chunk_rx, ws_clone, session_id_clone,
+            system_tx_clone, intervention_gate, intervention_txs,
+        ).await;
     });
 
     let mut set = JoinSet::new();
@@ -154,11 +171,15 @@ pub async fn run(
         let provider = req.provider.clone();
         let prompt = req.prompt.clone();
         let config = req.config.clone();
+        let irx = intervention_rxs.remove(&soul_name).unwrap_or_else(|| {
+            let (_, rx) = mpsc::channel(1);
+            rx
+        });
         set.spawn(async move {
             run_soul_with_tools(
                 &gw, &provider, &prompt, &config,
                 &s_id, &soul_name, &ws_c, &tr,
-                chunk_tx_clone,
+                chunk_tx_clone, irx,
             ).await
         });
     }
@@ -339,10 +360,12 @@ async fn run_soul_with_tools(
     ws: &WsSessionManager,
     tool_registry: &crate::tools::ToolRegistry,
     chunk_tx: broadcast::Sender<SoulStreamMessage>,
+    mut intervention_rx: mpsc::Receiver<InterventionDecision>,
 ) -> SoulOutput {
     let max_rounds = crate::tools::max_tool_rounds();
     let mut history: Vec<foundation::PromptMessage> = prompt.messages.clone();
     let name = soul_name.to_string();
+    let mut intervention_count = 0usize;
 
     for _round in 0..max_rounds {
         let req = foundation::LLMRequest {
@@ -362,66 +385,138 @@ async fn run_soul_with_tools(
             }
         };
 
-        let output = stream_single_soul_with_detection(rx, session_id, &name, ws, chunk_tx.clone()).await;
+        let outcome = stream_single_soul_with_detection(
+            rx, session_id, &name, ws, chunk_tx.clone(), &mut intervention_rx,
+        ).await;
 
-        if output.error.is_some() {
-            return output;
-        }
+        match outcome {
+            StreamOutcome::Interrupted { partial_content, partial_tool_calls, intervention } => {
+                intervention_count += 1;
 
-        if output.tool_calls.is_empty() {
-            return output;
-        }
+                // 注入部分输出到历史
+                if !partial_content.is_empty() {
+                    history.push(foundation::PromptMessage {
+                        role: "assistant".to_string(),
+                        content: partial_content,
+                        reasoning_content: None,
+                        tool_calls: if partial_tool_calls.is_empty() { None } else { Some(partial_tool_calls) },
+                        tool_call_id: None,
+                    });
+                }
 
-        for tc in &output.tool_calls {
-            let payload = crate::ToolCallPayload {
-                tool_call_id: tc.id.clone(),
-                tool_name: tc.function.name.clone(),
-                arguments: tc.function.arguments.clone(),
-                soul_name: name.clone(),
-            };
-            let json = serde_json::to_string(&payload).unwrap_or_default();
-            ws.broadcast_soul(session_id, &name, &WsEvent {
-                event_type: WsEventType::ToolCallStarted,
-                payload: json,
-                reasoning_content: None,
-                soul_name: Some(name.clone()),
-                seq: 0,
-            });
+                // 将干预转为 user 消息注入，迫使魂在下轮推理中回应
+                let intervention_msg = intervention_to_message(&intervention);
+                history.push(foundation::PromptMessage {
+                    role: "user".to_string(),
+                    content: intervention_msg,
+                    reasoning_content: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                });
 
-            match tool_registry.execute(tc).await {
-                Ok(result) => {
-                    let result_payload = crate::ToolResultPayload {
+                // 干预轮次上限保护，避免死循环
+                if intervention_count >= MAX_INTERVENTION_ROUNDS {
+                    tracing::warn!(
+                        "Soul '{}' reached max intervention rounds ({}), forcing completion",
+                        name, MAX_INTERVENTION_ROUNDS
+                    );
+                    // 最后再调一次 LLM 并正常返回
+                    let final_req = foundation::LLMRequest {
+                        provider: provider.clone(),
+                        prompt: foundation::Prompt { messages: history.clone() },
+                        config: config.clone(),
+                    };
+                    if let Ok(final_rx) = gw.call(&final_req) {
+                        let final_outcome = stream_single_soul_with_detection(
+                            final_rx, session_id, &name, ws, chunk_tx.clone(), &mut intervention_rx,
+                        ).await;
+                        if let StreamOutcome::Completed(output) = final_outcome {
+                            return output;
+                        }
+                    }
+                    return SoulOutput {
+                        soul_name: name,
+                        content: history.iter()
+                            .filter(|m| m.role == "assistant")
+                            .map(|m| m.content.clone())
+                            .collect::<Vec<_>>()
+                            .join("\n\n"),
+                        usage: foundation::UsageStats::default(),
+                        error: None,
+                        tool_calls: Vec::new(),
+                    };
+                }
+
+                // 继续循环，用带干预消息的 history 重新调 LLM
+                tracing::info!(
+                    "Soul '{}' restarting inference after intervention #{}, history_len={}",
+                    name, intervention_count, history.len()
+                );
+                continue;
+            }
+
+            StreamOutcome::Completed(output) => {
+                if output.error.is_some() {
+                    return output;
+                }
+
+                if output.tool_calls.is_empty() {
+                    return output;
+                }
+
+                // 处理工具调用
+                for tc in &output.tool_calls {
+                    let payload = crate::ToolCallPayload {
                         tool_call_id: tc.id.clone(),
                         tool_name: tc.function.name.clone(),
-                        result: result.clone(),
+                        arguments: tc.function.arguments.clone(),
                         soul_name: name.clone(),
                     };
-                    let result_json = serde_json::to_string(&result_payload).unwrap_or_default();
+                    let json = serde_json::to_string(&payload).unwrap_or_default();
                     ws.broadcast_soul(session_id, &name, &WsEvent {
-                        event_type: WsEventType::ToolResult,
-                        payload: result_json,
+                        event_type: WsEventType::ToolCallStarted,
+                        payload: json,
                         reasoning_content: None,
                         soul_name: Some(name.clone()),
                         seq: 0,
                     });
 
-                    history.push(foundation::PromptMessage {
-                        role: "assistant".to_string(),
-                        content: String::new(),
-                        reasoning_content: None,
-                        tool_calls: Some(output.tool_calls.clone()),
-                        tool_call_id: None,
-                    });
-                    history.push(foundation::PromptMessage {
-                        role: "tool".to_string(),
-                        content: result,
-                        reasoning_content: None,
-                        tool_calls: None,
-                        tool_call_id: Some(tc.id.clone()),
-                    });
-                }
-                Err(e) => {
-                    return SoulOutput::error(name, format!("Tool {} failed: {}", tc.function.name, e));
+                    match tool_registry.execute(tc).await {
+                        Ok(result) => {
+                            let result_payload = crate::ToolResultPayload {
+                                tool_call_id: tc.id.clone(),
+                                tool_name: tc.function.name.clone(),
+                                result: result.clone(),
+                                soul_name: name.clone(),
+                            };
+                            let result_json = serde_json::to_string(&result_payload).unwrap_or_default();
+                            ws.broadcast_soul(session_id, &name, &WsEvent {
+                                event_type: WsEventType::ToolResult,
+                                payload: result_json,
+                                reasoning_content: None,
+                                soul_name: Some(name.clone()),
+                                seq: 0,
+                            });
+
+                            history.push(foundation::PromptMessage {
+                                role: "assistant".to_string(),
+                                content: String::new(),
+                                reasoning_content: None,
+                                tool_calls: Some(output.tool_calls.clone()),
+                                tool_call_id: None,
+                            });
+                            history.push(foundation::PromptMessage {
+                                role: "tool".to_string(),
+                                content: result,
+                                reasoning_content: None,
+                                tool_calls: None,
+                                tool_call_id: Some(tc.id.clone()),
+                            });
+                        }
+                        Err(e) => {
+                            return SoulOutput::error(name, format!("Tool {} failed: {}", tc.function.name, e));
+                        }
+                    }
                 }
             }
         }
@@ -436,84 +531,157 @@ async fn run_soul_with_tools(
     }
 }
 
-/// 流式输出单个魂，同时发送给交叉检测器
+/// 将干预决策转为注入魂对话的 user 消息
+fn intervention_to_message(decision: &InterventionDecision) -> String {
+    match decision {
+        InterventionDecision::InjectQuestion { question } => {
+            format!(
+                "⚠️ [系统干预] 检测到同行魂对你的立场有冲突。{}\n\n请在你的下一段输出中回应这个问题——不要无视它。",
+                question
+            )
+        }
+        InterventionDecision::Redirect { target } => {
+            format!(
+                "⚠️ [系统干预] 你的输出与同行魂高度重叠（冗余）。{}\n\n请从不同角度重新切入，避免重复已有观点。",
+                target
+            )
+        }
+        InterventionDecision::DeepenRequest { aspect, reason } => {
+            format!(
+                "⚠️ [系统干预] 同行魂尚未覆盖维度「{}」。{}\n\n请展开这一维度，提供更深的洞察。",
+                aspect, reason
+            )
+        }
+        InterventionDecision::NoAction => String::new(),
+    }
+}
+
+/// 流式输出结果：完成或被干预打断
+enum StreamOutcome {
+    Completed(SoulOutput),
+    Interrupted {
+        partial_content: String,
+        partial_tool_calls: Vec<foundation::ToolCall>,
+        intervention: InterventionDecision,
+    },
+}
+
+/// 流式输出单个魂，同时发送给交叉检测器，并监听实时干预信号
 async fn stream_single_soul_with_detection(
     mut rx: mpsc::Receiver<foundation::Result<foundation::Chunk>>,
     session_id: &str,
     soul_name: &str,
     ws: &WsSessionManager,
     chunk_tx: broadcast::Sender<SoulStreamMessage>,
-) -> SoulOutput {
+    intervention_rx: &mut mpsc::Receiver<InterventionDecision>,
+) -> StreamOutcome {
     let mut content = String::new();
     let mut usage = foundation::UsageStats::default();
     let mut seq: u32 = 0;
     let name = soul_name.to_string();
     let mut tool_calls: Vec<foundation::ToolCall> = Vec::new();
 
-    while let Some(result) = rx.recv().await {
-        match result {
-            Ok(chunk) => {
-                if let Some(u) = chunk.usage {
-                    usage = u;
-                }
-                if !chunk.tool_calls.is_empty() {
-                    tool_calls.extend(chunk.tool_calls);
-                }
-                if !chunk.content.is_empty() {
-                    content.push_str(&chunk.content);
+    loop {
+        tokio::select! {
+            // 偏向 LLM token 流（保证推理不被干预饿死）
+            biased;
 
-                    ws.broadcast_soul(
-                        session_id,
-                        &name,
-                        &WsEvent {
-                            event_type: WsEventType::SoulChunk,
-                            payload: chunk.content.clone(),
-                            reasoning_content: chunk.reasoning_content.clone(),
-                            soul_name: Some(name.clone()),
-                            seq,
-                        },
-                    );
+            result = rx.recv() => {
+                match result {
+                    Some(Ok(chunk)) => {
+                        if let Some(u) = chunk.usage {
+                            usage = u;
+                        }
+                        if !chunk.tool_calls.is_empty() {
+                            tool_calls.extend(chunk.tool_calls);
+                        }
+                        if !chunk.content.is_empty() {
+                            content.push_str(&chunk.content);
 
-                    let _ = chunk_tx.send(SoulStreamMessage::Chunk {
-                        soul_name: name.clone(),
-                        token: chunk.content,
-                    });
+                            ws.broadcast_soul(
+                                session_id,
+                                &name,
+                                &WsEvent {
+                                    event_type: WsEventType::SoulChunk,
+                                    payload: chunk.content.clone(),
+                                    reasoning_content: chunk.reasoning_content.clone(),
+                                    soul_name: Some(name.clone()),
+                                    seq,
+                                },
+                            );
 
-                    seq += 1;
-                } else if let Some(ref reasoning) = chunk.reasoning_content {
-                    if !reasoning.is_empty() && seq == 0 {
+                            let _ = chunk_tx.send(SoulStreamMessage::Chunk {
+                                soul_name: name.clone(),
+                                token: chunk.content,
+                            });
+
+                            seq += 1;
+                        } else if let Some(ref reasoning) = chunk.reasoning_content {
+                            if !reasoning.is_empty() && seq == 0 {
+                                ws.broadcast_soul(
+                                    session_id,
+                                    &name,
+                                    &WsEvent {
+                                        event_type: WsEventType::SoulChunk,
+                                        payload: String::new(),
+                                        reasoning_content: Some(reasoning.clone()),
+                                        soul_name: Some(name.clone()),
+                                        seq,
+                                    },
+                                );
+                                seq += 1;
+                            }
+                        }
+                    }
+                    Some(Err(e)) => {
                         ws.broadcast_soul(
                             session_id,
                             &name,
                             &WsEvent {
-                                event_type: WsEventType::SoulChunk,
-                                payload: String::new(),
-                                reasoning_content: Some(reasoning.clone()),
+                                event_type: WsEventType::SoulError,
+                                payload: e.to_string(),
+                                reasoning_content: None,
                                 soul_name: Some(name.clone()),
                                 seq,
                             },
                         );
-                        seq += 1;
+                        let _ = chunk_tx.send(SoulStreamMessage::Error {
+                            soul_name: name.clone(),
+                            error: e.to_string(),
+                        });
+                        let output = SoulOutput::error(name, e.to_string());
+                        return StreamOutcome::Completed(output);
+                    }
+                    None => {
+                        // LLM 流正常结束
+                        break;
                     }
                 }
             }
-            Err(e) => {
-                ws.broadcast_soul(
-                    session_id,
-                    &name,
-                    &WsEvent {
-                        event_type: WsEventType::SoulError,
-                        payload: e.to_string(),
-                        reasoning_content: None,
-                        soul_name: Some(name.clone()),
-                        seq,
-                    },
-                );
-                let _ = chunk_tx.send(SoulStreamMessage::Error {
-                    soul_name: name.clone(),
-                    error: e.to_string(),
-                });
-                return SoulOutput::error(name, e.to_string());
+
+            intervention = intervention_rx.recv() => {
+                match intervention {
+                    Some(decision) => {
+                        tracing::info!(
+                            "Soul '{}' interrupted mid-stream with {:?}, partial_content={} chars",
+                            name, decision, content.len()
+                        );
+                        let system_tx = chunk_tx.clone();
+                        let _ = system_tx.send(SoulStreamMessage::Chunk {
+                            soul_name: name.clone(),
+                            token: format!("\n\n[干预信号: {:?}]\n", decision),
+                        });
+                        return StreamOutcome::Interrupted {
+                            partial_content: content,
+                            partial_tool_calls: tool_calls,
+                            intervention: decision,
+                        };
+                    }
+                    None => {
+                        // 干预通道关闭，继续等待 LLM
+                        continue;
+                    }
+                }
             }
         }
     }
@@ -536,16 +704,18 @@ async fn stream_single_soul_with_detection(
         output: output.clone(),
     });
 
-    output
+    StreamOutcome::Completed(output)
 }
 
-/// 异步碰撞检测任务
+/// 异步碰撞检测任务 — 碰撞检出后实时触发 L1→L2→L3 门控干预
 async fn detect_collisions_async(
     detector: CrossDetector,
     mut chunk_rx: broadcast::Receiver<SoulStreamMessage>,
     ws: WsSessionManager,
     session_id: String,
     system_tx: mpsc::Sender<WsEvent>,
+    intervention_gate: InterventionGate,
+    intervention_txs: HashMap<String, mpsc::Sender<InterventionDecision>>,
 ) {
     loop {
         match chunk_rx.recv().await {
@@ -553,11 +723,42 @@ async fn detect_collisions_async(
                 match msg {
                     SoulStreamMessage::Chunk { soul_name, token } => {
                         detector.add_token(&soul_name, &token);
-                        
-                        // 检测碰撞
+
                         let collisions = detector.detect_collisions();
                         for collision in collisions {
                             broadcast_collision(&ws, &session_id, &collision, &system_tx);
+
+                            // ── 实时干预：碰撞检出后跑三级门控 ──
+                            if let Some(tx) = intervention_txs.get(&collision.to_soul) {
+                                let from_ctx = detector.get_soul_context(&collision.from_soul);
+                                let to_ctx = detector.get_soul_context(&collision.to_soul);
+
+                                let from_text = from_ctx.unwrap_or_default();
+                                let to_text = to_ctx.unwrap_or_default();
+
+                                let peer_outputs: Vec<String> = vec![from_text];
+                                let gate = intervention_gate.clone();
+                                let tx = tx.clone();
+                                let from_soul = collision.from_soul.clone();
+                                let contradiction = collision.content.clone();
+
+                                tokio::spawn(async move {
+                                    let decision = gate.gate(&to_text, &peer_outputs).await;
+                                    match &decision {
+                                        InterventionDecision::InjectQuestion { .. }
+                                        | InterventionDecision::Redirect { .. }
+                                        | InterventionDecision::DeepenRequest { .. } => {
+                                            tracing::info!(
+                                                "Intervention triggered: {:?} → soul '{}'",
+                                                decision,
+                                                collision.to_soul,
+                                            );
+                                            let _ = tx.send(decision).await;
+                                        }
+                                        InterventionDecision::NoAction => {}
+                                    }
+                                });
+                            }
                         }
                     }
                     SoulStreamMessage::Done { .. } => {}

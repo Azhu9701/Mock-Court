@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo, useCallback } from "react";
 import type { SoulMessage, CollisionEvent, ToolCallEvent } from "@/hooks/use-websocket";
 import { SoulPanel } from "@/components/soul-panel";
 import { SynthesisSection } from "@/components/synthesis-section";
@@ -15,11 +15,21 @@ interface ConferenceViewProps {
 }
 
 export function ConferenceView({ messages, synthesis, collisions, toolCalls }: ConferenceViewProps) {
-  const names = Object.keys(messages);
+  const names = useMemo(() => Object.keys(messages), [messages]);
   const [expandedSoul, setExpandedSoul] = useState<string | null>(null);
 
-  const hasActiveCollisions = collisions.some(c => c.to === names.find(n => messages[n].isStreaming));
-  const streamingCount = names.filter(n => messages[n].isStreaming).length;
+  const hasActiveCollisions = useMemo(
+    () => collisions.some(c => c.to === names.find(n => messages[n].isStreaming)),
+    [collisions, names, messages]
+  );
+  const streamingCount = useMemo(
+    () => names.filter(n => messages[n].isStreaming).length,
+    [names, messages]
+  );
+
+  const toggleExpand = useCallback((name: string) => {
+    setExpandedSoul(prev => prev === name ? null : name);
+  }, []);
 
   return (
     <div data-testid="conference-view" className="flex-1 flex flex-col h-full overflow-hidden">
@@ -64,8 +74,8 @@ export function ConferenceView({ messages, synthesis, collisions, toolCalls }: C
               <button
                 type="button"
                 className="w-full h-full text-left"
-                onClick={() => setExpandedSoul(isCurrentlyExpanded ? null : name)}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedSoul(isCurrentlyExpanded ? null : name); } }}
+                onClick={() => toggleExpand(name)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleExpand(name); } }}
                 aria-expanded={isCurrentlyExpanded}
                 aria-label={`${name} 面板`}
               >
@@ -77,7 +87,7 @@ export function ConferenceView({ messages, synthesis, collisions, toolCalls }: C
                   hasCollision={collisions.some(c => c.to === name || c.from === name)}
                   ismismCode={messages[name].ismismCode || ""}
                   isExpanded={isCurrentlyExpanded}
-                  onToggleExpand={() => setExpandedSoul(isCurrentlyExpanded ? null : name)}
+                  onToggleExpand={() => toggleExpand(name)}
                 />
               </button>
             </div>

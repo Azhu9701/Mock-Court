@@ -223,6 +223,8 @@ pub struct SessionSummary {
     pub status: SessionStatus,
     pub created_at: DateTime<Utc>,
     pub message_count: u32,
+    pub soul_count: u32,
+    pub total_tokens: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]

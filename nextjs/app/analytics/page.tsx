@@ -32,13 +32,20 @@ export default async function DashboardPage() {
 
   const alertCount = unsummoned.length + lowEff.length;
 
+  const totalTokens = stats.total_tokens || 0;
+  const tokenDisplay = totalTokens > 1_000_000
+    ? (totalTokens / 1_000_000).toFixed(1) + "M"
+    : totalTokens > 1_000
+    ? (totalTokens / 1_000).toFixed(1) + "K"
+    : totalTokens.toString();
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">仪表盘</h1>
         <p className="text-sm text-muted-foreground mt-1">万民幡运行概览</p>
       </div>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard
           title="总召唤次数"
           value={stats.total_calls}
@@ -56,6 +63,12 @@ export default async function DashboardPage() {
           value={effectiveRate}
           subtitle={`${totalEffective} 有效 / ${totalAll} 次`}
           icon="check-circle"
+        />
+        <StatCard
+          title="Token 消耗"
+          value={tokenDisplay}
+          subtitle={`${totalTokens.toLocaleString()} tokens`}
+          icon="zap"
         />
         <StatCard
           title="活跃告警"

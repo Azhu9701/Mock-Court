@@ -181,20 +181,22 @@ impl CostTracker {
         let total_calls = filtered.len();
         
         for record in filtered {
+            let input_tokens = record.usage.prompt_tokens;
+            let output_tokens = record.usage.completion_tokens;
             let cost = self.calculate_call_cost(
                 record.id.clone(),
                 record.soul_name.clone(),
                 record.mode.clone(),
                 "deepseek".to_string(),
                 "deepseek-chat".to_string(),
-                1000, // 估算值
-                500,  // 估算值
-                true, // 假设使用缓存
+                input_tokens,
+                output_tokens,
+                true,
             );
-            
+
             total_cost += cost.total_cost;
-            total_input_tokens += cost.input_tokens as u64;
-            total_output_tokens += cost.output_tokens as u64;
+            total_input_tokens += input_tokens as u64;
+            total_output_tokens += output_tokens as u64;
             total_cache_savings += cost.cache_savings;
             
             // 按模式统计
