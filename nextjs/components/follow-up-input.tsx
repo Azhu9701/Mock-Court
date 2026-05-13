@@ -68,9 +68,9 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
         )
       );
       const now = Date.now();
-      if (now - lastScrollRef.current > 200) {
+      if (now - lastScrollRef.current > 500) {
         lastScrollRef.current = now;
-        bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        bottomRef.current?.scrollIntoView({ behavior: "instant", block: "end" });
       }
     }, FLUSH_INTERVAL_MS);
   }, []);
@@ -93,7 +93,7 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
           : msg
       )
     );
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    bottomRef.current?.scrollIntoView({ behavior: "instant", block: "end" });
   }, []);
 
   const cleanup = useCallback(() => {

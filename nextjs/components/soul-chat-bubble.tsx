@@ -25,7 +25,7 @@ export const SoulChatBubble = memo(function SoulChatBubble({
     // Throttle scroll to ~200ms to avoid layout thrashing on high-frequency token updates
     if (now - lastScrollRef.current < 200) return;
     lastScrollRef.current = now;
-    bottomRef.current.scrollIntoView({ behavior: "smooth" });
+    bottomRef.current.scrollIntoView({ behavior: "instant", block: "end" });
   }, [message.content, autoScroll, message.isStreaming]);
 
   const cleanedContent = useCleanContent(message.content);

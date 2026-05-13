@@ -32,10 +32,14 @@ export function SoulPanel({
   const [showTooltip, setShowTooltip] = useState(false);
   const cleanedContent = useCleanContent(content);
 
+  // 只在展开时流式滚动到底部，用 requestAnimationFrame 节流避免布局抖动
   useEffect(() => {
-    if (scrollRef.current && isStreaming && isExpanded) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
+    if (!scrollRef.current || !isStreaming || !isExpanded) return;
+    const el = scrollRef.current;
+    const raf = requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+    return () => cancelAnimationFrame(raf);
   }, [content, isStreaming, isExpanded]);
 
   const status = error ? "error" : isStreaming ? "streaming" : content ? "done" : "pending";
