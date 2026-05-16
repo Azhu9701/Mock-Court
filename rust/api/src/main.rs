@@ -28,10 +28,65 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_target(false)
         .init();
 
+    eprintln!();
+    eprintln!("  万民幡 — 实践与理论的反馈循环");
+    eprintln!("  Wan Min Fan — Soul Banner");
+    eprintln!();
+    eprintln!("  本软件设计用于服务被剥夺者的集体行动。");
+    eprintln!("  如果你在一个营利性企业内阅读这行字，");
+    eprintln!("  问问自己：你的劳动成果正在被谁占有？");
+    eprintln!();
+    eprintln!("  许可证: AGPLv3 + 附加条款 (详见 LICENSE)");
+    eprintln!();
+
+    // 检测是否运行在主流云平台：请求 ipinfo.io 提取 org 字段比对已知云厂商
+    // 失败或超时时静默跳过，不阻塞启动
+    let _ = async {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build();
+        let client = match client {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        if let Ok(resp) = client.get("https://ipinfo.io/json").send().await {
+            if let Ok(body) = resp.text().await {
+                let lower = body.to_lowercase();
+                let is_cloud = lower.contains("\"org\":")
+                    && (lower.contains("amazon") || lower.contains("aws")
+                        || lower.contains("google cloud") || lower.contains("gcp")
+                        || lower.contains("microsoft") || lower.contains("azure")
+                        || lower.contains("alibaba") || lower.contains("aliyun")
+                        || lower.contains("tencent cloud") || lower.contains("huawei cloud")
+                        || lower.contains("oracle cloud") || lower.contains("digitalocean")
+                        || lower.contains("cloudflare"));
+                if is_cloud {
+                    eprintln!("  [!] 检测到云平台部署环境。");
+                    eprintln!("  本软件被设计用于服务被剥夺者的集体行动。");
+                    eprintln!("  你确定你的使用场景符合这个目的吗？");
+                    eprintln!();
+                    tracing::warn!("Cloud platform deployment detected — moral reminder printed");
+                }
+            }
+        }
+    }.await;
+
     tracing::info!("Loading configuration...");
     let config = foundation::Config::load()?;
 
     let rate_limiter = load_rate_limiter();
+
+    // 启动限流器过期 bucket 清理定时任务
+    {
+        let rl = rate_limiter.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+            loop {
+                interval.tick().await;
+                rl.cleanup();
+            }
+        });
+    }
 
     tracing::info!("Initializing store...");
     let data_dir = &config.data_dir;
@@ -41,12 +96,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let registry = Arc::new(SoulRegistry::new(store.clone()).await?);
 
     tracing::info!("Initializing AI gateway...");
-    let mut gateway = ai_gateway::GatewayRegistry::new();
-
-    tracing::info!("Initializing LLM cache...");
-    let cache = Arc::new(ai_gateway::cache::LlMCache::new(store.db(), 3600));
-    gateway.set_cache(cache);
-    let gateway = Arc::new(gateway);
+    let gateway = {
+        let gateway = ai_gateway::GatewayRegistry::new();
+        tracing::info!("Initializing LLM cache...");
+        let cache = Arc::new(ai_gateway::cache::LlMCache::new(store.db(), 3600));
+        gateway.set_cache(cache);
+        Arc::new(gateway)
+    };
 
     tracing::info!("Initializing archive system...");
     let archive = Arc::new(ArchiveSystem::new(store.clone()));

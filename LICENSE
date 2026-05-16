@@ -1,0 +1,104 @@
+万民幡 (Wan Min Fan) — Soul Banner
+Copyright (C) 2026 Azhu9701 and contributors
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+The full text of the GNU Affero General Public License v3.0 is available at:
+  https://www.gnu.org/licenses/agpl-3.0.txt
+  https://www.gnu.org/licenses/agpl-3.0.html
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
+details.
+
+================================================================================
+                  ADDITIONAL TERMS UNDER AGPLv3 SECTION 7
+================================================================================
+
+Pursuant to Section 7 of the GNU Affero General Public License v3.0, the
+following additional non-permissive terms apply to this software. These terms
+form part of the license. Any party redistributing or running this software
+agrees to honor them.
+
+This software is offered to the world as a tool for collective practice by the
+dispossessed. It is not a neutral instrument. The following uses are NOT
+authorized, and any such use is a violation of this license that automatically
+terminates the licensee's rights under AGPLv3 (per Section 8):
+
+  (a) NON-EXPLOITATIVE COLLECTIVE USE ONLY
+      The use of this software is restricted to non-exploitative collective
+      purposes — practices, organizations, and infrastructures that do not
+      extract surplus value from the unpaid or underpaid labor of others.
+      "Non-exploitative" is to be interpreted in the spirit of, but not limited
+      to, cooperative production, mutual aid associations, worker-owned
+      enterprises, study circles, and grassroots political organizing.
+
+  (b) NO MILITARY-INDUSTRIAL USE
+      You may not use this software, or any derivative work, in the design,
+      development, testing, deployment, command, control, intelligence, or
+      logistics of weapons systems, autonomous lethal platforms, military
+      contracting, paramilitary operations, or any apparatus whose function is
+      the application of organized violence.
+
+  (c) NO SURVEILLANCE CAPITALISM
+      You may not use this software, or any derivative work, in the operation
+      of behavioral surveillance, targeted advertising, predictive scoring of
+      individuals, social credit systems, biometric tracking, attention
+      extraction, or any business model whose primary revenue depends on
+      converting human experience into behavioral data sold to third parties.
+
+  (d) NO DATA EXTRACTION AT SCALE
+      You may not use this software, or any derivative work, to harvest, scrape,
+      or aggregate personal data without the informed and revocable consent of
+      the individuals concerned, where such activity serves the commercial
+      interest of an entity not constituted as a worker-controlled cooperative.
+
+  (e) PRESERVATION OF NOTICES
+      You may not remove, alter, or obscure (i) this license file, (ii) the
+      startup banner that this software prints at runtime, or (iii) the
+      attribution notices in the source. Any redistribution must preserve them
+      in full and in a place readable to users and operators of the software.
+
+  (f) NETWORK INTERACTION DISCLOSURE
+      Per the spirit of AGPLv3 Section 13, if you make a modified version of
+      this software available to users through a network, you must offer those
+      users not only the corresponding source code but also a plain-language
+      summary, in each user's working language, of what political and economic
+      relations the modifications serve.
+
+  (g) DIGNITY OF THE DISPOSSESSED
+      The "souls" (思想人格) represented in this software are an act of
+      collective reading and political organizing. They may not be used to
+      manufacture consent for, normalize, or rationalize the conditions that
+      this software was built to critique.
+
+We recognize that these additional terms may have limited enforceability under
+any single jurisdiction's law. That is not the point. The point is that
+anyone who chooses to ignore them must first read them, must first delete
+them, must first decide — in front of their colleagues, their managers, or
+themselves — that they will proceed anyway. That decision is what this
+license is for.
+
+================================================================================
+                              POLITICAL STATEMENT
+================================================================================
+
+The means of intellectual production must, where possible, be brought back
+under the control of those who use them. This license is one small step in
+that direction. We do not believe in a "neutral" tool that can be deployed
+to opposite ends with equal legitimacy. We believe in tools that take a side.
+
+If you find these terms unacceptable, do not use this software.
+
+================================================================================
+                                  CONTACT
+================================================================================
+
+Questions about the license, requests for clarification, or proposals for
+collective use should be directed through the project's hosted issue tracker.
+Commercial entities seeking custom arrangements should understand in advance
+that no such arrangements will be offered.
