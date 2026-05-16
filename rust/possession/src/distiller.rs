@@ -6,7 +6,6 @@ use foundation::{
     CallConfig, LLMRequest, ObservationType, Prompt, PromptMessage, Provider, SessionObservation,
     Storage,
 };
-use serde::{Deserialize, Serialize};
 use crate::{WsEvent, WsEventType, WsSessionManager};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
