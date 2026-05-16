@@ -52,6 +52,7 @@ pub trait Gateway: Send + Sync {
         prompt: &Prompt,
         config: &CallConfig,
     ) -> mpsc::Receiver<Result<Chunk>>;
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 #[derive(Clone)]
@@ -194,6 +195,18 @@ impl GatewayRegistry {
                 content,
                 usage,
             );
+        }
+    }
+
+    /// 查询 DeepSeek 账户余额（运维接口）
+    pub async fn check_deepseek_balance(&self) -> foundation::Result<serde_json::Value> {
+        let gateway = self.providers.get(&foundation::Provider::DeepSeek)
+            .ok_or_else(|| foundation::FoundationError::Validation("DeepSeek provider not available".into()))?;
+        // 通过 Gateway trait 的 as_any 进行 downcast
+        if let Some(deepseek) = (**gateway).as_any().downcast_ref::<crate::deepseek::DeepSeekClient>() {
+            deepseek.check_balance().await
+        } else {
+            Err(foundation::FoundationError::Validation("DeepSeek client type mismatch".into()))
         }
     }
 }

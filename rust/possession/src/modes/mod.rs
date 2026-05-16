@@ -4,5 +4,4 @@ pub mod learn;
 pub mod practice_opening;
 pub mod relay;
 pub mod single;
-pub mod teaching;
 pub mod topology;

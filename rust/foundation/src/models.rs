@@ -213,6 +213,10 @@ pub struct Session {
     pub status: SessionStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub digest_summary: Option<String>,
+    #[serde(default)]
+    pub digest_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -225,6 +229,10 @@ pub struct SessionSummary {
     pub message_count: u32,
     pub soul_count: u32,
     pub total_tokens: u32,
+    #[serde(default)]
+    pub digest_summary: Option<String>,
+    #[serde(default)]
+    pub observation_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -278,6 +286,17 @@ pub enum SessionStatus {
     Archived,
     #[serde(rename = "inconsistent")]
     Inconsistent,
+}
+
+impl SessionStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SessionStatus::Active => "active",
+            SessionStatus::Completed => "completed",
+            SessionStatus::Archived => "archived",
+            SessionStatus::Inconsistent => "inconsistent",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -621,7 +640,7 @@ impl Default for CallConfig {
     fn default() -> Self {
         CallConfig { 
             temperature: 0.7, 
-            max_tokens: 8192, 
+            max_tokens: 16384, 
             stream: true, 
             model: None,
             reasoning_effort: None,
@@ -807,6 +826,99 @@ pub struct KnowledgeCard {
     pub tags: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+// ── Session observation (claude-mem style atomic knowledge node) ──
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservationType {
+    /// 🎯 整体回顾
+    Session,
+    /// 🔵 发现
+    Discovery,
+    /// ⚖️ 决策
+    Decision,
+    /// 🔴 bug 修复
+    Bugfix,
+    /// 🟣 新功能
+    Feature,
+    /// 🔄 重构
+    Refactor,
+    /// ✅ 一般变更
+    Change,
+    /// 🚨 安全
+    Security,
+}
+
+impl ObservationType {
+    pub fn emoji(&self) -> &'static str {
+        match self {
+            ObservationType::Session => "🎯",
+            ObservationType::Discovery => "🔵",
+            ObservationType::Decision => "⚖️",
+            ObservationType::Bugfix => "🔴",
+            ObservationType::Feature => "🟣",
+            ObservationType::Refactor => "🔄",
+            ObservationType::Change => "✅",
+            ObservationType::Security => "🚨",
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ObservationType::Session => "session",
+            ObservationType::Discovery => "discovery",
+            ObservationType::Decision => "decision",
+            ObservationType::Bugfix => "bugfix",
+            ObservationType::Feature => "feature",
+            ObservationType::Refactor => "refactor",
+            ObservationType::Change => "change",
+            ObservationType::Security => "security",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "session" => Some(ObservationType::Session),
+            "discovery" => Some(ObservationType::Discovery),
+            "decision" => Some(ObservationType::Decision),
+            "bugfix" | "bug" | "fix" => Some(ObservationType::Bugfix),
+            "feature" => Some(ObservationType::Feature),
+            "refactor" => Some(ObservationType::Refactor),
+            "change" => Some(ObservationType::Change),
+            "security" | "security_alert" | "security_note" => Some(ObservationType::Security),
+            _ => None,
+        }
+    }
+}
+
+impl Default for ObservationType {
+    fn default() -> Self { ObservationType::Discovery }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionObservation {
+    pub id: String,
+    pub session_id: String,
+    pub soul_name: Option<String>,
+    pub obs_type: ObservationType,
+    pub title: String,
+    pub content: String,
+    pub source_seq: Option<i64>,
+    pub read_tokens: u32,
+    pub work_tokens: u32,
+    pub confidence: f32,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SessionObservationFilter {
+    pub session_id: Option<String>,
+    pub soul_name: Option<String>,
+    pub obs_type: Option<ObservationType>,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

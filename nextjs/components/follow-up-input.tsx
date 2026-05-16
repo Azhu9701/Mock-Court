@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Send, Loader2, AlertCircle, CheckCircle2, StopCircle, ChevronDown, ChevronUp } from "lucide-react";
+import { Send, Loader2, AlertCircle, CheckCircle2, StopCircle, ChevronDown, ChevronUp, Paperclip, X, FileText, ImageIcon } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { API_BASE } from "@/lib/api";
@@ -12,6 +12,24 @@ import { cn } from "@/lib/utils";
 
 const WS_HOST = API_BASE.replace("http://", "ws://").replace("/api/v1", "");
 const FLUSH_INTERVAL_MS = 50;
+
+const MAX_ATTACHMENTS = 3;
+const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024;
+const ALLOWED_ATTACHMENT_MIMES = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  "text/plain",
+  "text/markdown",
+  "application/pdf",
+];
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 
 interface LocalMsg {
   role: "user" | "assistant";
@@ -32,6 +50,9 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
   const [localMsgs, setLocalMsgs] = useState<LocalMsg[]>([]);
   const [error, setError] = useState("");
   const [expandedMsgId, setExpandedMsgId] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<File[]>([]);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const contentRef = useRef("");
@@ -43,9 +64,8 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
   const lastScrollRef = useRef(0);
   const mountedRef = useRef(true);
   const sendingRef = useRef(false);
-  const abortControllerRef = useRef<AbortController | null>(null);
 
-  const log = (msg: string, ...args: any[]) => {
+  const log = (msg: string, ...args: unknown[]) => {
     console.log(`[FollowUp] ${msg}`, ...args);
   };
 
@@ -120,17 +140,21 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
   }, [cleanup, flushImmediate]);
 
   const onFollowUp = useCallback(async () => {
-    if (!followUp.trim() || sending) return;
+    if ((!followUp.trim() && attachments.length === 0) || sending) return;
 
     const question = followUp.trim();
-    log("Starting follow-up with question:", question);
+    const filesSnapshot = attachments;
+    log("Starting follow-up with question:", question, "attachments:", filesSnapshot.length);
 
-    setMsgHistory((prev) => {
-      const next = [question, ...prev.filter((m) => m !== question)].slice(0, 50);
-      return next;
-    });
+    if (question) {
+      setMsgHistory((prev) => {
+        const next = [question, ...prev.filter((m) => m !== question)].slice(0, 50);
+        return next;
+      });
+    }
     setMsgHistoryIdx(-1);
     setFollowUp("");
+    setAttachments([]);
     setSending(true);
     sendingRef.current = true;
     setError("");
@@ -141,9 +165,14 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
     const aId = `a-${Date.now()}`;
     currentMsgIdRef.current = aId;
 
+    const userContentParts = [question];
+    if (filesSnapshot.length > 0) {
+      userContentParts.push(`\n\n📎 附件：${filesSnapshot.map((f) => f.name).join("、")}`);
+    }
+
     setLocalMsgs((prev) => [
       ...prev,
-      { role: "user", content: question, reasoningContent: "", id: qId },
+      { role: "user", content: userContentParts.join(""), reasoningContent: "", id: qId },
       {
         role: "assistant",
         content: "",
@@ -159,10 +188,14 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
 
     ws.onopen = () => {
       log("WebSocket connected! Sending follow-up request...");
+      const formData = new FormData();
+      formData.append("question", question);
+      for (const f of filesSnapshot) {
+        formData.append("attachments", f, f.name);
+      }
       fetch(`${API_BASE}/possess/${sessionId}/follow-up`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question }),
+        body: formData,
       }).catch((err) => {
         log("Error sending follow-up request:", err);
         setError(`发送失败: ${err.message}`);
@@ -177,13 +210,18 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
       try {
         const msg = JSON.parse(event.data);
         if (msg.event_type === "synthesis_chunk") {
+          let hasUpdate = false;
           if (msg.reasoning_content) {
             reasoningContentRef.current += msg.reasoning_content;
+            hasUpdate = true;
           }
           if (msg.payload) {
             contentRef.current += msg.payload;
+            hasUpdate = true;
           }
-          scheduleFlush();
+          if (hasUpdate) {
+            scheduleFlush();
+          }
         } else if (msg.event_type === "synthesis_done") {
           flushImmediate();
           setSending(false);
@@ -201,11 +239,14 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
     };
 
     ws.onerror = () => {
-      log("WebSocket error");
-      setError("WebSocket 连接失败");
-      sendingRef.current = false;
-      flushImmediate();
-      setSending(false);
+      log("WebSocket error —追问可能仍在处理中");
+      // 不弹红色错误条：WS 断开只意味着流式中断，不代表追问失败
+      // 后端可能仍在处理，刷新页面可查看结果
+      if (sendingRef.current) {
+        flushImmediate();
+        sendingRef.current = false;
+        setSending(false);
+      }
     };
 
     ws.onclose = () => {
@@ -216,7 +257,7 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
         setSending(false);
       }
     };
-  }, [followUp, sending, sessionId, scheduleFlush, flushImmediate, cleanup, router]);
+  }, [followUp, attachments, sending, sessionId, scheduleFlush, flushImmediate, cleanup, router]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -238,6 +279,68 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
   const [msgHistoryIdx, setMsgHistoryIdx] = useState(-1);
 
   const dismissError = () => setError("");
+
+  const validateAndAddFiles = useCallback((files: File[]) => {
+    if (files.length === 0) return;
+    const rejected: string[] = [];
+    const accepted: File[] = [];
+    for (const f of files) {
+      if (attachments.length + accepted.length >= MAX_ATTACHMENTS) {
+        rejected.push(`${f.name}（超过 ${MAX_ATTACHMENTS} 个上限）`);
+        continue;
+      }
+      if (f.size > MAX_ATTACHMENT_SIZE) {
+        rejected.push(`${f.name}（${formatBytes(f.size)} 超 5MB）`);
+        continue;
+      }
+      const mime = f.type || "application/octet-stream";
+      const isAllowed = ALLOWED_ATTACHMENT_MIMES.includes(mime) || /\.(png|jpe?g|webp|gif|txt|md|pdf)$/i.test(f.name);
+      if (!isAllowed) {
+        rejected.push(`${f.name}（类型 ${mime} 不支持）`);
+        continue;
+      }
+      accepted.push(f);
+    }
+    if (accepted.length > 0) {
+      setAttachments((prev) => [...prev, ...accepted]);
+    }
+    if (rejected.length > 0) {
+      setError(`部分文件被拒绝：${rejected.join("；")}`);
+    }
+  }, [attachments.length]);
+
+  const removeAttachment = useCallback((index: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const onFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      validateAndAddFiles(Array.from(e.target.files));
+      e.target.value = "";
+    }
+  }, [validateAndAddFiles]);
+
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!sending) setDragOver(true);
+  }, [sending]);
+
+  const onDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+  }, []);
+
+  const onDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+    if (sending) return;
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      validateAndAddFiles(Array.from(e.dataTransfer.files));
+    }
+  }, [sending, validateAndAddFiles]);
 
   return (
     <div className="space-y-4">
@@ -284,8 +387,10 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
                     </div>
                     <div
                       className={cn(
-                        "px-4 transition-all duration-300 overflow-hidden",
-                        expandedMsgId === msg.id ? "max-h-40 py-2" : "max-h-6 py-1"
+                        "px-4 transition-all duration-300",
+                        expandedMsgId === msg.id
+                          ? "max-h-[50vh] py-2 overflow-y-auto"
+                          : "max-h-6 py-1 overflow-hidden"
                       )}
                     >
                       <p
@@ -351,10 +456,80 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
         </div>
       )}
 
-      <div className="sticky bottom-0 bg-background/95 backdrop-blur-sm border-t pt-4 pb-2 mt-4">
+      <div
+        className={cn(
+          "sticky bottom-0 bg-background/95 backdrop-blur-sm border-t pt-4 pb-2 mt-4 transition-colors",
+          dragOver && "ring-2 ring-primary/40 bg-primary/5 border-primary/30"
+        )}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+      >
+        {dragOver && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none rounded-lg">
+            <div className="bg-background/90 px-4 py-2 rounded-lg border-2 border-dashed border-primary/50 text-sm font-medium text-primary">
+              松开以添加附件（最多 {MAX_ATTACHMENTS} 个，单个 ≤5MB）
+            </div>
+          </div>
+        )}
+
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {attachments.map((f, i) => {
+              const isImage = f.type.startsWith("image/");
+              return (
+                <div
+                  key={`${f.name}-${i}`}
+                  className="flex items-center gap-1.5 bg-muted/60 border border-border rounded-md pl-2 pr-1 py-1 text-xs"
+                  data-testid={`attachment-${i}`}
+                >
+                  {isImage ? (
+                    <ImageIcon className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                  ) : (
+                    <FileText className="h-3.5 w-3.5 text-purple-500 shrink-0" />
+                  )}
+                  <span className="max-w-[140px] truncate" title={f.name}>{f.name}</span>
+                  <span className="text-muted-foreground">{formatBytes(f.size)}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeAttachment(i)}
+                    disabled={sending}
+                    className="ml-0.5 p-0.5 rounded hover:bg-muted-foreground/20 disabled:opacity-50"
+                    aria-label={`移除 ${f.name}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept=".png,.jpg,.jpeg,.webp,.gif,.txt,.md,.pdf,image/*,text/plain,text/markdown,application/pdf"
+          className="hidden"
+          onChange={onFileInputChange}
+        />
+
         <div className="flex gap-2 items-end">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={sending || attachments.length >= MAX_ATTACHMENTS}
+            className="h-[66px] w-11 shrink-0"
+            title={`添加附件（${attachments.length}/${MAX_ATTACHMENTS}）`}
+            data-testid="attach-btn"
+          >
+            <Paperclip className="h-4 w-4" />
+          </Button>
+
           <Textarea
-            placeholder="输入您的追问... (按 Enter 发送，Shift+Enter 换行，↑ 历史)"
+            placeholder={attachments.length > 0 ? "可加附注，或直接发送附件（Shift+Enter 换行）" : "输入您的追问... (Enter 发送，Shift+Enter 换行，↑ 历史，拖入文件添加附件)"}
             value={followUp}
             onChange={(e) => {
               setFollowUp(e.target.value);
@@ -409,7 +584,7 @@ export default function FollowUpInput({ sessionId }: { sessionId: string }) {
           ) : (
             <Button
               onClick={onFollowUp}
-              disabled={!followUp.trim()}
+              disabled={!followUp.trim() && attachments.length === 0}
               data-testid="follow-up-btn"
               className="h-[66px] px-4"
             >

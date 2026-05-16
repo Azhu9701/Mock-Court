@@ -12,6 +12,7 @@ use crate::state::AppState;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/model", post(set_default_model).get(get_default_model))
+        .route("/balance", get(check_balance))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -62,4 +63,11 @@ async fn set_default_model(
         model: config.model.clone(),
         reasoning: config.reasoning.clone(),
     }))
+}
+
+async fn check_balance(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<ApiError>)> {
+    let balance = state.engine.gateway().check_deepseek_balance().await.map_err(map_api_error)?;
+    Ok(Json(balance))
 }

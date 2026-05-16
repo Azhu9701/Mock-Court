@@ -396,7 +396,7 @@ impl SoulProcess {
 
         let base_config = foundation::CallConfig {
             temperature: 0.7,
-            max_tokens: 8192,
+            max_tokens: 16384,
             stream: true,
             model: if profile.model.is_empty() {
                 None

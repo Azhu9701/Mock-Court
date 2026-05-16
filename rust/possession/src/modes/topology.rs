@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::time::Duration;
 
 use foundation::SoulProfile;
@@ -21,10 +20,6 @@ pub enum ConferenceTopology {
         clusters: Vec<Vec<String>>,
         intra_synthesis: bool,
     },
-    /// 顺序传递链 — 前后依赖关系
-    SequentialLadder {
-        soul_chain: Vec<String>,
-    },
     /// 对立阵营辩论式 — 天然对立
     Oppositional {
         camp_a: Vec<String>,
@@ -44,7 +39,6 @@ impl ConferenceTopology {
             ConferenceTopology::ClusteredParallel { clusters, .. } => {
                 clusters.iter().map(|c| c.len()).sum()
             }
-            ConferenceTopology::SequentialLadder { soul_chain } => soul_chain.len(),
             ConferenceTopology::Oppositional { camp_a, camp_b } => camp_a.len() + camp_b.len(),
             ConferenceTopology::Minimal { .. } => 1,
         }
@@ -70,9 +64,6 @@ impl ConferenceTopology {
                     call_count
                 }
             }
-            ConferenceTopology::SequentialLadder { soul_chain } => {
-                soul_chain.len() as u32
-            }
             ConferenceTopology::Oppositional { camp_a, camp_b } => {
                 camp_a.len() as u32 + camp_b.len() as u32 + 1 // 双方 + 裁决官
             }
@@ -85,7 +76,6 @@ impl ConferenceTopology {
         match self {
             ConferenceTopology::FullMesh { .. } => "全互连合议",
             ConferenceTopology::ClusteredParallel { .. } => "分簇并行合议",
-            ConferenceTopology::SequentialLadder { .. } => "顺序接力",
             ConferenceTopology::Oppositional { .. } => "对立辩论",
             ConferenceTopology::Minimal { .. } => "极简模式",
         }
@@ -242,38 +232,6 @@ impl TopologyMonitor {
         Self::default()
     }
 
-    /// 检查并建议调整拓扑
-    ///
-    /// # 参数
-    /// - `elapsed`: 合议已运行时长
-    /// - `collision_count`: 已检测到的碰撞次数
-    /// - `semantic_overlap`: 语义重叠度 (0.0 ~ 1.0)
-    ///
-    /// # 返回
-    /// - `None`: 无需调整
-    /// - `Some(topology)`: 建议切换到该拓扑
-    pub fn check_and_adjust(
-        &self,
-        elapsed: Duration,
-        collision_count: u32,
-        semantic_overlap: f32,
-    ) -> Option<ConferenceTopology> {
-        // 未到检查时间，不干预
-        if elapsed.as_secs() < self.check_after_secs {
-            return None;
-        }
-
-        // 零碰撞 + 高语义重叠 → 建议降级
-        if collision_count < self.min_collisions
-            && semantic_overlap > self.overlap_threshold
-        {
-            // 降级到 Minimal：停止对其他魂的等待，直接综合
-            return None; // 降级需要更多上下文（当前拓扑、参与魂等），此处返回 None 表示"触发降级条件"
-        }
-
-        None
-    }
-
     /// 检查是否应触发降级（返回 bool 便于集成）
     pub fn should_downgrade(
         &self,
@@ -312,9 +270,8 @@ impl TopologyMonitor {
                     None
                 }
             }
-            // SequentialLadder、Oppositional 不自动降级（结构依赖）
-            ConferenceTopology::SequentialLadder { .. }
-            | ConferenceTopology::Oppositional { .. }
+            // Oppositional 不自动降级（结构依赖）
+            ConferenceTopology::Oppositional { .. }
             | ConferenceTopology::Minimal { .. } => None,
         }
     }
@@ -396,44 +353,6 @@ pub fn complexity_score(task: &str, souls_count: usize) -> f32 {
     // 加权合成
     let raw = len_factor * 0.3 + soul_factor * 0.3 + keyword_factor * 0.4;
     raw.clamp(0.0, 1.0)
-}
-
-/// 计算两组文本之间的语义重叠度（简化版：基于 token 集合的 Jaccard 相似度）
-pub fn semantic_overlap(texts: &[String]) -> f32 {
-    if texts.len() <= 1 {
-        return 0.0;
-    }
-
-    // 将每段文本分词（按中文字符粒度切分）
-    let token_sets: Vec<HashSet<String>> = texts
-        .iter()
-        .map(|t| {
-            t.chars()
-                .filter(|c| !c.is_whitespace())
-                .map(|c| c.to_string())
-                .collect::<HashSet<_>>()
-        })
-        .collect();
-
-    let mut total_jaccard = 0.0f32;
-    let mut pair_count = 0u32;
-
-    for i in 0..token_sets.len() {
-        for j in (i + 1)..token_sets.len() {
-            let intersection = token_sets[i].intersection(&token_sets[j]).count() as f32;
-            let union = token_sets[i].union(&token_sets[j]).count() as f32;
-            if union > 0.0 {
-                total_jaccard += intersection / union;
-            }
-            pair_count += 1;
-        }
-    }
-
-    if pair_count == 0 {
-        0.0
-    } else {
-        total_jaccard / pair_count as f32
-    }
 }
 
 // ── Profile-based topology optimization ──
@@ -630,25 +549,25 @@ mod tests {
     // ── TopologyMonitor tests ──
 
     #[test]
-    fn test_monitor_no_adjust_before_time() {
+    fn test_monitor_should_not_downgrade_before_time() {
         let monitor = TopologyMonitor::default();
-        let result = monitor.check_and_adjust(
+        // 未到30秒 → 不应降级
+        assert!(!monitor.should_downgrade(
             Duration::from_secs(10),
             0,
             0.9,
-        );
-        assert!(result.is_none());
+        ));
     }
 
     #[test]
-    fn test_monitor_no_adjust_with_collisions() {
+    fn test_monitor_should_not_downgrade_with_collisions() {
         let monitor = TopologyMonitor::default();
-        let result = monitor.check_and_adjust(
+        // 有碰撞 → 不应降级
+        assert!(!monitor.should_downgrade(
             Duration::from_secs(35),
             3,
             0.9,
-        );
-        assert!(result.is_none());
+        ));
     }
 
     #[test]
@@ -707,29 +626,6 @@ mod tests {
         };
         let souls = vec!["X".to_string()];
         assert!(TopologyMonitor::suggest_downgrade(&current, &souls).is_none());
-    }
-
-    // ── semantic_overlap tests ──
-
-    #[test]
-    fn test_semantic_overlap_identical() {
-        let texts = vec!["你好世界".to_string(), "你好世界".to_string()];
-        let overlap = semantic_overlap(&texts);
-        assert!((overlap - 1.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_semantic_overlap_disjoint() {
-        let texts = vec!["abc".to_string(), "xyz".to_string()];
-        let overlap = semantic_overlap(&texts);
-        assert!((overlap - 0.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_semantic_overlap_single_text() {
-        let texts = vec!["hello".to_string()];
-        let overlap = semantic_overlap(&texts);
-        assert!((overlap - 0.0).abs() < 0.001);
     }
 
     // ── plan_from_profiles integration test ──

@@ -8,7 +8,6 @@ use foundation::{LLMRequest, CallConfig, Prompt, PromptMessage, Provider, SoulLi
 use possession::PossessionInput;
 use serde::{Deserialize, Serialize};
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tokio_stream::StreamExt as _;
 
 use crate::error::{map_api_error, ApiError};
 use crate::ocr;
@@ -50,7 +49,9 @@ async fn start_possession(
     
     // 议题搜索：在召唤魂之前，通过 SearXNG 实时搜索 Web 获取背景信息
     let search_results = if body.search_topic {
-        tracing::info!("Running SearXNG topic search for: {}", &body.task[..body.task.len().min(80)]);
+        let trunc_len = body.task.len().min(80);
+        let safe_idx = (0..=trunc_len).rev().find(|&i| body.task.is_char_boundary(i)).unwrap_or(0);
+        tracing::info!("Running SearXNG topic search for: {}", &body.task[..safe_idx]);
         match state.collector.search_topic_searxng(&body.task, 3).await {
             Ok(md) => {
                 tracing::info!("SearXNG topic search returned {} bytes", md.len());
@@ -98,14 +99,8 @@ async fn start_possession(
 #[derive(Debug, Deserialize)]
 struct AnalyzeRequest { task: String, #[serde(default)] judgment: Option<String>, #[serde(default)] worry: Option<String>, #[serde(default)] unknown: Option<String>, #[serde(default)] reviewer: Option<String> }
 
-#[derive(Debug, Serialize)]
-struct AnalyzeResponse { entry_type: String, matched_souls: Vec<SoulMatch>, recommended_mode: String, review: ReviewResult, #[serde(default)] task_cards: std::collections::HashMap<String, String> }
-
 #[derive(Debug, Clone, Serialize)]
 struct SoulMatch { name: String, field: String, ismism_code: String, rationale: String }
-
-#[derive(Debug, Serialize)]
-struct ReviewResult { verdict: String, checks: Vec<String>, notes: String, reviewer: String }
 
 fn pick_provider(state: &AppState) -> Result<Provider, (axum::http::StatusCode, Json<ApiError>)> {
     state.engine.gateway().list_providers().into_iter().find(|i| i.available).map(|i| i.provider)
@@ -173,6 +168,7 @@ fn spawn_banner_lord_review(
     judgment: String,
     worry: String,
     unknown: String,
+    soul_catalog: String,
 ) -> tokio::task::JoinHandle<Result<serde_json::Value, String>> {
     tokio::spawn(async move {
         let provider = gateway
@@ -204,9 +200,12 @@ fn spawn_banner_lord_review(
 
         let review_user = format!(
             "## 总任务\n{}\n\n## 使用者预设\n判断：{}\n担忧：{}\n未知：{}\n\n## 候选魂\n{}\n\n\
+             ## 全魂库（供补位参考）\n{}\n\n\
              ## 你的两阶段任务\n\n\
              ### 第一阶段：审查魂组合\n\
              逐魂检查：领域覆盖、场域定位、魂间互补、视角缺失。裁决：pass / conditional / reject\n\n\
+             **CRITICAL：如果裁决为 conditional 且需要补位，你必须把补位魂的名字也加入 verified_souls 数组中。\
+             verified_souls 是上场名单的唯一数据源，只写在 missing_perspectives 里的魂不会上场！**\n\n\
              ### 第二阶段：差异化任务分派\n\
              为每个确认使用的魂分配一个**只有他能回答好的子问题**。原则：\n\
              - 利用场域差异——场域1做地基（\"这是什么\"），场域2做边界（\"这看不到什么\"），\
@@ -224,7 +223,8 @@ fn spawn_banner_lord_review(
             &judgment,
             &worry,
             &unknown,
-            candidates_info
+            candidates_info,
+            &soul_catalog,
         );
 
         let messages = vec![
@@ -722,20 +722,24 @@ async fn analyze_task(
                 .filter_map(|s| parse_ismism(&s.ismism_code))
                 .collect();
 
-            let (diversity, high_dims, _comparisons) = calc_ismism_diversity(&ismism_codes);
+            let (diversity, high_dims, comparisons) = calc_ismism_diversity(&ismism_codes);
 
             tracing::debug!(
-                "Ismism mode analysis: souls={} diversity={:.3} high_dims={}/4",
-                souls.len(), diversity, high_dims
+                "Ismism mode analysis: souls={} codes={} diversity={:.3} high_dims={}/4 comparisons={}",
+                souls.len(), ismism_codes.len(), diversity, high_dims, comparisons
             );
 
             // Mode determination based on Ismism diversity:
-            // - Single: 1 soul or diversity < 0.2
-            // - Conference: diversity 0.2-0.5, 1-2 high-dim
-            // - Debate: diversity >= 0.5 OR 3+ dimensions with high divergence
+            // - Single: 1 soul, or only 1 parseable code, or diversity < 0.2
+            // - Conference: default for 2-5 souls with moderate diversity
+            // - Debate: >= 3 souls AND all 4 dimensions diverge AND diversity >= 0.6
+            //   (high bar: genuine philosophical opposition, not just different perspectives)
+            //
+            // Rationale: 2 souls from different fields can still collaborate in conference;
+            // debate requires at least 3 genuinely opposed positions.
             if diversity < 0.2 || ismism_codes.len() < 2 {
                 "single".to_string()
-            } else if diversity >= 0.5 || high_dims >= 3 {
+            } else if ismism_codes.len() >= 3 && diversity >= 0.6 && high_dims == 4 {
                 "debate".to_string()
             } else {
                 "conference".to_string()
@@ -775,6 +779,7 @@ async fn analyze_task(
                 body.judgment.clone().unwrap_or_default(),
                 body.worry.clone().unwrap_or_default(),
                 body.unknown.clone().unwrap_or_default(),
+                all_souls.iter().map(|s| format!("{} [{}] ismism={}", s.name, s.field, s.ismism_code)).collect::<Vec<_>>().join("\n"),
             );
 
             let result = match review_handle.await {
@@ -839,7 +844,39 @@ async fn analyze_task(
         let final_verdict = verdict.clone();
         let final_checks = checks.clone();
         let final_notes = notes.clone();
-        let final_verified_souls = verified_souls.clone();
+        let final_missing_perspectives = missing_perspectives.clone();
+        let mut final_verified_souls = verified_souls.clone();
+
+        // ── 补位兜底：审查官标注了缺失视角但未加入 verified_souls 时，自动从魂库匹配 ──
+        if !final_missing_perspectives.is_empty() {
+            let existing: std::collections::HashSet<String> = final_verified_souls.iter().cloned().collect();
+            let mut fills: Vec<String> = Vec::new();
+            for perspective in &final_missing_perspectives {
+                let perspective_lower = perspective.to_lowercase();
+                for entry in &all_souls {
+                    if existing.contains(&entry.name) || fills.contains(&entry.name) {
+                        continue;
+                    }
+                    let name_lower = entry.name.to_lowercase();
+                    let field_lower = entry.field.to_lowercase();
+                    let tags_lower: String = entry.tags.join(" ").to_lowercase();
+                    let domains_lower: String = entry.domains.join(" ").to_lowercase();
+                    if perspective_lower.contains(&name_lower)
+                        || perspective_lower.contains(&field_lower)
+                        || tags_lower.split_whitespace().any(|t| perspective_lower.contains(t))
+                        || domains_lower.split_whitespace().any(|d| perspective_lower.contains(d))
+                    {
+                        tracing::info!(
+                            "Auto-fill missing perspective: '{}' → soul '{}' [{}]",
+                            perspective, entry.name, entry.field
+                        );
+                        fills.push(entry.name.clone());
+                        break;
+                    }
+                }
+            }
+            final_verified_souls.extend(fills);
+        }
 
         // ── Step 4: 以审查官 verified_souls 为唯一权威 ──
         // 审查官是唯一权威。算法匹配只是参考，终裁的 verified_souls 决定最终阵容。
@@ -955,6 +992,8 @@ fn spawn_follow_up_agent(
     banner_lord: SoulProfile,
     question: String,
     history: Vec<String>,
+    attachments: Vec<AttachmentContent>,
+    collector: Arc<crate::collector::SoulCollector>,
     ws: possession::WsSessionManager,
     session_id: String,
     archive: Arc<archive::ArchiveSystem>,
@@ -968,15 +1007,61 @@ fn spawn_follow_up_agent(
             .unwrap_or(foundation::Provider::Claude);
 
         let system_prompt = banner_lord.summon_prompt;
+
+        // 议题搜索：用追问问题（fallback 到原 task 即 history[0] 解析）做 SearXNG，
+        // 失败/超时静默 fallback 到无搜索结果。
+        let search_results: Option<String> = if !question.trim().is_empty() {
+            let query = question.clone();
+            let trunc = query.len().min(160);
+            let safe_idx = (0..=trunc).rev().find(|&i| query.is_char_boundary(i)).unwrap_or(0);
+            tracing::info!("Follow-up: SearXNG quick search for: {}", &query[..safe_idx]);
+            let fut = collector.search_topic_quick(&query, 3);
+            match tokio::time::timeout(std::time::Duration::from_secs(12), fut).await {
+                Ok(Ok(md)) if !md.trim().is_empty() => {
+                    tracing::info!("Follow-up: SearXNG quick returned {} bytes", md.len());
+                    Some(md)
+                }
+                Ok(Ok(_)) => {
+                    tracing::info!("Follow-up: SearXNG quick returned empty");
+                    None
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("Follow-up: SearXNG quick failed: {}", e);
+                    None
+                }
+                Err(_) => {
+                    tracing::warn!("Follow-up: SearXNG quick timed out after 12s");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let search_section = match &search_results {
+            Some(md) => format!("\n\n## 议题搜索结果（追问触发）\n{}\n", md),
+            None => String::new(),
+        };
+
+        let attachment_section = if attachments.is_empty() {
+            String::new()
+        } else {
+            let mut s = String::from("\n\n## 附件内容\n\n");
+            for att in &attachments {
+                s.push_str(&format!("### {}\n{}\n\n", att.filename, att.text));
+            }
+            s
+        };
+
         let user_prompt = if history.is_empty() {
             format!(
-                "## 新问题\n{}\n\n根据这个新问题，以你的立场和视角回应。你是{}，ismism坐标{}。",
-                question, banner_lord.name, banner_lord.ismism_code
+                "## 新问题\n{}{}{}\n\n根据这个新问题，以你的立场和视角回应。你是{}，ismism坐标{}。",
+                question, attachment_section, search_section, banner_lord.name, banner_lord.ismism_code
             )
         } else {
             format!(
-                "## 历史对话\n{}\n\n## 新问题\n{}\n\n以上是之前的多魂附体会话。作为{}（ismism={}），请以你的立场和视角回应这个追问。",
-                history.join("\n\n"), question, banner_lord.name, banner_lord.ismism_code
+                "## 历史对话\n{}\n\n## 新问题\n{}{}{}\n\n以上是之前的多魂附体会话。作为{}（ismism={}），请以你的立场和视角回应这个追问。如果上面有「议题搜索结果」，请将其作为事实弹药融入批判。",
+                history.join("\n\n"), question, attachment_section, search_section, banner_lord.name, banner_lord.ismism_code
             )
         };
 
@@ -993,7 +1078,7 @@ fn spawn_follow_up_agent(
 
         let config = CallConfig {
             temperature: 0.7,
-            max_tokens: 8192,
+            max_tokens: 16384,
             stream: true,
             model: None,
             reasoning_effort: Some(foundation::ReasoningEffort::Think),
@@ -1075,15 +1160,79 @@ fn spawn_follow_up_agent(
 
 // ── Follow-up ──
 
-#[derive(Debug, Deserialize)]
-struct FollowUpRequest { question: String }
+const MAX_ATTACHMENTS: usize = 3;
+const MAX_ATTACHMENT_SIZE: usize = 5 * 1024 * 1024;
+const ALLOWED_ATTACHMENT_MIMES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif", "text/plain", "text/markdown", "application/pdf"];
+
+/// 附件提取结果
+struct AttachmentContent {
+    filename: String,
+    text: String,
+}
 
 async fn follow_up(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
-    Json(body): Json<FollowUpRequest>,
+    mut multipart: Multipart,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<ApiError>)> {
     tracing::info!("Received follow-up request for session: {}", session_id);
+
+    let mut question = String::new();
+    let mut attachments: Vec<AttachmentContent> = Vec::new();
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        match field.name() {
+            Some("question") => {
+                if let Ok(text) = field.text().await {
+                    question = text;
+                }
+            }
+            Some("attachments") => {
+                if let Some(filename) = field.file_name().map(String::from) {
+                    if let Some(ct) = field.content_type().map(String::from) {
+                        if !ALLOWED_ATTACHMENT_MIMES.contains(&ct.as_str()) {
+                            tracing::warn!("Unsupported attachment type: {} for {}", ct, filename);
+                            continue;
+                        }
+                    }
+                    if let Ok(data) = field.bytes().await {
+                        if data.len() > MAX_ATTACHMENT_SIZE {
+                            tracing::warn!("Attachment {} exceeds 5MB, skipping", filename);
+                            continue;
+                        }
+                        let text = if filename.to_lowercase().ends_with(".png")
+                            || filename.to_lowercase().ends_with(".jpg")
+                            || filename.to_lowercase().ends_with(".jpeg")
+                            || filename.to_lowercase().ends_with(".webp")
+                            || filename.to_lowercase().ends_with(".gif")
+                        {
+                            tokio::task::spawn_blocking(move || {
+                                ocr::ocr_image(&data, "chi_sim+eng").ok().unwrap_or_default()
+                            }).await.unwrap_or_default()
+                        } else if filename.to_lowercase().ends_with(".pdf") {
+                            // PDF 暂不支持，标记提示
+                            format!("[PDF 文件 {}, 请提供文本内容]", filename)
+                        } else {
+                            // 文本文件直接读取
+                            String::from_utf8_lossy(&data).to_string()
+                        };
+                        if !text.trim().is_empty() {
+                            attachments.push(AttachmentContent { filename, text });
+                        }
+                        if attachments.len() >= MAX_ATTACHMENTS { break; }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if question.trim().is_empty() && attachments.is_empty() {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(ApiError { error: "追问内容或附件至少提供一个".into() }),
+        ));
+    }
 
     let ws = state.engine.ws_manager().clone();
     let sid = session_id.clone();
@@ -1105,21 +1254,24 @@ async fn follow_up(
         (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("审查官 {} 不可用", reviewer_name) }))
     })?;
 
-    let question = body.question.clone();
     let gateway = state.engine.gateway().clone();
     let archive = state.archive.clone();
+    let collector = state.collector.clone();
+    let attachment_count = attachments.len();
 
     let _ = spawn_follow_up_agent(
         gateway,
         banner_lord,
         question,
         history,
+        attachments,
+        collector,
         ws,
         sid,
         archive,
     );
 
-    tracing::info!("Follow-up sub-agent spawned, returning immediately");
+    tracing::info!("Follow-up sub-agent spawned with {} attachments", attachment_count);
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

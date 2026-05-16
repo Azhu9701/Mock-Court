@@ -6,15 +6,18 @@ import { SoulPanel } from "@/components/soul-panel";
 import { SynthesisSection } from "@/components/synthesis-section";
 import { CollisionNotification } from "@/components/collision-notification";
 import { ToolCallList } from "@/components/tool-call-indicator";
+import { SoulRecommendationCard } from "@/components/soul-recommendation-card";
+import type { SoulRecommendation } from "@/hooks/use-websocket";
 
 interface ConferenceViewProps {
   messages: Record<string, SoulMessage>;
   synthesis: string;
   collisions: CollisionEvent[];
   toolCalls: ToolCallEvent[];
+  recommendations?: SoulRecommendation[];
 }
 
-export function ConferenceView({ messages, synthesis, collisions, toolCalls }: ConferenceViewProps) {
+export function ConferenceView({ messages, synthesis, collisions, toolCalls, recommendations }: ConferenceViewProps) {
   const names = useMemo(() => Object.keys(messages), [messages]);
   const [expandedSoul, setExpandedSoul] = useState<string | null>(null);
 
@@ -103,6 +106,11 @@ export function ConferenceView({ messages, synthesis, collisions, toolCalls }: C
       {/* 辩证综合 — 与历史详情页统一卡片样式 */}
       {synthesis && (
         <SynthesisSection messages={[{ id: "synthesis", content: synthesis, created_at: new Date().toISOString() }]} />
+      )}
+
+      {/* 综合官推荐补充魂 */}
+      {recommendations && recommendations.length > 0 && (
+        <SoulRecommendationCard recommendations={recommendations} />
       )}
     </div>
   );

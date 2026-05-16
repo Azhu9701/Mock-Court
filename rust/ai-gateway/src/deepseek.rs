@@ -55,6 +55,10 @@ impl Gateway for DeepSeekClient {
         self.api_key.is_some()
     }
 
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn call(
         &self,
         prompt: &Prompt,
@@ -81,6 +85,9 @@ impl Gateway for DeepSeekClient {
                 let mut msg = serde_json::json!({"role": m.role, "content": m.content});
                 if let Some(rc) = &m.reasoning_content {
                     msg["reasoning_content"] = serde_json::json!(rc);
+                } else if m.role == "assistant" && m.tool_calls.is_some() {
+                    // DeepSeek v4 启用 thinking 时，assistant tool call 消息必须有 reasoning_content
+                    msg["reasoning_content"] = serde_json::json!("");
                 }
                 if let Some(tc) = &m.tool_calls {
                     msg["tool_calls"] = serde_json::to_value(tc).unwrap();
@@ -192,8 +199,18 @@ impl Gateway for DeepSeekClient {
                                     return;
                                 }
                                 if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
+                                    // 诊断日志：记录原始 SSE 事件
                                     if let Some(choices) = event["choices"].as_array() {
                                         for choice in choices {
+                                            let delta_content = choice["delta"]["content"].as_str().unwrap_or("");
+                                            let delta_reasoning = choice["delta"]["reasoning_content"].as_str().unwrap_or("");
+                                            let finish = choice["finish_reason"].as_str().unwrap_or("");
+                                            if !delta_content.is_empty() || !delta_reasoning.is_empty() || !finish.is_empty() {
+                                                tracing::debug!(
+                                                    "DeepSeek SSE: content_len={} reasoning_len={} finish_reason={}",
+                                                    delta_content.len(), delta_reasoning.len(), finish
+                                                );
+                                            }
                                             // DeepSeek 思考模型：reasoning_content 是思维链，content 是最终回答
                                             let reasoning = choice["delta"]["reasoning_content"].as_str();
                                             let content = choice["delta"]["content"].as_str();

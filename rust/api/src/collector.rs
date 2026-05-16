@@ -300,4 +300,52 @@ impl SoulCollector {
 
         Ok(md)
     }
+
+    /// 轻量版搜索：只取 SearXNG 的 title + snippet + URL，不抓网页。
+    /// 适用于追问场景，~1-2 秒完成。
+    pub async fn search_topic_quick(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<String, String> {
+        let search_url = format!(
+            "{}/search?format=json&q={}&language=zh&pageno=1",
+            self.searxng_url.trim_end_matches('/'),
+            url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>()
+        );
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(&search_url)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+            .map_err(|e| format!("SearXNG quick search failed: {e}"))?;
+
+        let status = resp.status();
+        let body = resp.text().await.map_err(|e| format!("SearXNG response read failed: {e}"))?;
+
+        if !status.is_success() {
+            return Err(format!("SearXNG error ({}): {}", status.as_u16(), &body[..body.len().min(200)]));
+        }
+
+        let search_data: SearxngSearchResponse = serde_json::from_str(&body)
+            .map_err(|e| format!("SearXNG parse failed: {e}"))?;
+
+        let results = search_data.results.unwrap_or_default();
+        if results.is_empty() {
+            return Ok(String::new());
+        }
+
+        let mut md = String::new();
+        md.push_str(&format!("> 通过 SearXNG 搜索「{}」获取的背景摘要\n", query));
+        md.push_str(&format!("> 共 {} 条\n\n", results.len().min(limit)));
+
+        for result in results.iter().take(limit) {
+            let snippet = result.content.as_deref().unwrap_or("（无摘要）");
+            md.push_str(&format!("1. **{}**\n   {}\n   [链接]({})\n\n", result.title, snippet, result.url));
+        }
+
+        Ok(md)
+    }
 }

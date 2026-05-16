@@ -18,6 +18,7 @@ use crate::soul::intervention::{InterventionGate, InterventionDecision};
 use crate::stream;
 use crate::tools::ToolRegistry;
 use crate::{SoulOutput, UserPresets, WsEvent, WsEventType, WsSessionManager};
+use super::topology;
 
 const MAX_PARALLEL_SOULS: usize = 10;
 const SOUL_TIMEOUT_SECS: u64 = 300;
@@ -58,6 +59,7 @@ pub async fn run(
     let (chunk_tx, chunk_rx) = broadcast::channel(100);
 
     let mut requests: Vec<(String, LLMRequest)> = Vec::with_capacity(limited.len());
+    let mut profiles: Vec<foundation::SoulProfile> = Vec::with_capacity(limited.len());
     for soul_name in &limited {
         let _ = system_tx.try_send(WsEvent {
             event_type: WsEventType::SoulStarted,
@@ -119,6 +121,7 @@ pub async fn run(
                         presets.search_results.as_deref(),
                     )
                 };
+                profiles.push(profile.clone());
                 requests.push((soul_name.clone(), LLMRequest {
                     provider, prompt, config,
                 }));
@@ -134,6 +137,24 @@ pub async fn run(
             }
         }
     }
+
+    // ── 拓扑规划：根据任务复杂度和魂多样性选择最优编排策略 ──
+    let planner = topology::TopologyPlanner::new();
+    let selected_topology = topology::plan_from_profiles(
+        &planner, &profiles, task, false,
+    );
+    let _ = system_tx.try_send(WsEvent {
+        event_type: WsEventType::ProcessStep,
+        payload: format!(
+            "拓扑规划: {} (参与{}魂, 预估{}次LLM调用)",
+            selected_topology.describe(),
+            selected_topology.soul_count(),
+            selected_topology.estimated_calls()
+        ),
+        reasoning_content: None,
+        soul_name: None,
+        seq: 0,
+    }).ok();
 
     let gateway_owned = GatewayRegistry::clone(gateway);
     let ws_c = ws.clone();
@@ -154,10 +175,12 @@ pub async fn run(
     let ws_clone = ws_c.clone();
     let session_id_clone = s_id.clone();
     let system_tx_clone = system_tx.clone();
+    let limited_for_monitor = limited.clone();
     let _collision_handle = tokio::spawn(async move {
         detect_collisions_async(
             detector, chunk_rx, ws_clone, session_id_clone,
             system_tx_clone, intervention_gate, intervention_txs,
+            selected_topology, limited_for_monitor,
         ).await;
     });
 
@@ -288,6 +311,21 @@ pub async fn run(
                 };
                 if let Err(e) = store.append_message(&msg).await {
                     tracing::error!("Failed to store synthesis message: {}", e);
+                }
+
+                // ── 提取推荐补充魂 ──
+                let recommendations = extract_recommended_souls(&content);
+                if !recommendations.is_empty() {
+                    let payload = serde_json::json!({
+                        "recommendations": recommendations,
+                    });
+                    let _ = system_tx.try_send(WsEvent {
+                        event_type: WsEventType::SoulRecommendations,
+                        payload: payload.to_string(),
+                        reasoning_content: None,
+                        soul_name: None,
+                        seq: 0,
+                    }).ok();
                 }
 
                 let card_content = content;
@@ -501,7 +539,7 @@ async fn run_soul_with_tools(
                             history.push(foundation::PromptMessage {
                                 role: "assistant".to_string(),
                                 content: String::new(),
-                                reasoning_content: None,
+                                reasoning_content: Some(String::new()),
                                 tool_calls: Some(output.tool_calls.clone()),
                                 tool_call_id: None,
                             });
@@ -580,6 +618,7 @@ async fn stream_single_soul_with_detection(
     let mut seq: u32 = 0;
     let name = soul_name.to_string();
     let mut tool_calls: Vec<foundation::ToolCall> = Vec::new();
+    let mut truncated = false;
 
     loop {
         tokio::select! {
@@ -595,6 +634,13 @@ async fn stream_single_soul_with_detection(
                         if !chunk.tool_calls.is_empty() {
                             tool_calls.extend(chunk.tool_calls);
                         }
+                        // 诊断日志：记录每个 chunk 的关键信息
+                        tracing::debug!(
+                            "Soul '{}' chunk #{}: content_len={} reasoning_len={} finish_reason={:?}",
+                            name, seq, chunk.content.len(),
+                            chunk.reasoning_content.as_ref().map(|s| s.len()).unwrap_or(0),
+                            chunk.finish_reason
+                        );
                         if !chunk.content.is_empty() {
                             content.push_str(&chunk.content);
 
@@ -631,6 +677,11 @@ async fn stream_single_soul_with_detection(
                                 );
                                 seq += 1;
                             }
+                        }
+                        // 检测 max_tokens 截断
+                        if chunk.finish_reason.as_deref() == Some("length") {
+                            truncated = true;
+                            tracing::warn!("Soul '{}' output truncated by max_tokens limit", name);
                         }
                     }
                     Some(Err(e)) => {
@@ -698,6 +749,10 @@ async fn stream_single_soul_with_detection(
         },
     );
 
+    if truncated {
+        content.push_str("\n\n> ⚠️ [系统提示] 输出因长度限制被截断。如需完整分析，可尝试简化任务或分拆问题。");
+    }
+
     let output = SoulOutput { soul_name: name.clone(), content, usage, error: None, tool_calls };
     let _ = chunk_tx.send(SoulStreamMessage::Done {
         soul_name: name,
@@ -716,60 +771,95 @@ async fn detect_collisions_async(
     system_tx: mpsc::Sender<WsEvent>,
     intervention_gate: InterventionGate,
     intervention_txs: HashMap<String, mpsc::Sender<InterventionDecision>>,
+    current_topology: topology::ConferenceTopology,
+    souls: Vec<String>,
 ) {
+    let start = std::time::Instant::now();
+    let mut collision_count = 0u32;
+    let monitor = topology::TopologyMonitor::new();
+    let mut check_interval = tokio::time::interval(Duration::from_secs(30));
+
     loop {
-        match chunk_rx.recv().await {
-            Ok(msg) => {
+        tokio::select! {
+            msg = chunk_rx.recv() => {
                 match msg {
-                    SoulStreamMessage::Chunk { soul_name, token } => {
-                        detector.add_token(&soul_name, &token);
+                    Ok(msg) => {
+                        match msg {
+                            SoulStreamMessage::Chunk { soul_name, token } => {
+                                detector.add_token(&soul_name, &token);
 
-                        let collisions = detector.detect_collisions();
-                        for collision in collisions {
-                            broadcast_collision(&ws, &session_id, &collision, &system_tx);
+                                let collisions = detector.detect_collisions();
+                                if !collisions.is_empty() {
+                                    collision_count += collisions.len() as u32;
+                                }
+                                for collision in collisions {
+                                    broadcast_collision(&ws, &session_id, &collision, &system_tx);
 
-                            // ── 实时干预：碰撞检出后跑三级门控 ──
-                            if let Some(tx) = intervention_txs.get(&collision.to_soul) {
-                                let from_ctx = detector.get_soul_context(&collision.from_soul);
-                                let to_ctx = detector.get_soul_context(&collision.to_soul);
+                                    // ── 实时干预：碰撞检出后跑三级门控 ──
+                                    if let Some(tx) = intervention_txs.get(&collision.to_soul) {
+                                        let from_ctx = detector.get_soul_context(&collision.from_soul);
+                                        let to_ctx = detector.get_soul_context(&collision.to_soul);
 
-                                let from_text = from_ctx.unwrap_or_default();
-                                let to_text = to_ctx.unwrap_or_default();
+                                        let from_text = from_ctx.unwrap_or_default();
+                                        let to_text = to_ctx.unwrap_or_default();
 
-                                let peer_outputs: Vec<String> = vec![from_text];
-                                let gate = intervention_gate.clone();
-                                let tx = tx.clone();
-                                let from_soul = collision.from_soul.clone();
-                                let contradiction = collision.content.clone();
+                                        let peer_outputs: Vec<String> = vec![from_text];
+                                        let gate = intervention_gate.clone();
+                                        let tx = tx.clone();
+                                        let _from_soul = collision.from_soul.clone();
+                                        let _contradiction = collision.content.clone();
 
-                                tokio::spawn(async move {
-                                    let decision = gate.gate(&to_text, &peer_outputs).await;
-                                    match &decision {
-                                        InterventionDecision::InjectQuestion { .. }
-                                        | InterventionDecision::Redirect { .. }
-                                        | InterventionDecision::DeepenRequest { .. } => {
-                                            tracing::info!(
-                                                "Intervention triggered: {:?} → soul '{}'",
-                                                decision,
-                                                collision.to_soul,
-                                            );
-                                            let _ = tx.send(decision).await;
-                                        }
-                                        InterventionDecision::NoAction => {}
+                                        tokio::spawn(async move {
+                                            let decision = gate.gate(&to_text, &peer_outputs).await;
+                                            match &decision {
+                                                InterventionDecision::InjectQuestion { .. }
+                                                | InterventionDecision::Redirect { .. }
+                                                | InterventionDecision::DeepenRequest { .. } => {
+                                                    tracing::info!(
+                                                        "Intervention triggered: {:?} → soul '{}'",
+                                                        decision,
+                                                        collision.to_soul,
+                                                    );
+                                                    let _ = tx.send(decision).await;
+                                                }
+                                                InterventionDecision::NoAction => {}
+                                            }
+                                        });
                                     }
-                                });
+                                }
                             }
+                            SoulStreamMessage::Done { .. } => {}
+                            SoulStreamMessage::Error { .. } => {}
                         }
                     }
-                    SoulStreamMessage::Done { .. } => {}
-                    SoulStreamMessage::Error { .. } => {}
+                    Err(broadcast::error::RecvError::Closed) => {
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        tracing::warn!("Collision detector lagged behind, some chunks may be missed");
+                    }
                 }
             }
-            Err(broadcast::error::RecvError::Closed) => {
-                break;
-            }
-            Err(broadcast::error::RecvError::Lagged(_)) => {
-                tracing::warn!("Collision detector lagged behind, some chunks may be missed");
+            _ = check_interval.tick() => {
+                if monitor.should_downgrade(start.elapsed(), collision_count, 0.0) {
+                    let suggestion = topology::TopologyMonitor::suggest_downgrade(
+                        &current_topology, &souls
+                    );
+                    let suggestion_desc = suggestion.map(|t| t.describe().to_string())
+                        .unwrap_or_else(|| "保持当前拓扑".to_string());
+                    let _ = system_tx.try_send(WsEvent {
+                        event_type: WsEventType::SystemMessage,
+                        payload: format!(
+                            "拓扑监控: 运行{}秒, 碰撞{}次 — 建议降级至「{}」以节省成本",
+                            start.elapsed().as_secs(),
+                            collision_count,
+                            suggestion_desc
+                        ),
+                        reasoning_content: None,
+                        soul_name: None,
+                        seq: 0,
+                    }).ok();
+                }
             }
         }
     }
@@ -805,20 +895,46 @@ fn broadcast_collision(
     tracing::info!("Broadcast collision: {} -> {} ({:?})", collision.from_soul, collision.to_soul, collision.collision_type);
 }
 
-fn estimate_cost(provider: foundation::Provider, total_tokens: u32, apply_cache_discount: bool) -> String {
-    let price_per_1m: f64 = match provider {
-        foundation::Provider::Claude => 15.0,     // Sonnet pricing
-        foundation::Provider::OpenAI => 10.0,      // GPT-4o pricing
-        foundation::Provider::DeepSeek => 2.0,     // DeepSeek pricing
+/// 从综合报告中提取"七、推荐补充魂"部分的建议魂名
+fn extract_recommended_souls(synthesis: &str) -> Vec<serde_json::Value> {
+    let section_start = synthesis.find("## 七、推荐补充魂");
+    let section = match section_start {
+        Some(start) => &synthesis[start..],
+        None => return vec![],
     };
-    
-    let mut cost = total_tokens as f64 / 1_000_000.0 * price_per_1m;
-    
-    // 应用缓存折扣（DeepSeek 有缓存优惠）
-    if apply_cache_discount && matches!(provider, foundation::Provider::DeepSeek) {
-        // 假设 50% 的 token 命中缓存，缓存价格是原价的 10%
-        cost = cost * 0.55; // 0.5 * 0.1 + 0.5 * 1.0 = 0.55
+
+    // 截取到下一个一级标题或文件末尾
+    let section_end = section[1..].find("\n## ").map(|i| i + 1).unwrap_or(section.len());
+    let section_text = &section[..section_end];
+
+    // 如果明确写"无需补充"，返回空
+    if section_text.contains("无需补充") {
+        return vec![];
     }
-    
-    format!("${:.4}", cost)
+
+    let mut results = Vec::new();
+    // 匹配 Markdown 列表项：- **魂名**：推荐理由...
+    for line in section_text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("-") || trimmed.starts_with("*") {
+            if let Some(name_start) = trimmed.find("**") {
+                let after_first = &trimmed[name_start + 2..];
+                if let Some(name_end) = after_first.find("**") {
+                    let name = after_first[..name_end].trim();
+                    if !name.is_empty() && name.len() < 50 {
+                        // 提取推荐理由（**魂名**：后面的内容）
+                        let rationale = after_first[name_end + 2..]
+                            .trim_start_matches(|c| c == '：' || c == ':' || c == ' ')
+                            .trim();
+                        results.push(serde_json::json!({
+                            "name": name,
+                            "rationale": if rationale.is_empty() { "综合官推荐补充" } else { rationale },
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    results
 }

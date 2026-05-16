@@ -7,6 +7,7 @@ pub mod triage;
 mod ws;
 pub mod cross_detector;
 pub mod semantic_collision;
+pub mod distiller;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -289,6 +290,12 @@ pub enum WsEventType {
     ToolCallStarted,
     #[serde(rename = "tool_result")]
     ToolResult,
+    // Soul recommendations from synthesis
+    #[serde(rename = "soul_recommendations")]
+    SoulRecommendations,
+    // Session distilled into observations
+    #[serde(rename = "observations_ready")]
+    ObservationsReady,
 }
 
 pub struct PossessionEngine {
@@ -340,6 +347,8 @@ impl PossessionEngine {
             status: SessionStatus::Active,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
+            digest_summary: None,
+            digest_at: None,
         };
         self.store.create_session(&session).await?;
 
@@ -381,6 +390,8 @@ impl PossessionEngine {
                 status,
                 created_at,
                 updated_at: chrono::Utc::now(),
+                digest_summary: None,
+                digest_at: None,
             })
             .await;
 
@@ -391,6 +402,11 @@ impl PossessionEngine {
         soul_name: None,
         seq: 0,
     }).ok();
+
+            // Async distill: compress session into observations (claude-mem style)
+            if result.is_ok() {
+                distiller::spawn_distill(store.clone(), gateway.clone(), ws.clone(), sid.clone());
+            }
 
             if let Err(e) = result {
                 tracing::error!("Session {} failed: {}", sid, e);

@@ -15,6 +15,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/search", get(search_souls))
         .route("/collect", post(collect_soul))
         .route("/refine", post(refine_soul))
+        .route("/auto-create", post(auto_create_soul))
         .route("/ismism/distribution", get(ismism_distribution))
         .route("/:name", get(get_soul).put(update_soul).delete(delete_soul))
 }
@@ -136,8 +137,6 @@ struct UpdateSoulRequest {
     summon_prompt: Option<String>,
     #[serde(default)]
     model: Option<String>,
-    #[serde(default)]
-    reasoning_effort: Option<String>,
 }
 
 async fn update_soul(
@@ -299,6 +298,102 @@ async fn refine_soul(
 
     Ok(Json(RefineResponse {
         profile,
+        rationale: parsed["rationale"].as_str().unwrap_or("").into(),
+    }))
+}
+
+// ── 一键收魂炼化 ──
+
+#[derive(Debug, Deserialize)]
+struct AutoCreateRequest { name: String }
+
+#[derive(Debug, Serialize)]
+struct AutoCreateResponse {
+    profile: SoulProfile,
+    raw_material: String,
+    rationale: String,
+}
+
+async fn auto_create_soul(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<AutoCreateRequest>,
+) -> Result<Json<AutoCreateResponse>, (axum::http::StatusCode, Json<ApiError>)> {
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err((axum::http::StatusCode::BAD_REQUEST, Json(ApiError { error: "魂名不能为空".into() })));
+    }
+
+    // Step 1: 收魂 — 生成 raw_material
+    let prompt_builder = ai_gateway::prompt::PromptBuilder::new();
+    let collect_prompt = prompt_builder.build_collect_prompt(name);
+
+    let gateway = state.engine.gateway();
+    let provider = gateway.list_providers().into_iter().find(|i| i.available).map(|i| i.provider)
+        .ok_or_else(|| (axum::http::StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "No LLM provider".into() })))?;
+
+    let collect_req = LLMRequest {
+        provider: provider.clone(),
+        prompt: collect_prompt,
+        config: CallConfig { temperature: 0.5, max_tokens: 4096, stream: false, model: None, reasoning_effort: None, structured_output: None, thinking_enabled: None, tools: None, tool_choice: None },
+    };
+    let mut collect_rx = gateway.call(&collect_req).map_err(|e| {
+        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("收魂失败: {}", e) }))
+    })?;
+
+    let mut raw_material = String::new();
+    while let Some(r) = collect_rx.recv().await {
+        if let Ok(c) = r { raw_material.push_str(&c.content); }
+    }
+    if raw_material.is_empty() {
+        return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: "收魂返回空内容".into() })));
+    }
+
+    // Step 2: 炼化 — 从 raw_material 生成 profile
+    let refine_prompt = prompt_builder.build_refine_prompt(&raw_material);
+    let refine_req = LLMRequest {
+        provider,
+        prompt: refine_prompt,
+        config: CallConfig { temperature: 0.3, max_tokens: 4096, stream: false, model: None, reasoning_effort: None, structured_output: None, thinking_enabled: None, tools: None, tool_choice: None },
+    };
+    let mut refine_rx = gateway.call(&refine_req).map_err(|e| {
+        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("炼化失败: {}", e) }))
+    })?;
+
+    let mut resp = String::new();
+    while let Some(r) = refine_rx.recv().await {
+        if let Ok(c) = r { resp.push_str(&c.content); }
+    }
+
+    let json_str = resp.find('{')
+        .and_then(|s| resp.rfind('}').map(|e| &resp[s..=e]))
+        .unwrap_or(&resp);
+    let parsed: serde_json::Value = serde_json::from_str(json_str)
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("Parse error: {}", e) })))?;
+
+    let ismism_code = parsed["ismism_code"].as_str().unwrap_or("0-0-0-0").to_string();
+    let profile = SoulProfile {
+        name: name.to_string(), ismism_code,
+        field: parsed["field"].as_str().unwrap_or("").into(),
+        ontology: parsed["ontology"].as_str().unwrap_or("").into(),
+        epistemology: parsed["epistemology"].as_str().unwrap_or("").into(),
+        teleology: parsed["teleology"].as_str().unwrap_or("").into(),
+        domains: parsed["domains"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default(),
+        exclude_scenarios: vec![],
+        summon_count: 0, effectiveness: foundation::EffectivenessStats::default(),
+        created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
+        tags: parsed["tags"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default(),
+        summon_prompt: parsed["summon_prompt"].as_str().unwrap_or("").into(),
+        practice_observations: vec![],
+        title: String::new(), description: String::new(), voice: String::new(), mind: String::new(), self_declare: String::new(), skills_expertise: vec![], model: String::new(), tools: String::new(), trigger_keywords: vec![],
+        compat: vec![], incompat: vec![],
+    };
+
+    // Auto-save to registry
+    let _ = state.registry.create_soul(profile.clone()).await;
+
+    Ok(Json(AutoCreateResponse {
+        profile,
+        raw_material,
         rationale: parsed["rationale"].as_str().unwrap_or("").into(),
     }))
 }

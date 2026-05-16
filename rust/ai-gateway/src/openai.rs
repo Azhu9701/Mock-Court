@@ -36,6 +36,10 @@ impl Gateway for OpenAIClient {
         self.api_key.is_some()
     }
 
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn call(
         &self,
         prompt: &Prompt,
@@ -58,7 +62,16 @@ impl Gateway for OpenAIClient {
         let messages: Vec<serde_json::Value> = prompt
             .messages
             .iter()
-            .map(|m| serde_json::json!({"role": m.role, "content": m.content}))
+            .map(|m| {
+                let mut msg = serde_json::json!({"role": m.role, "content": m.content});
+                if let Some(tc) = &m.tool_calls {
+                    msg["tool_calls"] = serde_json::to_value(tc).unwrap();
+                }
+                if let Some(tcid) = &m.tool_call_id {
+                    msg["tool_call_id"] = serde_json::json!(tcid);
+                }
+                msg
+            })
             .collect();
 
         let body = serde_json::json!({

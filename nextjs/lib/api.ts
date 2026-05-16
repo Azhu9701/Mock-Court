@@ -1,4 +1,4 @@
-export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3096/api/v1";
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3096/api/v1";
 
 interface ApiError extends Error {
   status?: number;
@@ -8,37 +8,91 @@ interface ApiError extends Error {
 
 interface ApiRequestOptions extends RequestInit {
   operation?: string;
+  /** 超时时间 (ms)，默认 30s */
+  timeout?: number;
+  /** 重试次数，默认 3 次（仅网络错误时重试） */
+  retries?: number;
+}
+
+class NetworkError extends Error {
+  constructor(message: string, public cause?: unknown) {
+    super(message);
+    this.name = "NetworkError";
+  }
 }
 
 async function apiRequest<T>(
   endpoint: string,
   options: ApiRequestOptions = {}
 ): Promise<T> {
-  const { operation, ...fetchOptions } = options;
+  const { operation, timeout = 30000, retries = 3, ...fetchOptions } = options;
   const url = `${API_BASE}${endpoint}`;
   const opName = operation || endpoint;
 
-  const res = await fetch(url, fetchOptions);
+  let lastError: unknown;
 
-  if (!res.ok) {
-    let errorDetail = res.statusText;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+
+    // 合并外部 signal 和超时 signal
+    const existingSignal = fetchOptions.signal;
+    if (existingSignal) {
+      existingSignal.addEventListener("abort", () => controller.abort());
+    }
+
     try {
-      const errorData = await res.json();
-      errorDetail = errorData.message || errorData.error || errorDetail;
-    } catch { }
+      const res = await fetch(url, { ...fetchOptions, signal: controller.signal });
 
-    const error = new Error(`API request failed: ${opName} - ${errorDetail}`) as ApiError;
-    error.status = res.status;
-    error.url = url;
-    error.operation = opName;
-    throw error;
+      if (!res.ok) {
+        let errorDetail = res.statusText;
+        try {
+          const errorData = await res.json();
+          errorDetail = errorData.message || errorData.error || errorDetail;
+        } catch { }
+
+        const error = new Error(`API request failed: ${opName} - ${errorDetail}`) as ApiError;
+        error.status = res.status;
+        error.url = url;
+        error.operation = opName;
+        throw error;
+      }
+
+      if (res.status === 204) {
+        return undefined as T;
+      }
+
+      return res.json();
+    } catch (err: any) {
+      lastError = err;
+      clearTimeout(timer);
+
+      // 非网络错误不重试（HTTP 错误已在上面处理并重新抛出）
+      if (err instanceof Error && err.name !== "TypeError" && (err as ApiError).status) {
+        throw err;
+      }
+
+      // 如果是外部 signal 导致的 abort，不重试
+      if (existingSignal?.aborted) {
+        throw err;
+      }
+
+      // 最后一次尝试，抛出错误
+      if (attempt === retries) {
+        throw new NetworkError(
+          `网络请求失败: ${opName} (已重试 ${retries} 次) — ${err instanceof Error ? err.message : String(err)}`,
+          err
+        );
+      }
+
+      // 指数退避: 1s, 2s, 4s（热点场景需要更长时间恢复）
+      const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
+      console.warn(`[apiRequest] ${opName} 网络错误，${delay}ms 后重试 (${attempt + 1}/${retries})`, err);
+      await new Promise((r) => setTimeout(r, delay));
+    }
   }
 
-  if (res.status === 204) {
-    return undefined as T;
-  }
-
-  return res.json();
+  throw lastError;
 }
 
 export interface SoulListEntry {
@@ -198,6 +252,22 @@ export async function createSoul(data: Record<string, unknown>): Promise<void> {
   });
 }
 
+export interface AutoCreateResponse {
+  profile: SoulProfile;
+  raw_material: string;
+  rationale: string;
+}
+
+export async function autoCreateSoul(name: string): Promise<AutoCreateResponse> {
+  return apiRequest<AutoCreateResponse>('/souls/auto-create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+    operation: 'autoCreateSoul',
+    timeout: 120000, // 收魂+炼化可能耗时较长
+  });
+}
+
 // ── Analytics ──
 
 export async function fetchSoulEffectiveness(
@@ -311,6 +381,8 @@ export interface SessionSummary {
   message_count: number;
   soul_count: number;
   total_tokens: number;
+  digest_summary: string | null;
+  observation_count: number;
 }
 
 export interface SessionDetail {
@@ -356,6 +428,20 @@ export async function deleteSession(id: string): Promise<void> {
   return apiRequest<void>(`/sessions/${id}`, {
     method: 'DELETE',
     operation: 'deleteSession',
+  });
+}
+
+export interface BatchDeleteResult {
+  deleted: number;
+  errors: string[];
+}
+
+export async function batchDeleteSessions(ids: string[]): Promise<BatchDeleteResult> {
+  return apiRequest<BatchDeleteResult>('/sessions/batch-delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+    operation: 'batchDeleteSessions',
   });
 }
 
@@ -723,4 +809,62 @@ export async function searchWeb(params: {
     `/searxng/search?${searchParams.toString()}`,
     { operation: 'searchWeb' }
   );
+}
+
+// ── Session Observations (claude-mem digest) ──
+
+export interface SessionObservation {
+  id: string;
+  session_id: string;
+  soul_name: string | null;
+  obs_type: string;
+  title: string;
+  content: string;
+  source_seq: number | null;
+  read_tokens: number;
+  work_tokens: number;
+  confidence: number;
+  created_at: string;
+}
+
+export interface SessionDigest {
+  session_id: string;
+  title: string;
+  mode: string;
+  status: string;
+  created_at: string;
+  summary: string | null;
+  digest_at: string | null;
+  observations: SessionObservation[];
+  total_read_tokens: number;
+  total_work_tokens: number;
+  savings_ratio: number;
+}
+
+const OBS_TYPE_EMOJI: Record<string, string> = {
+  session: '\u{1F3AF}',
+  discovery: '\u{1F535}',
+  decision: '⚖️',
+  bugfix: '\u{1F534}',
+  feature: '\u{1F7E3}',
+  refactor: '\u{1F504}',
+  change: '✅',
+  security: '\u{1F6A8}',
+};
+
+export function obsEmoji(type: string): string {
+  return OBS_TYPE_EMOJI[type] ?? '\u{1F4CB}';
+}
+
+export async function fetchSessionDigest(id: string): Promise<SessionDigest> {
+  return apiRequest<SessionDigest>(`/sessions/${id}/digest`, {
+    operation: 'fetchSessionDigest',
+  });
+}
+
+export async function triggerDistill(id: string): Promise<{ ok: boolean; message: string }> {
+  return apiRequest<{ ok: boolean; message: string }>(`/sessions/${id}/distill`, {
+    method: 'POST',
+    operation: 'triggerDistill',
+  });
 }

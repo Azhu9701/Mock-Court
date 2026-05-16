@@ -114,6 +114,10 @@ impl ArchiveSystem {
         }
     }
 
+    pub fn store(&self) -> Arc<dyn Storage> {
+        self.store.clone()
+    }
+
     // ── Archive ──
 
     pub async fn archive_soul_output(
@@ -324,6 +328,16 @@ impl ArchiveSystem {
 
     pub async fn check_soul_failure_conditions(&self, soul_name: &str) -> Result<Vec<FailureAlert>> {
         audit::AuditEngine::check_soul(&*self.store, soul_name).await
+    }
+
+    // ── Session Observations (claude-mem digest) ──
+
+    pub async fn get_session_observations(&self, session_id: &str) -> Result<Vec<foundation::SessionObservation>> {
+        self.store.get_session_observations(session_id).await
+    }
+
+    pub async fn get_observations_by_soul(&self, soul_name: &str, limit: u32) -> Result<Vec<foundation::SessionObservation>> {
+        self.store.get_observations_by_soul(soul_name, limit).await
     }
 }
 

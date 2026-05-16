@@ -19,6 +19,7 @@ pub async fn stream_single_soul(
     let mut seq: u32 = 0;
     let name = soul_name.to_string();
     let mut tool_calls: Vec<foundation::ToolCall> = Vec::new();
+    let mut truncated = false;
 
     while let Some(result) = rx.recv().await {
         match result {
@@ -29,10 +30,11 @@ pub async fn stream_single_soul(
                 if !chunk.tool_calls.is_empty() {
                     tool_calls.extend(chunk.tool_calls);
                 }
+                // 修复：content 和 reasoning_content 同时存在时也要累积 content
+                if !chunk.content.is_empty() {
+                    content.push_str(&chunk.content);
+                }
                 if !chunk.content.is_empty() || chunk.reasoning_content.is_some() {
-                    if chunk.reasoning_content.is_none() {
-                        content.push_str(&chunk.content);
-                    }
                     ws.broadcast_soul(
                         session_id,
                         &name,
@@ -45,6 +47,11 @@ pub async fn stream_single_soul(
                         },
                     );
                     seq += 1;
+                }
+                // 检测 max_tokens 截断
+                if chunk.finish_reason.as_deref() == Some("length") {
+                    truncated = true;
+                    tracing::warn!("Soul '{}' output truncated by max_tokens limit", name);
                 }
             }
             Err(e) => {
@@ -76,6 +83,10 @@ pub async fn stream_single_soul(
         },
     );
 
+    if truncated {
+        content.push_str("\n\n> ⚠️ [系统提示] 输出因长度限制被截断。如需完整分析，可尝试简化任务或分拆问题。");
+    }
+
     SoulOutput { soul_name: name, content, usage, error: None, tool_calls }
 }
 
@@ -105,6 +116,7 @@ pub async fn stream_synthesis(
     let mut usage = UsageStats::default();
     let mut seq: u32 = 0;
     let mut chunk_count = 0;
+    let mut truncated = false;
 
     while let Some(result) = rx.recv().await {
         match result {
@@ -112,11 +124,11 @@ pub async fn stream_synthesis(
                 if let Some(u) = chunk.usage {
                     usage = u;
                 }
+                if !chunk.content.is_empty() {
+                    content.push_str(&chunk.content);
+                }
                 if !chunk.content.is_empty() || chunk.reasoning_content.is_some() {
                     chunk_count += 1;
-                    if chunk.reasoning_content.is_none() {
-                        content.push_str(&chunk.content);
-                    }
                     tracing::debug!("Broadcasting synthesis chunk #{}: content={:?}, reasoning={:?}", chunk_count, chunk.content, chunk.reasoning_content);
                     ws.broadcast_system(
                         session_id,
@@ -129,6 +141,11 @@ pub async fn stream_synthesis(
                         },
                     );
                     seq += 1;
+                }
+                // 检测 max_tokens 截断
+                if chunk.finish_reason.as_deref() == Some("length") {
+                    truncated = true;
+                    tracing::warn!("Synthesis output truncated by max_tokens limit");
                 }
             }
             Err(e) => {
@@ -149,6 +166,10 @@ pub async fn stream_synthesis(
             seq,
         },
     );
+
+    if truncated {
+        content.push_str("\n\n> ⚠️ [系统提示] 综合报告因长度限制被截断。");
+    }
 
     Ok((content, usage))
 }
@@ -226,7 +247,7 @@ pub async fn run_tool_loop(
                     history.push(PromptMessage {
                         role: "assistant".to_string(),
                         content: String::new(),
-                        reasoning_content: None,
+                        reasoning_content: Some(String::new()),
                         tool_calls: Some(output.tool_calls.clone()),
                         tool_call_id: None,
                     });

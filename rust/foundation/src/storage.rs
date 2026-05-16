@@ -61,6 +61,12 @@ pub trait Storage: Send + Sync {
     async fn update_revision_proposal(&self, proposal: &RevisionProposal) -> Result<()>;
     async fn get_revision_proposals(&self, soul_name: Option<&str>, status: Option<ProposalStatus>) -> Result<Vec<RevisionProposal>>;
 
+    // Session Observations (claude-mem style)
+    async fn insert_session_observations(&self, observations: &[SessionObservation]) -> Result<()>;
+    async fn get_session_observations(&self, session_id: &str) -> Result<Vec<SessionObservation>>;
+    async fn get_observations_by_soul(&self, soul_name: &str, limit: u32) -> Result<Vec<SessionObservation>>;
+    async fn update_session_digest(&self, session_id: &str, summary: &str) -> Result<()>;
+
     // Health
     async fn health_check(&self) -> Result<HealthStatus>;
 }

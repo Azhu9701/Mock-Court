@@ -116,21 +116,18 @@ impl MemoryEdge {
 pub struct SoulMemoryGraph {
     graph: StableGraph<MemoryNode, MemoryEdge>,
     node_index: HashMap<String, petgraph::stable_graph::NodeIndex>,
-    /// 图谱归属的魂名（None 表示已融合的复合图谱）
-    soul_name: Option<String>,
 }
 
 impl SoulMemoryGraph {
-    pub fn new(soul_name: Option<String>) -> Self {
+    pub fn new() -> Self {
         SoulMemoryGraph {
             graph: StableGraph::new(),
             node_index: HashMap::new(),
-            soul_name,
         }
     }
 
-    pub fn for_soul(soul_name: &str) -> Self {
-        Self::new(Some(soul_name.to_string()))
+    pub fn for_soul(_soul_name: &str) -> Self {
+        Self::new()
     }
 
     // ── Node insertion ──
@@ -426,7 +423,7 @@ impl SoulMemoryGraph {
 
     /// 合并两个记忆图谱（图谱 A 的节点 + 图谱 B 的节点 + 新边）
     pub fn merge_graphs(a: &SoulMemoryGraph, b: &SoulMemoryGraph) -> SoulMemoryGraph {
-        let mut merged = SoulMemoryGraph::new(None); // 融合图谱无单一归属
+        let mut merged = SoulMemoryGraph::new(); // 融合图谱无单一归属
 
         // id 映射：从旧 NodeIndex 映射到新图中的 NodeIndex
         let mut id_to_new_idx: HashMap<String, petgraph::stable_graph::NodeIndex> =
@@ -655,13 +652,11 @@ mod tests {
         assert_eq!(merged.edge_count(), 2);
         assert!(merged.get_node("a-prem").is_some());
         assert!(merged.get_node("b-conc").is_some());
-        // 融合图谱应无单一归属
-        assert!(merged.soul_name.is_none());
     }
 
     #[test]
     fn test_cross_soul_integrations() {
-        let mut g = SoulMemoryGraph::new(None);
+        let mut g = SoulMemoryGraph::new();
         g.add_conclusion("c-a", "A的观点", 0.8, vec![], "A");
         g.add_conclusion("c-b", "B的观点", 0.7, vec![], "B");
         g.add_conclusion("c-c", "C的观点", 0.9, vec![], "A");

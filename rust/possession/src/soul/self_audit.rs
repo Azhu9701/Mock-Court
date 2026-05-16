@@ -387,8 +387,7 @@ mod tests {
 
     #[test]
     fn test_contradiction_detection() {
-        let profile = create_test_profile();
-        let mut result = AuditResult::clean();
+        let _profile = create_test_profile();
         
         let pairs_found = CONTRADICTION_PATTERNS
             .iter()

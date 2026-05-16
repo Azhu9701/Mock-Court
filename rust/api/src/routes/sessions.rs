@@ -6,7 +6,8 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use axum::http::{header, StatusCode};
 use archive::SessionDetail;
-use foundation::{MessageRole, Session, SessionFilter, SessionStatus, SessionSummary};
+use chrono::{DateTime, Utc};
+use foundation::{MessageRole, Session, SessionFilter, SessionObservation, SessionStatus, SessionSummary};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{map_api_error, ApiError};
@@ -15,7 +16,10 @@ use crate::state::AppState;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_sessions))
+        .route("/batch-delete", post(batch_delete_sessions))
         .route("/:id", get(get_session_detail).delete(delete_session))
+        .route("/:id/digest", get(get_session_digest))
+        .route("/:id/distill", post(trigger_distill))
         .route("/:id/rename", put(rename_session))
         .route("/:id/fork", put(fork_session))
         .route("/:id/export/markdown", get(export_session_markdown))
@@ -73,6 +77,23 @@ async fn delete_session(
 }
 
 #[derive(Debug, Deserialize)]
+struct BatchDeleteRequest { ids: Vec<String> }
+
+async fn batch_delete_sessions(
+    State(state): State<Arc<AppState>>, Json(body): Json<BatchDeleteRequest>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<ApiError>)> {
+    let mut deleted = 0u32;
+    let mut errors: Vec<String> = Vec::new();
+    for id in &body.ids {
+        match state.archive.delete_session(id).await {
+            Ok(()) => deleted += 1,
+            Err(e) => errors.push(format!("{}: {}", id, e)),
+        }
+    }
+    Ok(Json(serde_json::json!({ "deleted": deleted, "errors": errors })))
+}
+
+#[derive(Debug, Deserialize)]
 struct ForkRequest { task: Option<String>, from_message_seq: Option<usize> }
 
 #[derive(Debug, Serialize)]
@@ -93,6 +114,7 @@ async fn fork_session(
         id: new_sid.clone(), title: new_title, mode: detail.session.mode.clone(),
         status: foundation::SessionStatus::Active,
         created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
+        digest_summary: None, digest_at: None,
     };
     state.archive.create_session(&new_session).await.map_err(map_api_error)?;
     for msg in history {
@@ -207,4 +229,83 @@ async fn save_review(
 
     state.archive.append_message(&msg).await.map_err(map_api_error)?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ── Session Digest (claude-mem 3-layer access) ──
+
+#[derive(Debug, Serialize)]
+struct SessionDigest {
+    session_id: String,
+    title: String,
+    mode: String,
+    status: String,
+    created_at: DateTime<Utc>,
+    summary: Option<String>,
+    digest_at: Option<DateTime<Utc>>,
+    observations: Vec<SessionObservation>,
+    total_read_tokens: u32,
+    total_work_tokens: u32,
+    savings_ratio: f32,
+}
+
+async fn get_session_digest(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<SessionDigest>, (StatusCode, Json<ApiError>)> {
+    let detail = state.archive.get_session_detail(&id).await
+        .map_err(|_| (StatusCode::NOT_FOUND, Json(ApiError { error: "Not found".into() })))?;
+    let session = detail.session;
+    let obs = state.archive.get_session_observations(&id).await.map_err(map_api_error)?;
+    let total_read: u32 = obs.iter().map(|o| o.read_tokens).sum();
+    let total_work: u32 = obs.iter().map(|o| o.work_tokens).sum();
+    let savings_ratio = if total_work > 0 {
+        1.0 - (total_read as f32 / total_work as f32)
+    } else {
+        0.0
+    };
+    Ok(Json(SessionDigest {
+        session_id: id,
+        title: session.title,
+        mode: session.mode.as_str().to_string(),
+        status: session.status.as_str().to_string(),
+        created_at: session.created_at,
+        summary: session.digest_summary,
+        digest_at: session.digest_at,
+        observations: obs,
+        total_read_tokens: total_read,
+        total_work_tokens: total_work,
+        savings_ratio: savings_ratio.max(0.0),
+    }))
+}
+
+async fn trigger_distill(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let detail = state.archive.get_session_detail(&id).await
+        .map_err(|_| (StatusCode::NOT_FOUND, Json(ApiError { error: "Not found".into() })))?;
+
+    // Skip if already distilled
+    if detail.session.digest_summary.is_some() {
+        return Ok(Json(serde_json::json!({
+            "ok": true,
+            "message": "Already distilled",
+            "summary": detail.session.digest_summary
+        })));
+    }
+
+    let messages = state.archive.store().get_messages(&id).await.map_err(map_api_error)?;
+    if messages.is_empty() {
+        return Ok(Json(serde_json::json!({ "ok": false, "message": "No messages to distill" })));
+    }
+
+    // Trigger distill via possession engine's gateway
+    possession::distiller::spawn_distill(
+        state.archive.store(),
+        state.engine.gateway().clone(),
+        state.engine.ws_manager().clone(),
+        id.clone(),
+    );
+
+    Ok(Json(serde_json::json!({ "ok": true, "message": "Distill started" })))
 }

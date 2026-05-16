@@ -65,3 +65,7 @@ nohup.out
 # Internal souls are managed via data/souls-internal/ (not tracked by git)
 # Deploy with: WANMINFAN_SOULS_INTERNAL_DIR=/path/to/internal-souls
 data/souls-internal/
+
+# Runtime artifacts
+data/archive/
+scripts/__pycache__/

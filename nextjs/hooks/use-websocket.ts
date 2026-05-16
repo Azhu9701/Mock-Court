@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { SESSIONS_UPDATED_EVENT } from "@/components/sidebar-sessions";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3096/api/v1";
 
 export interface ProcessStep {
@@ -63,6 +65,16 @@ export interface ToolCallEvent {
   result?: string;
 }
 
+export interface SoulRecommendation {
+  name: string;
+  rationale: string;
+}
+
+export interface DigestReadyEvent {
+  summary: string;
+  observation_count: number;
+}
+
 const MAX_RETRIES = 3;
 const FLUSH_INTERVAL_MS = 50; // batch state updates at ~20fps
 
@@ -99,7 +111,9 @@ export function useWebSocket(sessionId: string) {
   const costPerSoulRef = useRef<SoulCostBreakdown[]>([]);
   const [collisions, setCollisions] = useState<CollisionEvent[]>([]);
   const [toolCalls, setToolCalls] = useState<ToolCallEvent[]>([]);
+  const [soulRecommendations, setSoulRecommendations] = useState<SoulRecommendation[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [digestReady, setDigestReady] = useState<DigestReadyEvent | null>(null);
 
   // Flush buffer to React state at controlled intervals
   const scheduleFlush = useCallback(() => {
@@ -159,6 +173,8 @@ export function useWebSocket(sessionId: string) {
     costPerSoulRef.current = [];
     setCollisions([]);
     setToolCalls([]);
+    setSoulRecommendations([]);
+    setDigestReady(null);
     if (!hasConnectedBeforeRef.current) {
       setLogs([]);
     }
@@ -326,6 +342,29 @@ export function useWebSocket(sessionId: string) {
           } catch {}
           break;
 
+        case "soul_recommendations":
+          try {
+            const data = JSON.parse(event.payload);
+            const recs: SoulRecommendation[] = data.recommendations || [];
+            if (recs.length > 0) {
+              setSoulRecommendations(recs);
+              addLog(`综合官推荐补充魂: ${recs.map((r: SoulRecommendation) => r.name).join("、")}`, 'info');
+            }
+          } catch {}
+          break;
+
+        case "observations_ready":
+          try {
+            const digest = JSON.parse(event.payload) as DigestReadyEvent;
+            setDigestReady(digest);
+            addLog(`📝 记忆压缩完成: ${digest.observation_count} 条 observation`, 'success');
+            // 通知 sidebar 和 timeline 刷新角标
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(new CustomEvent(SESSIONS_UPDATED_EVENT));
+            }
+          } catch {}
+          break;
+
         case "done":
         case "SessionComplete":
           flushImmediate();
@@ -422,8 +461,10 @@ export function useWebSocket(sessionId: string) {
     cost,
     collisions,
     toolCalls,
+    soulRecommendations,
     logs,
     tick,
+    digestReady,
     reconnect: connect,
   };
 }

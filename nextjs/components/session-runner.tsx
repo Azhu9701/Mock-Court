@@ -188,7 +188,7 @@ function ErrorView({ error, onReconnect }: { error: string; onReconnect: () => v
 }
 
 export function SessionRunner({ sessionId, mode, matchedSouls, taskTitle, onDone, sessionDone }: SessionRunnerProps) {
-  const { messages, synthesis, status, error, processSteps, cost, collisions, toolCalls, reconnect } =
+  const { messages, synthesis, status, error, processSteps, cost, collisions, toolCalls, soulRecommendations, reconnect } =
     useWebSocket(sessionId);
 
   const hasMessages = Object.keys(messages).length > 0;
@@ -269,7 +269,7 @@ export function SessionRunner({ sessionId, mode, matchedSouls, taskTitle, onDone
         {status === "done" && !error && !hasMessages && <RequireApiKeyView />}
         {hasMessages && (
           <div className="px-4 pb-4 space-y-4">
-            {mode === "conference" && <ConferenceView messages={messages} synthesis={synthesis} collisions={collisions} toolCalls={toolCalls} />}
+            {mode === "conference" && <ConferenceView messages={messages} synthesis={synthesis} collisions={collisions} toolCalls={toolCalls} recommendations={soulRecommendations} />}
             {mode === "debate" && <DebateView messages={messages} />}
             {mode === "relay" && <RelayView messages={messages} />}
             {mode === "single" && <SingleView messages={messages} />}

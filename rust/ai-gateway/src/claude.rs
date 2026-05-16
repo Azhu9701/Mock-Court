@@ -37,6 +37,10 @@ impl Gateway for ClaudeClient {
         self.api_key.is_some()
     }
 
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn call(
         &self,
         prompt: &Prompt,

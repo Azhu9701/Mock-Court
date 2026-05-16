@@ -135,13 +135,39 @@ impl SqliteDb {
                 usage_json TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
-            CREATE INDEX IF NOT EXISTS idx_llm_cache_created ON llm_cache(created_at);",
+            CREATE INDEX IF NOT EXISTS idx_llm_cache_created ON llm_cache(created_at);
+
+            CREATE TABLE IF NOT EXISTS session_observations (
+                id              TEXT PRIMARY KEY,
+                session_id      TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                soul_name       TEXT,
+                obs_type        TEXT NOT NULL,
+                title           TEXT NOT NULL,
+                content         TEXT NOT NULL,
+                source_seq      INTEGER,
+                read_tokens     INTEGER NOT NULL DEFAULT 0,
+                work_tokens     INTEGER NOT NULL DEFAULT 0,
+                confidence      REAL NOT NULL DEFAULT 0.7,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_session_obs_session ON session_observations(session_id);
+            CREATE INDEX IF NOT EXISTS idx_session_obs_soul    ON session_observations(soul_name);
+            CREATE INDEX IF NOT EXISTS idx_session_obs_type    ON session_observations(obs_type);
+            CREATE INDEX IF NOT EXISTS idx_session_obs_created ON session_observations(created_at DESC);",
         )?;
 
         // Migrate: add token columns to existing call_records tables (ignore error if already exists)
         for col in &["prompt_tokens", "completion_tokens", "total_tokens"] {
             let sql = format!("ALTER TABLE call_records ADD COLUMN {} INTEGER NOT NULL DEFAULT 0", col);
             let _ = conn.execute_batch(&sql);
+        }
+
+        // Migrate: add digest columns to existing sessions tables (ignore error if already exists)
+        for sql in &[
+            "ALTER TABLE sessions ADD COLUMN digest_summary TEXT",
+            "ALTER TABLE sessions ADD COLUMN digest_at TEXT",
+        ] {
+            let _ = conn.execute_batch(sql);
         }
 
         Ok(())
@@ -189,11 +215,16 @@ impl SqliteDb {
     pub fn get_session(&self, id: &str) -> Result<Session> {
         self.with_conn(|conn| {
             conn.query_row(
-                "SELECT id, title, mode, status, created_at, updated_at FROM sessions WHERE id=?1",
+                "SELECT id, title, mode, status, created_at, updated_at, digest_summary, digest_at FROM sessions WHERE id=?1",
                 params![id],
                 |row| {
                     let created_at: String = row.get(4)?;
                     let updated_at: String = row.get(5)?;
+                    let digest_summary: Option<String> = row.get(6).ok();
+                    let digest_at_str: Option<String> = row.get(7).ok();
+                    let digest_at = digest_at_str.and_then(|s| {
+                        DateTime::parse_from_rfc3339(&s).ok().map(|d| d.with_timezone(&Utc))
+                    });
                     Ok(Session {
                         id: row.get(0)?,
                         title: row.get(1)?,
@@ -201,6 +232,8 @@ impl SqliteDb {
                         status: str_to_status(&row.get::<_, String>(3)?),
                         created_at: DateTime::parse_from_rfc3339(&created_at).unwrap().with_timezone(&Utc),
                         updated_at: DateTime::parse_from_rfc3339(&updated_at).unwrap().with_timezone(&Utc),
+                        digest_summary,
+                        digest_at,
                     })
                 },
             ).map_err(|e| match e {
@@ -216,7 +249,9 @@ impl SqliteDb {
                 "SELECT s.id, s.title, s.mode, s.status, s.created_at,
                         COUNT(DISTINCT m.id) as msg_count,
                         COUNT(DISTINCT cr.soul_name) as soul_count,
-                        COALESCE(SUM(cr.total_tokens), 0) as total_tokens
+                        COALESCE(SUM(cr.total_tokens), 0) as total_tokens,
+                        s.digest_summary,
+                        (SELECT COUNT(*) FROM session_observations so WHERE so.session_id = s.id) as obs_count
                  FROM sessions s
                  LEFT JOIN messages m ON s.id = m.session_id
                  LEFT JOIN call_records cr ON s.id = cr.session_id
@@ -247,6 +282,8 @@ impl SqliteDb {
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map(params_refs.as_slice(), |row| {
                 let created_at: String = row.get(4)?;
+                let digest_summary: Option<String> = row.get(8).ok();
+                let obs_count: i64 = row.get(9).unwrap_or(0);
                 Ok(SessionSummary {
                     id: row.get(0)?,
                     title: row.get(1)?,
@@ -256,6 +293,8 @@ impl SqliteDb {
                     message_count: row.get(5)?,
                     soul_count: row.get::<_, i64>(6)? as u32,
                     total_tokens: row.get::<_, i64>(7)? as u32,
+                    digest_summary,
+                    observation_count: obs_count as u32,
                 })
             })?;
 
@@ -518,9 +557,11 @@ impl SqliteDb {
     ) -> Result<()> {
         self.with_conn(|conn| {
             Self::ensure_fts5(conn)?;
+            let content_tokenized = Self::cjk_tokenize(content);
+            let summary_tokenized = Self::cjk_tokenize(task_summary);
             conn.execute(
                 "INSERT INTO knowledge_fts (soul_name, content, mode, task_summary, created_at, session_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![soul_name.unwrap_or(""), content, mode, task_summary, created_at, session_id],
+                params![soul_name.unwrap_or(""), content_tokenized, mode, summary_tokenized, created_at, session_id],
             )?;
             Ok(())
         })
@@ -1116,6 +1157,114 @@ impl SqliteDb {
                 results.push(row?);
             }
             Ok(results)
+        })
+    }
+
+    // ── Session Observations (claude-mem style) ──
+
+    pub fn insert_session_observations(&self, observations: &[SessionObservation]) -> Result<()> {
+        if observations.is_empty() { return Ok(()); }
+        self.with_conn(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT INTO session_observations \
+                     (id, session_id, soul_name, obs_type, title, content, source_seq, read_tokens, work_tokens, confidence, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+                )?;
+                for obs in observations {
+                    stmt.execute(params![
+                        obs.id,
+                        obs.session_id,
+                        obs.soul_name,
+                        obs.obs_type.as_str(),
+                        obs.title,
+                        obs.content,
+                        obs.source_seq,
+                        obs.read_tokens as i64,
+                        obs.work_tokens as i64,
+                        obs.confidence,
+                        obs.created_at.to_rfc3339(),
+                    ])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    pub fn get_session_observations(&self, session_id: &str) -> Result<Vec<SessionObservation>> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, session_id, soul_name, obs_type, title, content, source_seq, \
+                        read_tokens, work_tokens, confidence, created_at \
+                 FROM session_observations \
+                 WHERE session_id = ?1 \
+                 ORDER BY source_seq ASC NULLS LAST, created_at ASC"
+            )?;
+            let rows = stmt.query_map(params![session_id], |row| {
+                let obs_type_str: String = row.get(3)?;
+                let created_at: String = row.get(10)?;
+                Ok(SessionObservation {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    soul_name: row.get(2)?,
+                    obs_type: ObservationType::from_str(&obs_type_str).unwrap_or(ObservationType::Discovery),
+                    title: row.get(4)?,
+                    content: row.get(5)?,
+                    source_seq: row.get(6)?,
+                    read_tokens: row.get::<_, i64>(7)? as u32,
+                    work_tokens: row.get::<_, i64>(8)? as u32,
+                    confidence: row.get::<_, f64>(9)? as f32,
+                    created_at: DateTime::parse_from_rfc3339(&created_at).unwrap().with_timezone(&Utc),
+                })
+            })?;
+            let mut results = vec![];
+            for r in rows { results.push(r?); }
+            Ok(results)
+        })
+    }
+
+    pub fn get_observations_by_soul(&self, soul_name: &str, limit: u32) -> Result<Vec<SessionObservation>> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, session_id, soul_name, obs_type, title, content, source_seq, \
+                        read_tokens, work_tokens, confidence, created_at \
+                 FROM session_observations \
+                 WHERE soul_name = ?1 \
+                 ORDER BY created_at DESC \
+                 LIMIT ?2"
+            )?;
+            let rows = stmt.query_map(params![soul_name, limit as i64], |row| {
+                let obs_type_str: String = row.get(3)?;
+                let created_at: String = row.get(10)?;
+                Ok(SessionObservation {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    soul_name: row.get(2)?,
+                    obs_type: ObservationType::from_str(&obs_type_str).unwrap_or(ObservationType::Discovery),
+                    title: row.get(4)?,
+                    content: row.get(5)?,
+                    source_seq: row.get(6)?,
+                    read_tokens: row.get::<_, i64>(7)? as u32,
+                    work_tokens: row.get::<_, i64>(8)? as u32,
+                    confidence: row.get::<_, f64>(9)? as f32,
+                    created_at: DateTime::parse_from_rfc3339(&created_at).unwrap().with_timezone(&Utc),
+                })
+            })?;
+            let mut results = vec![];
+            for r in rows { results.push(r?); }
+            Ok(results)
+        })
+    }
+
+    pub fn update_session_digest(&self, session_id: &str, summary: &str) -> Result<()> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE sessions SET digest_summary = ?1, digest_at = ?2 WHERE id = ?3",
+                params![summary, Utc::now().to_rfc3339(), session_id],
+            )?;
+            Ok(())
         })
     }
 }

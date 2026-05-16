@@ -2,9 +2,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use serde::{Serialize, Deserialize};
-use uuid::Uuid;
-use tracing::info;
-use num_traits::Float;
 
 /// 向量嵌入类型
 pub type Embedding = Vec<f32>;
@@ -176,6 +173,7 @@ pub enum VectorSearchError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
     
     #[test]
     fn test_cosine_similarity() {

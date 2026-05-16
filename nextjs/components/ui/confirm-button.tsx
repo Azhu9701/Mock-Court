@@ -13,6 +13,7 @@ interface ConfirmButtonProps {
   icon: React.ReactNode;
   title?: string;
   className?: string;
+  disabled?: boolean;
 }
 
 export function ConfirmButton({
@@ -24,6 +25,7 @@ export function ConfirmButton({
   icon,
   title,
   className,
+  disabled,
 }: ConfirmButtonProps) {
   const [confirming, setConfirming] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -67,6 +69,7 @@ export function ConfirmButton({
         onClick={() => setConfirming(true)}
         title={title}
         className={className}
+        disabled={disabled}
       >
         {icon}
       </Button>

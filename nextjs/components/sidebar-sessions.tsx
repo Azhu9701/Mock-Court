@@ -103,8 +103,8 @@ export function SidebarSessions() {
   if (sessions.length === 0) return null;
 
   return (
-    <div className="border-t pt-2 pb-4">
-      <div className="flex items-center justify-between px-3 mb-1">
+    <div className="border-t pt-2 flex-1 min-h-0 flex flex-col">
+      <div className="flex items-center justify-between px-3 mb-1 shrink-0">
         <h3 className="text-xs font-semibold text-muted-foreground">
           最近对话
         </h3>
@@ -119,8 +119,8 @@ export function SidebarSessions() {
           <RefreshCw className={cn("h-3 w-3", refreshing && "animate-spin")} />
         </Button>
       </div>
-      <div className="space-y-0.5">
-        {sessions.slice(0, 8).map((s) => {
+      <div className="space-y-0.5 overflow-y-auto flex-1 min-h-0 px-1">
+        {sessions.map((s) => {
           const href = `/sessions/${s.id}`;
           const active = pathname === href || pathname === `/possess/${s.id}`;
           const isEditing = editingId === s.id;
@@ -171,6 +171,11 @@ export function SidebarSessions() {
                   <span className="text-[10px] text-muted-foreground/50 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                     {modeLabel(s.mode)}
                   </span>
+                  {s.observation_count > 0 && (
+                    <span className="text-[10px] text-blue-500/70 shrink-0" title={`${s.observation_count} 条压缩摘要`}>
+                      📝{s.observation_count}
+                    </span>
+                  )}
                   <div className="flex items-center shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                     <Button
                       size="icon"
