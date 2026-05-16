@@ -60,3 +60,8 @@ yarn-error.log*
 # Misc
 *.pem
 nohup.out
+
+# Souls — public repo only ships two demo souls; all others live in internal repo
+# Internal souls are managed via data/souls-internal/ (not tracked by git)
+# Deploy with: WANMINFAN_SOULS_INTERNAL_DIR=/path/to/internal-souls
+data/souls-internal/

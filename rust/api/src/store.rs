@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use foundation::{
     BlindSpot, BlindSpotFilter, CallFilter, CallRecord, HealthStatus, KnowledgeCard,
     KnowledgeCardFilter, KnowledgeResult, KnowledgeTopic, Message, Registry, Result, RevisionProposal,
-    Session, SessionFilter, SessionSummary, SoulProfile, SoulRevision, SoulRevisionFilter,
+    Session, SessionFilter, SessionObservation, SessionSummary, SoulProfile, SoulRevision, SoulRevisionFilter,
     Storage, ProposalStatus,
 };
 
@@ -19,12 +19,22 @@ pub struct AppStore {
 impl AppStore {
     pub fn new(data_dir: &str) -> Result<Self> {
         let base = PathBuf::from(data_dir);
-        let fs = Arc::new(FileStore::new(
+        let mut fs = FileStore::new(
             base.join("souls"),
             base.join("archive"),
             base.join("registry.yaml"),
             base.join("call_records.yaml"),
-        )?);
+        )?;
+        // 加载内部魂目录：优先 WANMINFAN_SOULS_INTERNAL_DIR 环境变量，fallback 到 data/souls-internal/
+        if let Ok(internal) = std::env::var("WANMINFAN_SOULS_INTERNAL_DIR") {
+            fs.set_souls_internal_dir(PathBuf::from(internal));
+        } else {
+            let default = base.join("souls-internal");
+            if default.exists() {
+                fs.set_souls_internal_dir(default);
+            }
+        }
+        let fs = Arc::new(fs);
         std::fs::create_dir_all(base.join("db"))?;
         let db = Arc::new(SqliteDb::open(&base.join("db/app.db"))?);
         Ok(AppStore { fs, db })
@@ -184,5 +194,21 @@ impl Storage for AppStore {
 
     async fn get_revision_proposals(&self, soul_name: Option<&str>, status: Option<ProposalStatus>) -> Result<Vec<RevisionProposal>> {
         self.db.get_revision_proposals(soul_name, status)
+    }
+
+    async fn insert_session_observations(&self, observations: &[SessionObservation]) -> Result<()> {
+        self.db.insert_session_observations(observations)
+    }
+
+    async fn get_session_observations(&self, session_id: &str) -> Result<Vec<SessionObservation>> {
+        self.db.get_session_observations(session_id)
+    }
+
+    async fn get_observations_by_soul(&self, soul_name: &str, limit: u32) -> Result<Vec<SessionObservation>> {
+        self.db.get_observations_by_soul(soul_name, limit)
+    }
+
+    async fn update_session_digest(&self, session_id: &str, summary: &str) -> Result<()> {
+        self.db.update_session_digest(session_id, summary)
     }
 }

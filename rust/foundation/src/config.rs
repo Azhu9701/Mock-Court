@@ -7,6 +7,7 @@ use crate::error::Result;
 pub struct Config {
     pub data_dir: PathBuf,
     pub souls_dir: PathBuf,
+    pub souls_internal_dir: Option<PathBuf>,
     pub archive_dir: PathBuf,
     pub db_path: PathBuf,
     pub registry_path: PathBuf,
@@ -30,6 +31,13 @@ impl Config {
 
         Ok(Config {
             souls_dir: PathBuf::from(&data_dir).join("souls"),
+            souls_internal_dir: std::env::var("WANMINFAN_SOULS_INTERNAL_DIR")
+                .ok()
+                .map(PathBuf::from)
+                .or_else(|| {
+                    let default = PathBuf::from(&data_dir).join("souls-internal");
+                    if default.exists() { Some(default) } else { None }
+                }),
             archive_dir: PathBuf::from(&data_dir).join("archive"),
             db_path: PathBuf::from(&data_dir).join("wanminfan.db"),
             registry_path: PathBuf::from(&data_dir).join("registry.yaml"),

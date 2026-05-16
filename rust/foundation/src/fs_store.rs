@@ -7,6 +7,7 @@ use crate::models::*;
 
 pub struct FileStore {
     souls_dir: PathBuf,
+    souls_internal_dir: Option<PathBuf>,
     archive_dir: PathBuf,
     registry_path: PathBuf,
     call_records_path: PathBuf,
@@ -19,6 +20,7 @@ impl FileStore {
         std::fs::create_dir_all(&archive_dir)?;
         let store = FileStore {
             souls_dir,
+            souls_internal_dir: None,
             archive_dir,
             registry_path,
             call_records_path,
@@ -28,8 +30,26 @@ impl FileStore {
         Ok(store)
     }
 
+    /// 设置内部魂目录（由部署者通过环境变量 WANMINFAN_SOULS_INTERNAL_DIR 指定）
+    pub fn set_souls_internal_dir(&mut self, dir: PathBuf) {
+        if dir.exists() {
+            tracing::info!("Internal souls dir: {:?}", dir);
+            self.souls_internal_dir = Some(dir);
+        } else {
+            tracing::warn!("Internal souls dir does not exist: {:?}", dir);
+        }
+    }
+
     // Soul operations with YAML frontmatter + Markdown body
     pub fn read_soul(&self, name: &str) -> Result<SoulProfile> {
+        // 优先查 internal 目录
+        if let Some(ref internal_dir) = self.souls_internal_dir {
+            let internal_path = internal_dir.join(format!("{}.md", name));
+            if internal_path.exists() {
+                let content = std::fs::read_to_string(&internal_path)?;
+                return Self::parse_soul_md(&content);
+            }
+        }
         let path = self.soul_path(name);
         if !path.exists() {
             return Err(FoundationError::SoulNotFound(name.to_string()));
@@ -54,19 +74,33 @@ impl FileStore {
     }
 
     pub fn list_soul_names(&self) -> Result<Vec<String>> {
-        let mut names = vec![];
-        if self.souls_dir.exists() {
-            for entry in std::fs::read_dir(&self.souls_dir)? {
+        let mut names = std::collections::HashSet::new();
+        // 扫描公开魂目录
+        let scan_dir = |dir: &Path, names: &mut std::collections::HashSet<String>| -> Result<()> {
+            for entry in std::fs::read_dir(dir)? {
                 let entry = entry?;
                 let path = entry.path();
                 if path.extension().map_or(false, |e| e == "md") {
                     if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-                        names.push(name.to_string());
+                        if name != "README" {
+                            names.insert(name.to_string());
+                        }
                     }
                 }
             }
+            Ok(())
+        };
+        if self.souls_dir.exists() {
+            scan_dir(&self.souls_dir, &mut names)?;
         }
-        Ok(names)
+        if let Some(ref internal_dir) = self.souls_internal_dir {
+            if internal_dir.exists() {
+                scan_dir(internal_dir, &mut names)?;
+            }
+        }
+        let mut result: Vec<String> = names.into_iter().collect();
+        result.sort();
+        Ok(result)
     }
 
     // Registry operations
