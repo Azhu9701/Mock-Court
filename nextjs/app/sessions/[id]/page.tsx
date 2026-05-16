@@ -3,8 +3,23 @@
 import { useEffect, useState } from "react";
 import { useParams, notFound } from "next/navigation";
 import Link from "next/link";
-import { fetchSessionDetail, type SessionDetail } from "@/lib/api";
-import { ArrowLeft, User } from "lucide-react";
+import {
+  fetchSessionDetail,
+  fetchSessionDigest,
+  triggerDistill,
+  obsEmoji,
+  type SessionDetail,
+  type SessionDigest,
+} from "@/lib/api";
+import { SESSIONS_UPDATED_EVENT } from "@/components/sidebar-sessions";
+import {
+  ArrowLeft,
+  User,
+  ChevronDown,
+  ChevronUp,
+  Sparkles,
+  RefreshCw,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SessionActions from "@/components/session-actions";
 import FollowUpInput from "@/components/follow-up-input";
@@ -17,18 +32,159 @@ import { Skeleton } from "@/components/ui/skeleton";
 export default function SessionDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
-  const [detail, setDetail] = useState<SessionDetail | null>(null);
-  const [error, setError] = useState(false);
 
+  // Layer 1: lightweight digest (5-10 observations, ~5-10KB)
+  const [digest, setDigest] = useState<SessionDigest | null>(null);
+  const [digestError, setDigestError] = useState(false);
+
+  // Layer 2: full conversation (loaded on user demand)
+  const [detail, setDetail] = useState<SessionDetail | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  const [distilling, setDistilling] = useState(false);
+
+  // Fetch digest on mount
   useEffect(() => {
-    fetchSessionDetail(id).then(setDetail).catch(() => setError(true));
+    fetchSessionDigest(id).then(setDigest).catch(() => setDigestError(true));
   }, [id]);
 
-  if (error) return notFound();
-  if (!detail) return <Skeleton className="h-96" />;
+  // Refresh digest when WS observations_ready dispatches SESSIONS_UPDATED_EVENT
+  useEffect(() => {
+    const handle = () => {
+      fetchSessionDigest(id).then(setDigest).catch(() => {});
+    };
+    window.addEventListener(SESSIONS_UPDATED_EVENT, handle);
+    return () => window.removeEventListener(SESSIONS_UPDATED_EVENT, handle);
+  }, [id]);
 
-  const { session, messages } = detail;
+  // Fetch full detail when user expands
+  useEffect(() => {
+    if (expanded && !detail) {
+      fetchSessionDetail(id).then(setDetail).catch(() => {});
+    }
+  }, [expanded, id, detail]);
 
+  const handleDistill = async () => {
+    setDistilling(true);
+    try {
+      await triggerDistill(id);
+      // distill is async; poll digest a few times
+      setTimeout(() => {
+        fetchSessionDigest(id).then(setDigest).catch(() => {});
+        setDistilling(false);
+      }, 3000);
+    } catch {
+      setDistilling(false);
+    }
+  };
+
+  if (digestError) return notFound();
+  if (!digest) return <Skeleton className="h-96" />;
+
+  return (
+    <div className="max-w-5xl mx-auto space-y-6">
+      <BreadcrumbSetter label={digest.title} />
+
+      {/* Header */}
+      <div className="flex items-center gap-3">
+        <Link href="/sessions">
+          <Button variant="ghost" size="icon" className="h-8 w-8">
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        </Link>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-xl font-bold truncate flex items-center gap-2">
+            {digest.title}
+            <span className={`w-2 h-2 rounded-full ${modeColorBg(digest.mode)}`} />
+          </h1>
+          <p className="text-sm text-muted-foreground flex items-center gap-2">
+            <span>{(MODE_LABELS_LONG as Record<string, string>)[digest.mode] || digest.mode}</span>
+            <span>·</span>
+            <span>{new Date(digest.created_at).toLocaleString("zh-CN")}</span>
+          </p>
+        </div>
+        <SessionActions sessionId={id} title={digest.title} />
+      </div>
+
+      {/* Layer 1: digest section */}
+      {digest.observations.length > 0 ? (
+        <div className="rounded-xl border bg-gradient-to-br from-blue-50/50 to-purple-50/30 dark:from-blue-950/20 dark:to-purple-950/10 p-5 space-y-4">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h3 className="text-sm font-semibold flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-blue-500" />
+              本次会话精华 · {digest.observations.length} 条 observation
+            </h3>
+            <span className="text-xs text-muted-foreground font-mono">
+              省 {(digest.savings_ratio * 100).toFixed(0)}% tokens ·{" "}
+              {digest.total_read_tokens.toLocaleString()}/{digest.total_work_tokens.toLocaleString()}
+            </span>
+          </div>
+
+          {digest.summary && (
+            <div className="text-sm text-muted-foreground italic border-l-2 border-blue-300 dark:border-blue-700 pl-3">
+              “{digest.summary}”
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {digest.observations.map((o) => (
+              <div
+                key={o.id}
+                className="rounded-lg border bg-background/80 p-3 space-y-1.5 hover:shadow-sm transition-shadow"
+              >
+                <div className="flex items-start gap-2">
+                  <span className="text-base shrink-0 leading-none mt-0.5">{obsEmoji(o.obs_type)}</span>
+                  <div className="flex-1 min-w-0">
+                    <h4 className="text-sm font-semibold leading-tight">{o.title}</h4>
+                    {o.soul_name && (
+                      <span className="text-[10px] text-muted-foreground">— {o.soul_name}</span>
+                    )}
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed pl-7 whitespace-pre-wrap">
+                  {o.content}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-dashed bg-muted/30 p-6 text-center space-y-3">
+          <p className="text-sm text-muted-foreground">该会话尚未压缩为 observation</p>
+          <Button onClick={handleDistill} disabled={distilling} variant="outline" size="sm">
+            <RefreshCw className={`h-4 w-4 mr-2 ${distilling ? "animate-spin" : ""}`} />
+            {distilling ? "压缩中..." : "立即压缩"}
+          </Button>
+        </div>
+      )}
+
+      {/* Layer 2 toggle */}
+      <div className="flex justify-center">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setExpanded(!expanded)}
+          className="text-muted-foreground hover:text-foreground"
+        >
+          {expanded ? (
+            <ChevronUp className="h-4 w-4 mr-1" />
+          ) : (
+            <ChevronDown className="h-4 w-4 mr-1" />
+          )}
+          {expanded ? "收起完整对话" : "展开完整对话"}
+        </Button>
+      </div>
+
+      {/* Layer 2: full conversation, lazily loaded */}
+      {expanded && (detail ? <FullConversation detail={detail} /> : <Skeleton className="h-96" />)}
+
+      <FollowUpInput sessionId={id} />
+    </div>
+  );
+}
+
+function FullConversation({ detail }: { detail: SessionDetail }) {
+  const { messages } = detail;
   const sorted = [...messages].sort(
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
   );
@@ -65,28 +221,7 @@ export default function SessionDetailPage() {
   const initSynths = synthMsgs.filter((s) => !followSynthIds.has(s.id));
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
-      <BreadcrumbSetter label={session.title} />
-      <div className="flex items-center gap-3">
-        <Link href="/sessions">
-          <Button variant="ghost" size="icon" className="h-8 w-8">
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-        </Link>
-        <div className="flex-1 min-w-0">
-          <h1 className="text-xl font-bold truncate flex items-center gap-2">
-            {session.title}
-            <span className={`w-2 h-2 rounded-full ${modeColorBg(session.mode)}`} />
-          </h1>
-          <p className="text-sm text-muted-foreground flex items-center gap-2">
-            <span>{(MODE_LABELS_LONG as Record<string, string>)[session.mode] || session.mode}</span>
-            <span>·</span>
-            <span>{new Date(session.created_at).toLocaleString("zh-CN")}</span>
-          </p>
-        </div>
-        <SessionActions sessionId={id} title={session.title} />
-      </div>
-
+    <div className="space-y-6 border-t pt-6">
       {initUserMsgs.map((msg) => (
         <div key={msg.id} className="flex gap-3 flex-row-reverse">
           <div className="shrink-0">
@@ -127,11 +262,7 @@ export default function SessionDetailPage() {
       {initSynths.map((msg) => (
         <SynthesisSection
           key={msg.id}
-          messages={[{
-            id: msg.id,
-            content: msg.content,
-            created_at: msg.created_at,
-          }]}
+          messages={[{ id: msg.id, content: msg.content, created_at: msg.created_at }]}
         />
       ))}
 
@@ -160,19 +291,13 @@ export default function SessionDetailPage() {
               </div>
               {answer && (
                 <SynthesisSection
-                  messages={[{
-                    id: answer.id,
-                    content: answer.content,
-                    created_at: answer.created_at,
-                  }]}
+                  messages={[{ id: answer.id, content: answer.content, created_at: answer.created_at }]}
                 />
               )}
             </div>
           ))}
         </div>
       )}
-
-      <FollowUpInput sessionId={id} />
     </div>
   );
 }
