@@ -1,4 +1,4 @@
-# 万民幡 Default Configuration
+# Snake Skin Default Configuration
 data_dir: "./data"
 souls_dir: "./data/souls"
 archive_dir: "./data/archive"

@@ -21,10 +21,10 @@ import { SessionTimeline } from "@/components/session-timeline";
 import { Skeleton } from "@/components/ui/skeleton";
 
 function pleasureLabel(pi: number): string {
-  if (pi >= 70) return "蛇皮厚重 — 思辨已成消费习惯";
-  if (pi >= 40) return "蛇皮中等 — 行动与消费参半";
-  if (pi >= 15) return "蛇皮较薄 — 多数会话落地实践";
-  return "接近蜕皮 — 思辨服务于行动";
+  if (pi >= 70) return "蛇皮厚重 — 用AI辩论代替思考，和刷短视频没区别";
+  if (pi >= 40) return "蛇皮中等 — 有一半在消费观点，不是在行动";
+  if (pi >= 15) return "蛇皮较薄 — 多数会话有实践产出";
+  return "接近蜕皮 — 思辨真的在服务行动";
 }
 
 function pleasureColor(pi: number): string {

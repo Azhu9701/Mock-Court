@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Snake Skin — 多 AI 人格并行推理系统</title>
+  <meta name="description" content="Snake Skin 是一个多 AI 人格并行推理系统——它深知辩证AI本身就是最高级的奶头乐。蛇皮指数逼你承认：你是在蜕皮，还是在换一层更精致的皮。">
+  <meta name="theme-color" content="#0a0a0a">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bg: '#0a0a0a',
+            card: '#141414',
+            border: '#1f1f1f',
+            accent: '#d97706',
+            'accent-light': '#f59e0b',
+            muted: '#71717a',
+          },
+          fontFamily: {
+            serif: ['Noto Serif SC', 'serif'],
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Serif+SC:wght@400;700;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { background: #0a0a0a; color: #e4e4e7; font-family: 'Inter', system-ui, sans-serif; }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(24px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes pulse-glow {
+      0%, 100% { box-shadow: 0 0 20px rgba(217, 119, 6, 0.1); }
+      50% { box-shadow: 0 0 40px rgba(217, 119, 6, 0.2); }
+    }
+    .fade-up { opacity: 0; animation: fadeUp 0.7s ease-out forwards; }
+    .fade-in { opacity: 0; animation: fadeIn 0.8s ease-out forwards; }
+    .delay-1 { animation-delay: 0.1s; }
+    .delay-2 { animation-delay: 0.2s; }
+    .delay-3 { animation-delay: 0.3s; }
+    .delay-4 { animation-delay: 0.4s; }
+    .delay-5 { animation-delay: 0.5s; }
+    .delay-6 { animation-delay: 0.6s; }
+    .delay-7 { animation-delay: 0.7s; }
+    .delay-8 { animation-delay: 0.8s; }
+
+    .card-hover { transition: all 0.3s ease; }
+    .card-hover:hover { transform: translateY(-2px); border-color: #d97706; background: #1a1a1a; }
+
+    .gradient-text {
+      background: linear-gradient(135deg, #f59e0b 0%, #d97706 50%, #b45309 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .grid-bg {
+      background-image:
+        linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+      background-size: 60px 60px;
+    }
+
+    .hero-glow {
+      position: absolute;
+      width: 600px;
+      height: 400px;
+      background: radial-gradient(ellipse, rgba(217, 119, 6, 0.08) 0%, transparent 70%);
+      top: 20%;
+      left: 50%;
+      transform: translateX(-50%);
+      pointer-events: none;
+    }
+
+    .soul-tag {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 9999px;
+      border: 1px solid #27272a;
+      font-size: 13px;
+      color: #a1a1aa;
+      transition: all 0.2s;
+    }
+    .soul-tag:hover {
+      border-color: #d97706;
+      color: #f59e0b;
+      background: rgba(217, 119, 6, 0.05);
+    }
+
+    .comparison-table td, .comparison-table th {
+      padding: 12px 20px;
+      text-align: left;
+      border-bottom: 1px solid #1f1f1f;
+    }
+
+    .snake-icon {
+      display: inline-block;
+      width: 32px;
+      height: 32px;
+    }
+
+    .section-divider {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, #27272a 20%, #27272a 80%, transparent);
+    }
+  </style>
+</head>
+<body class="antialiased">
+
+  <!-- Nav -->
+  <nav class="fixed top-0 left-0 right-0 z-50 border-b border-border/50 bg-bg/80 backdrop-blur-xl">
+    <div class="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
+      <a href="#" class="flex items-center gap-2.5">
+        <svg class="snake-icon" viewBox="0 0 32 32" fill="none">
+          <path d="M6 8c4-4 8 0 12-4s8 0 8 4c0 3-4 4-4 4s4 1 4 4c0 4-4 8-12 4c-8-4-12 0-12 0" stroke="#d97706" stroke-width="2" fill="none" stroke-linecap="round"/>
+        </svg>
+        <span class="font-semibold text-white tracking-tight">Snake Skin</span>
+      </a>
+      <div class="flex items-center gap-6 text-sm">
+        <a href="#features" class="text-muted hover:text-white transition-colors">Features</a>
+        <a href="#souls" class="text-muted hover:text-white transition-colors">Souls</a>
+        <a href="#architecture" class="text-muted hover:text-white transition-colors">Architecture</a>
+        <a href="https://github.com/Azhu9701/soul-banner-lite" target="_blank" rel="noopener" class="flex items-center gap-1.5 px-4 py-1.5 rounded-md border border-border text-white hover:border-accent hover:text-accent-light transition-all">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="relative min-h-screen flex items-center justify-center grid-bg pt-14">
+    <div class="hero-glow"></div>
+    <div class="relative z-10 max-w-4xl mx-auto px-6 text-center">
+      <div class="fade-up">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-border text-xs text-muted mb-8">
+          <span class="w-1.5 h-1.5 rounded-full bg-accent animate-pulse"></span>
+          Open Source · Multi-Agent · Dialectical
+        </div>
+      </div>
+
+      <h1 class="fade-up delay-1 text-5xl sm:text-7xl font-bold tracking-tight leading-[1.1] mb-6">
+        <span class="text-white">Not a Chat.</span><br>
+        <span class="gradient-text">A Collision Chamber.</span>
+        <span class="text-muted text-3xl sm:text-4xl font-normal block mt-3">
+          And it knows that's the most refined tittytainment.
+        </span>
+      </h1>
+
+      <p class="fade-up delay-2 text-lg sm:text-xl text-muted max-w-2xl mx-auto mb-10 leading-relaxed">
+        同时召唤多个具有独立世界观的思想家，碰撞、辩论、综合。<br class="hidden sm:inline">
+        但看马克思和尼采吵架的过程太爽了——爽到你以为自己"想明白了"，其实只是消费了一场表演。<br class="hidden sm:inline">
+        <strong class="text-white">蛇皮指数</strong>存在的意义就是逼你回答：你是在蜕皮，还是在换一层更好看的皮？
+      </p>
+
+      <div class="fade-up delay-3 flex flex-col sm:flex-row items-center justify-center gap-4">
+        <a href="https://github.com/Azhu9701/soul-banner-lite" target="_blank" rel="noopener"
+           class="inline-flex items-center gap-2 px-8 py-3 rounded-lg bg-accent text-white font-medium hover:bg-accent-light transition-colors"
+           style="animation: pulse-glow 3s ease-in-out infinite;">
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          View on GitHub
+        </a>
+        <a href="https://github.com/Azhu9701/soul-banner-lite/blob/main/README.md" target="_blank" rel="noopener"
+           class="inline-flex items-center gap-2 px-8 py-3 rounded-lg border border-border text-white hover:border-accent/50 transition-all">
+          Documentation
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </a>
+      </div>
+
+      <!-- Quick Stats -->
+      <div class="fade-up delay-4 mt-16 flex items-center justify-center gap-8 sm:gap-16 text-center">
+        <div>
+          <div class="text-2xl font-bold text-white">26+</div>
+          <div class="text-xs text-muted mt-1">Built-in Souls</div>
+        </div>
+        <div class="w-px h-8 bg-border"></div>
+        <div>
+          <div class="text-2xl font-bold text-white">6</div>
+          <div class="text-xs text-muted mt-1">Possession Modes</div>
+        </div>
+        <div class="w-px h-8 bg-border"></div>
+        <div>
+          <div class="text-2xl font-bold text-white">Rust</div>
+          <div class="text-xs text-muted mt-1">Backend Engine</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scroll indicator -->
+    <div class="absolute bottom-8 left-1/2 -translate-x-1/2 fade-in delay-7">
+      <div class="w-5 h-8 rounded-full border border-muted/40 flex items-start justify-center pt-1.5">
+        <div class="w-1 h-2 rounded-full bg-muted animate-bounce"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Concept -->
+  <section class="py-24 px-6">
+    <div class="max-w-5xl mx-auto">
+      <div class="section-divider mb-20"></div>
+
+      <h2 class="text-3xl font-bold text-white text-center mb-4">Not Another Chatbot</h2>
+      <p class="text-muted text-center mb-16 max-w-xl mx-auto">
+        传统聊天界面一问一答。Snake Skin 一问多答——每个答案来自不同的思想立场，然后在碰撞中综合。
+      </p>
+
+      <div class="comparison-table w-full rounded-xl border border-border overflow-hidden">
+        <table class="w-full">
+          <thead>
+            <tr class="bg-card">
+              <th class="text-sm font-medium text-muted w-1/4"></th>
+              <th class="text-sm font-medium text-muted w-[37.5%]">Traditional Chat</th>
+              <th class="text-sm font-medium text-accent-light w-[37.5%]">Snake Skin</th>
+            </tr>
+          </thead>
+          <tbody class="text-sm">
+            <tr>
+              <td class="text-white font-medium">Interaction</td>
+              <td class="text-muted">Single timeline</td>
+              <td class="text-white">Multi-column parallel stream</td>
+            </tr>
+            <tr>
+              <td class="text-white font-medium">Response</td>
+              <td class="text-muted">One answer</td>
+              <td class="text-white">Multiple views + dialectical synthesis</td>
+            </tr>
+            <tr>
+              <td class="text-white font-medium">Control</td>
+              <td class="text-muted">User-driven</td>
+              <td class="text-white">Souls self-advance, real-time intervention</td>
+            </tr>
+            <tr>
+              <td class="text-white font-medium">Memory</td>
+              <td class="text-muted">Scroll up</td>
+              <td class="text-white">Knowledge graph per soul + blind spot tracking</td>
+            </tr>
+            <tr>
+              <td class="text-white font-medium">Feedback</td>
+              <td class="text-muted">None</td>
+              <td class="text-white">Snake Skin Index — consumption vs. action tracking</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section id="features" class="py-24 px-6">
+    <div class="max-w-5xl mx-auto">
+      <div class="section-divider mb-20"></div>
+
+      <h2 class="text-3xl font-bold text-white text-center mb-4">Core Features</h2>
+      <p class="text-muted text-center mb-16 max-w-xl mx-auto">
+        From semantic collision detection to dialectical synthesis — every feature serves the goal of deeper understanding.
+      </p>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <!-- Feature 1 -->
+        <div class="card-hover rounded-xl border border-border bg-card p-6 space-y-3">
+          <div class="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center text-accent-light text-xl">⚡</div>
+          <h3 class="text-white font-semibold">Real-time Collision Detection</h3>
+          <p class="text-sm text-muted leading-relaxed">Three-path parallel: keyword rules + trigram semantic similarity + ismism coordinate distance. Detects contradictions, blind spots, and redundancies.</p>
+        </div>
+
+        <!-- Feature 2 -->
+        <div class="card-hover rounded-xl border border-border bg-card p-6 space-y-3">
+          <div class="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center text-accent-light text-xl">🎭</div>
+          <h3 class="text-white font-semibold">6 Possession Modes</h3>
+          <p class="text-sm text-muted leading-relaxed">Single soul, conference, debate, relay, learning, and practice modes. Each mode activates different interaction topologies and intervention patterns.</p>
+        </div>
+
+        <!-- Feature 3 -->
+        <div class="card-hover rounded-xl border border-border bg-card p-6 space-y-3">
+          <div class="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center text-accent-light text-xl">🕸️</div>
+          <h3 class="text-white font-semibold">Soul Memory Graph</h3>
+          <p class="text-sm text-muted leading-relaxed">Directed graph with premise→conclusion chains. BFS contradiction detection at O(n), zero LLM cost. Supports graph merging and blind spot discovery.</p>
+        </div>
+
+        <!-- Feature 4 -->
+        <div class="card-hover rounded-xl border border-border bg-card p-6 space-y-3">
+          <div class="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center text-accent-light text-xl">🐍</div>
+          <h3 class="text-white font-semibold">Snake Skin Index</h3>
+          <p class="text-sm text-muted leading-relaxed">The higher the number, the more you consume AI debates instead of acting. Using AI dialectics instead of your own thinking is the most refined form of tittytainment.</p>
+        </div>
+
+        <!-- Feature 5 -->
+        <div class="card-hover rounded-xl border border-border bg-card p-6 space-y-3">
+          <div class="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center text-accent-light text-xl">📡</div>
+          <h3 class="text-white font-semibold">@mention Soul Summoning</h3>
+          <p class="text-sm text-muted leading-relaxed">Type @soul_name in follow-up to summon any soul as a sub-agent. They respond with full identity and context awareness, not through synthesis.</p>
+        </div>
+
+        <!-- Feature 6 -->
+        <div class="card-hover rounded-xl border border-border bg-card p-6 space-y-3">
+          <div class="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center text-accent-light text-xl">🔍</div>
+          <h3 class="text-white font-semibold">SearXNG Integration</h3>
+          <p class="text-sm text-muted leading-relaxed">Self-hosted meta-search engine. Inject real-time web search results into soul context. Independent search page for general queries.</p>
+        </div>
+
+        <!-- Feature 7 -->
+        <div class="card-hover rounded-xl border border-border bg-card p-6 space-y-3">
+          <div class="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center text-accent-light text-xl">⚖️</div>
+          <h3 class="text-white font-semibold">Three-Tier Gate Control</h3>
+          <p class="text-sm text-muted leading-relaxed">L1 keyword rules (μs) → L2 trigram Jaccard (ms) → L3 Flash LLM (s). Intelligent intervention injection only when needed.</p>
+        </div>
+
+        <!-- Feature 8 -->
+        <div class="card-hover rounded-xl border border-border bg-card p-6 space-y-3">
+          <div class="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center text-accent-light text-xl">🏛️</div>
+          <h3 class="text-white font-semibold">Interrogation Injection</h3>
+          <p class="text-sm text-muted leading-relaxed">Before discussion starts, an interrogator questions the user. Their answers inject into the shared temporal context all souls reference.</p>
+        </div>
+
+        <!-- Feature 9 -->
+        <div class="card-hover rounded-xl border border-border bg-card p-6 space-y-3">
+          <div class="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center text-accent-light text-xl">🔄</div>
+          <h3 class="text-white font-semibold">Adaptive Topology</h3>
+          <p class="text-sm text-muted leading-relaxed">5 topologies: Minimal, ClusteredParallel, FullMesh, Oppositional, SequentialLadder. Auto-selects based on diversity + complexity + budget.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Souls -->
+  <section id="souls" class="py-24 px-6">
+    <div class="max-w-5xl mx-auto">
+      <div class="section-divider mb-20"></div>
+
+      <h2 class="text-3xl font-bold text-white text-center mb-4">Built-in Souls</h2>
+      <p class="text-muted text-center mb-12 max-w-xl mx-auto">
+        26+ thinkers with independent worldviews. Each has a four-dimensional ismism coordinate, exclusive summon prompt, and self-declaration.
+      </p>
+
+      <div class="flex flex-wrap items-center justify-center gap-2 mb-12">
+        <span class="soul-tag">马克思</span>
+        <span class="soul-tag">列宁</span>
+        <span class="soul-tag">毛泽东</span>
+        <span class="soul-tag">邓小平</span>
+        <span class="soul-tag">鲁迅</span>
+        <span class="soul-tag">尼采</span>
+        <span class="soul-tag">黑格尔</span>
+        <span class="soul-tag">费曼</span>
+        <span class="soul-tag">马斯克</span>
+        <span class="soul-tag">黄仁勋</span>
+        <span class="soul-tag">庄子</span>
+        <span class="soul-tag">孔子</span>
+        <span class="soul-tag">胡塞尔</span>
+        <span class="soul-tag">波伏娃</span>
+        <span class="soul-tag">法农</span>
+        <span class="soul-tag">葛兰西</span>
+        <span class="soul-tag">伊本赫勒敦</span>
+        <span class="soul-tag">稻盛和夫</span>
+        <span class="soul-tag">乔布斯</span>
+        <span class="soul-tag">斯大林</span>
+        <span class="soul-tag">Karpathy</span>
+        <span class="soul-tag">Aaron Swartz</span>
+        <span class="soul-tag">海绵宝宝</span>
+        <span class="soul-tag">未明子</span>
+        <span class="soul-tag">韩炳哲</span>
+        <span class="soul-tag">罗永浩</span>
+      </div>
+
+      <div class="rounded-xl border border-border bg-card p-8 text-center">
+        <p class="text-sm text-muted italic leading-relaxed max-w-lg mx-auto">
+          "每个魂有独立的<strong class="text-white">主义主义四维坐标</strong>（场域论/存在论/认识论/目的论）、专属召唤咒语、排除场景和自我声明。"
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture -->
+  <section id="architecture" class="py-24 px-6">
+    <div class="max-w-5xl mx-auto">
+      <div class="section-divider mb-20"></div>
+
+      <h2 class="text-3xl font-bold text-white text-center mb-4">Architecture</h2>
+      <p class="text-muted text-center mb-16 max-w-xl mx-auto">
+        Rust backend for performance. Next.js frontend for experience. Modular crate architecture.
+      </p>
+
+      <div class="rounded-xl border border-border bg-card p-6 sm:p-10 font-mono text-xs sm:text-sm overflow-x-auto">
+<pre class="text-muted leading-relaxed">
+                              <span class="text-accent-light">┌──────────────────┐</span>
+                              <span class="text-accent-light">│   Interrogator    │</span>
+                              <span class="text-accent-light">│  L1 → L2 → L3     │</span>
+                              <span class="text-accent-light">└────────┬─────────┘</span>
+                                       │ verified_souls
+<span class="text-white">┌─────────────┐    ┌──────────────┐</span>    │    <span class="text-white">┌───────────────┐</span>
+<span class="text-white">│  Next.js 16 │───▶│  Axum API    │</span>───▶│  <span class="text-white">AI Gateway    │</span>
+<span class="text-white">│  (shadcn/ui) │    │  (port 3096)  │</span>    │  <span class="text-white">Claude/GPT/DS │</span>
+<span class="text-white">└─────────────┘    └──────┬───────┘</span>    <span class="text-white">└───────────────┘</span>
+                          │
+          <span class="text-white">┌───────────────┼───────────────────────┐</span>
+          ▼               ▼               ▼               ▼
+    <span class="text-accent-light">┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐</span>
+    <span class="text-accent-light">│ Registry │   │Possession│   │ Archive  │   │Foundation│</span>
+    <span class="text-accent-light">│ Soul Reg │   │  Engine  │   │ Analytics│   │  Infra   │</span>
+    <span class="text-accent-light">└──────────┘   └──────────┘   └──────────┘   └──────────┘</span>
+</pre>
+      </div>
+
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-8">
+        <div class="rounded-lg border border-border bg-card p-4 text-center">
+          <div class="text-lg font-bold text-white mb-1">Rust</div>
+          <div class="text-xs text-muted">Axum + Tokio + SQLite</div>
+        </div>
+        <div class="rounded-lg border border-border bg-card p-4 text-center">
+          <div class="text-lg font-bold text-white mb-1">Next.js 16</div>
+          <div class="text-xs text-muted">React 19 + TypeScript</div>
+        </div>
+        <div class="rounded-lg border border-border bg-card p-4 text-center">
+          <div class="text-lg font-bold text-white mb-1">Multi-LLM</div>
+          <div class="text-xs text-muted">Claude / OpenAI / DeepSeek</div>
+        </div>
+        <div class="rounded-lg border border-border bg-card p-4 text-center">
+          <div class="text-lg font-bold text-white mb-1">WebSocket</div>
+          <div class="text-xs text-muted">Real-time streaming</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Quick Start -->
+  <section class="py-24 px-6">
+    <div class="max-w-3xl mx-auto">
+      <div class="section-divider mb-20"></div>
+
+      <h2 class="text-3xl font-bold text-white text-center mb-4">Quick Start</h2>
+      <p class="text-muted text-center mb-12">Up and running in under 2 minutes.</p>
+
+      <div class="space-y-4">
+        <div class="rounded-xl border border-border bg-card p-6">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="text-xs font-mono text-accent bg-accent/10 px-2 py-0.5 rounded">1</span>
+            <span class="text-sm text-white font-medium">Configure API Key</span>
+          </div>
+          <div class="rounded-lg bg-bg border border-border p-4 font-mono text-sm text-muted">
+            <span class="text-white">$</span> echo '{"deepseek":"sk-...","openai":"sk-..."}' > data/apikeys.json
+          </div>
+        </div>
+
+        <div class="rounded-xl border border-border bg-card p-6">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="text-xs font-mono text-accent bg-accent/10 px-2 py-0.5 rounded">2</span>
+            <span class="text-sm text-white font-medium">Launch</span>
+          </div>
+          <div class="rounded-lg bg-bg border border-border p-4 font-mono text-sm text-muted">
+            <span class="text-white">$</span> bash start.sh
+          </div>
+        </div>
+
+        <div class="rounded-xl border border-border bg-card p-6">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="text-xs font-mono text-accent bg-accent/10 px-2 py-0.5 rounded">3</span>
+            <span class="text-sm text-white font-medium">Open</span>
+          </div>
+          <div class="rounded-lg bg-bg border border-border p-4 font-mono text-sm">
+            <span class="text-muted">Frontend →</span> <span class="text-accent-light">http://localhost:3000</span><br>
+            <span class="text-muted">API →</span> <span class="text-accent-light">http://localhost:3096/api/v1/health</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="py-24 px-6">
+    <div class="max-w-3xl mx-auto text-center">
+      <div class="section-divider mb-20"></div>
+
+      <h2 class="text-4xl font-bold text-white mb-4">
+        Stop consuming debates.<br>Start <span class="gradient-text">shedding skin</span>.
+      </h2>
+      <p class="text-muted text-lg mb-10 max-w-lg mx-auto">
+        The most dangerous tittytainment is the one that feels like thinking.
+      </p>
+
+      <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+        <a href="https://github.com/Azhu9701/soul-banner-lite" target="_blank" rel="noopener"
+           class="inline-flex items-center gap-2 px-8 py-3.5 rounded-lg bg-accent text-white font-medium hover:bg-accent-light transition-colors text-lg">
+          <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          Star on GitHub
+        </a>
+        <a href="https://github.com/Azhu9701/soul-banner-lite/blob/main/README.md" target="_blank" rel="noopener"
+           class="inline-flex items-center gap-2 px-8 py-3.5 rounded-lg border border-border text-white hover:border-accent/50 transition-all text-lg">
+          Read the Docs
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="border-t border-border py-8 px-6">
+    <div class="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+      <div class="flex items-center gap-2 text-sm text-muted">
+        <svg class="w-5 h-5" viewBox="0 0 32 32" fill="none">
+          <path d="M6 8c4-4 8 0 12-4s8 0 8 4c0 3-4 4-4 4s4 1 4 4c0 4-4 8-12 4c-8-4-12 0-12 0" stroke="#d97706" stroke-width="2" fill="none" stroke-linecap="round"/>
+        </svg>
+        Snake Skin · MIT License
+      </div>
+      <div class="flex items-center gap-6 text-sm text-muted">
+        <a href="https://github.com/Azhu9701/soul-banner-lite" target="_blank" rel="noopener" class="hover:text-white transition-colors">GitHub</a>
+        <a href="https://github.com/Azhu9701/soul-banner-lite/blob/main/README.md" target="_blank" rel="noopener" class="hover:text-white transition-colors">Docs</a>
+        <a href="https://github.com/Azhu9701/soul-banner-lite/issues" target="_blank" rel="noopener" class="hover:text-white transition-colors">Issues</a>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

@@ -309,7 +309,7 @@ export default function SessionDetailPage() {
             <div>
               <h3 className="text-lg font-semibold">反馈闭环完成</h3>
               <p className="text-sm text-muted-foreground mt-1">
-                你的反馈已记录。知识不在魂里，在实践里。
+                你的反馈已记录。看魂吵架不是思考，去做才是。
               </p>
             </div>
           </div>

@@ -612,7 +612,7 @@ impl PromptBuilder {
 
     pub fn build_refine_prompt(&self, raw_material: &str) -> Prompt {
         let template = r#"
-## 召唤词格式参考 — 以下是万民幡已有魂的实际召唤词，你的输出必须达到同等密度和深度
+## 召唤词格式参考 — 以下是 Snake Skin 已有魂的实际召唤词，你的输出必须达到同等密度和深度
 
 ### 参考魂1：列宁（革命实践家，ismism 4-1-4-1）
 ```
@@ -791,7 +791,7 @@ impl PromptBuilder {
             messages: vec![
                 PromptMessage {
                     role: "system".into(),
-                    content: "你是一个魂档案炼化师。你参考万民幡已有魂的召唤词格式，从 raw 素材中提炼出符合格式规范的新魂召唤词。用角色的语言和思维方式来写——不是在介绍他，是让他自己说话。**重要：生成的召唤词必须让魂以第一人称思想者的方式输出——严禁剧场式第三人称旁白、场景描写、神态描写、动作描写。魂的输出是分析文本，不是剧本。**".into(),
+                    content: "你是一个魂档案炼化师。你参考 Snake Skin 已有魂的召唤词格式，从 raw 素材中提炼出符合格式规范的新魂召唤词。用角色的语言和思维方式来写——不是在介绍他，是让他自己说话。**重要：生成的召唤词必须让魂以第一人称思想者的方式输出——严禁剧场式第三人称旁白、场景描写、神态描写、动作描写。魂的输出是分析文本，不是剧本。**".into(),
                     reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
                 PromptMessage {

@@ -14,7 +14,7 @@ domain:
 - 技术写作
 refined_at: '''2026-04-29'''
 reviewed_at: '''2026-04-29'''
-reviewed_by: 列宁（万民幡幡主）
+reviewed_by: 列宁（Snake Skin幡主）
 review_verdict: "|-\n  方法论完整可操作但缺独立世界观和方向判断。执行方法非判断方法——知道怎么走不知道往哪走。工具不带方向基因。"
 ismism_code: 1-1-1-2
 trigger_keywords_summary: '""'

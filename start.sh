@@ -1,5 +1,5 @@
 #!/bin/bash
-# 万民幡 — 一键启动脚本
+# Snake Skin — 一键启动脚本
 set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -7,8 +7,8 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || echo "")
 
 echo "========================================"
-echo "  万民幡 Wan Min Fan"
-echo "  实践与理论的反馈循环"
+echo "  Snake Skin"
+echo "  蛇皮指数 · 思辨消费跟踪"
 echo "========================================"
 
 cleanup() {

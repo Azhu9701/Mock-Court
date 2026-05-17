@@ -47,7 +47,7 @@ export function PostSessionReview({ sessionId, onComplete }: PostSessionReviewPr
   return (
     <div className="space-y-5" data-testid="post-session-review">
       <div>
-        <label className="text-sm font-medium">这次对话后你会做什么？</label>
+        <label className="text-sm font-medium">这次对话后你会做什么？（写不出具体行动 = 纯消费）</label>
         <Textarea
           value={practiceCommitment}
           onChange={(e) => setPracticeCommitment(e.target.value)}
@@ -78,7 +78,7 @@ export function PostSessionReview({ sessionId, onComplete }: PostSessionReviewPr
 
       <Button onClick={handleComplete} disabled={saving} className="w-full">
         {saving ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
-        完成闭环
+        够了。完成闭环
       </Button>
     </div>
   );

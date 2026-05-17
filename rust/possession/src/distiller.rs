@@ -31,7 +31,7 @@ struct ParsedObservation {
     confidence: Option<f32>,
 }
 
-const SYSTEM_PROMPT: &str = r#"你是万民幡的记忆压缩器。你的任务是从一次"魂合议"对话中提取 5-10 条原子级知识点（observation），并给出一句整体总结。
+const SYSTEM_PROMPT: &str = r#"你是 Snake Skin 的记忆压缩器。你的任务是从一次"魂合议"对话中提取 5-10 条原子级知识点（observation），并给出一句整体总结。
 
 ## observation 类型定义
 每条 observation 必须归入以下 8 类之一：
