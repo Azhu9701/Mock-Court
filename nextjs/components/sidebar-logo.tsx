@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { Flag } from "lucide-react";
 
 export function SidebarLogo() {
   return (
@@ -8,8 +7,12 @@ export function SidebarLogo() {
       className="flex h-14 items-center gap-2 border-b px-4 shrink-0"
       data-testid="sidebar-logo"
     >
-      <Flag className="h-6 w-6 text-primary" />
-      <span className="text-lg font-bold whitespace-nowrap">Soul Banner</span>
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" className="h-6 w-6 text-primary">
+        <ellipse cx="14" cy="17" rx="10" ry="3.5" stroke="currentColor" strokeWidth="1.2" fill="currentColor" fillOpacity="0.05" />
+        <path d="M10 17 Q10 8 14 6 Q18 8 18 17" stroke="currentColor" strokeWidth="1.2" fill="currentColor" fillOpacity="0.3" />
+        <path d="M10.5 20 Q10.5 22 14 23.5 Q17.5 22 17.5 20" stroke="currentColor" strokeWidth="1.2" fill="none" />
+      </svg>
+      <span className="text-lg font-bold whitespace-nowrap">Snake Skin</span>
     </Link>
   );
 }

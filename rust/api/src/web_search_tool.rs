@@ -88,7 +88,13 @@ impl ToolHandler for WebSearchTool {
             md.push_str(&format!("   URL: {}\n", r.url));
             if let Some(ref snippet) = r.content {
                 let snip = if snippet.len() > 300 {
-                    format!("{}...", &snippet[..300])
+                    let boundary = snippet
+                        .char_indices()
+                        .take_while(|(i, _)| *i < 300)
+                        .last()
+                        .map(|(i, c)| i + c.len_utf8())
+                        .unwrap_or(0);
+                    format!("{}...", &snippet[..boundary])
                 } else {
                     snippet.clone()
                 };

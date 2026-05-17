@@ -5,7 +5,7 @@ use foundation::{
 };
 
 use crate::{
-    AlertType, BoundaryReview, EffectivenessTrend, Period, SoulAlert, SoulCallStats, SummonStats,
+    AlertType, BoundaryReview, EffectivenessTrend, Period, PleasureStats, SoulAlert, SoulCallStats, SummonStats,
 };
 
 pub async fn compute_summon_stats(store: &dyn Storage, period: &Period) -> Result<SummonStats> {
@@ -211,4 +211,74 @@ pub async fn detect_low_effectiveness_impl(
     });
 
     Ok(reviews)
+}
+
+/// 蛇皮统计 — 从 session_reviews + 全体会话聚合实践闭环数据
+/// 核心逻辑：没有走反馈闭环的会话 = 消费型会话
+pub async fn compute_pleasure_stats(store: &dyn Storage) -> Result<PleasureStats> {
+    let reviews = store.get_recent_reviews(500).await?;
+    let sessions = store.list_sessions(&SessionFilter::default()).await?;
+
+    // 已走反馈闭环的 session_id → review
+    let review_map: std::collections::HashMap<String, &foundation::SessionReview> = reviews
+        .iter()
+        .map(|r| (r.session_id.clone(), r))
+        .collect();
+
+    let mut effective = 0usize;
+    let mut partial = 0usize;
+    let mut invalid = 0usize;
+    let mut wasted_tokens: u64 = 0;
+    let mut total_tokens: u64 = 0;
+
+    for session in &sessions {
+        let tokens = session.total_tokens as u64;
+        total_tokens += tokens;
+
+        match review_map.get(&session.id) {
+            Some(review) => {
+                // 走了闭环：按 effectiveness 判定
+                match review.effectiveness.as_str() {
+                    "effective" => effective += 1,
+                    "partial" => {
+                        partial += 1;
+                        wasted_tokens += tokens;
+                    }
+                    _ => {
+                        invalid += 1;
+                        wasted_tokens += tokens;
+                    }
+                }
+            }
+            None => {
+                // 没走闭环：消费型会话
+                invalid += 1;
+                wasted_tokens += tokens;
+            }
+        }
+    }
+
+    let total_reviewed = effective + partial + invalid;
+    let pleasure_index = if total_reviewed > 0 {
+        ((invalid as f64 + partial as f64 * 0.5) / total_reviewed as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let waste_ratio = if total_tokens > 0 {
+        wasted_tokens as f64 / total_tokens as f64
+    } else {
+        0.0
+    };
+
+    Ok(PleasureStats {
+        pleasure_index,
+        effective_sessions: effective,
+        partial_sessions: partial,
+        invalid_sessions: invalid,
+        total_reviewed,
+        wasted_tokens,
+        total_tokens,
+        waste_ratio,
+    })
 }

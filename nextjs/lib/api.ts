@@ -67,9 +67,12 @@ async function apiRequest<T>(
       lastError = err;
       clearTimeout(timer);
 
-      // 非网络错误不重试（HTTP 错误已在上面处理并重新抛出）
-      if (err instanceof Error && err.name !== "TypeError" && (err as ApiError).status) {
-        throw err;
+      // 非网络错误不重试
+      if (err instanceof Error && err.name !== "TypeError") {
+        // HTTP 错误（有 status code）
+        if ((err as ApiError).status) throw err;
+        // 超时 / AbortError
+        if (err.name === "AbortError") throw new Error(`请求超时: ${opName} — 服务器 ${timeout / 1000}s 内未响应`);
       }
 
       // 如果是外部 signal 导致的 abort，不重试
@@ -252,20 +255,79 @@ export async function createSoul(data: Record<string, unknown>): Promise<void> {
   });
 }
 
-export interface AutoCreateResponse {
-  profile: SoulProfile;
-  raw_material: string;
-  rationale: string;
+export interface AutoCreateAccepted {
+  task_id: string;
+  soul_name: string;
 }
 
-export async function autoCreateSoul(name: string): Promise<AutoCreateResponse> {
-  return apiRequest<AutoCreateResponse>('/souls/auto-create', {
+export interface AutoCreateWsEvent {
+  task_id: string;
+  soul_name: string;
+  phase: 'collecting' | 'refining' | 'done' | 'error';
+  message?: string;
+  profile?: SoulProfile;
+}
+
+/** POST /souls/auto-create — returns immediately with task_id. Progress via WS. */
+export async function autoCreateSoul(name: string): Promise<AutoCreateAccepted> {
+  return apiRequest<AutoCreateAccepted>('/souls/auto-create', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
     operation: 'autoCreateSoul',
-    timeout: 120000, // 收魂+炼化可能耗时较长
+    // fast response — WS handles progress
   });
+}
+
+/**
+ * Connect to auto-create progress WebSocket.
+ * Resolves when `done` or rejects on `error`.
+ */
+export function watchAutoCreate(
+  taskId: string,
+  soulName: string,
+  onProgress: (evt: AutoCreateWsEvent) => void
+): { abort: () => void } {
+  const wsHost = API_BASE.replace('http://', 'ws://').replace('/api/v1', '');
+  const ws = new WebSocket(`${wsHost}/ws/souls/auto-create/${taskId}`);
+  let settled = false;
+
+  ws.onmessage = (e) => {
+    try {
+      const evt = JSON.parse(e.data) as AutoCreateWsEvent;
+      onProgress(evt);
+      if (evt.phase === 'done' || evt.phase === 'error') {
+        settled = true;
+        ws.close();
+      }
+    } catch {}
+  };
+
+  ws.onerror = () => {
+    if (!settled) {
+      settled = true;
+      onProgress({
+        task_id: taskId,
+        soul_name: soulName,
+        phase: 'error',
+        message: 'WebSocket 连接失败',
+      });
+    }
+  };
+
+  ws.onclose = () => {
+    if (!settled) {
+      settled = true;
+      onProgress({
+        task_id: taskId,
+        soul_name: soulName,
+        phase: 'error',
+        message: '连接意外关闭',
+      });
+    }
+  };
+
+  return { abort: () => ws.close() };
 }
 
 // ── Analytics ──
@@ -333,6 +395,24 @@ export interface IsmismStats {
   epistemology_distribution: Record<number, number>;
   teleology_distribution: Record<number, number>;
   total_souls: number;
+}
+
+export interface PleasureStats {
+  pleasure_index: number;
+  effective_sessions: number;
+  partial_sessions: number;
+  invalid_sessions: number;
+  total_reviewed: number;
+  wasted_tokens: number;
+  total_tokens: number;
+  waste_ratio: number;
+}
+
+export async function fetchPleasureStats(): Promise<PleasureStats> {
+  return apiRequest<PleasureStats>('/analytics/pleasure-stats', {
+    next: { revalidate: 60 },
+    operation: 'fetchPleasureStats',
+  });
 }
 
 export async function fetchSummonStats(): Promise<SummonStatsResponse> {
@@ -409,19 +489,27 @@ export interface Message {
 
 export async function fetchSessions(
   limit = 50,
-  offset = 0
+  offset = 0,
+  noCache = false,
 ): Promise<SessionSummary[]> {
   return apiRequest<SessionSummary[]>(
     `/sessions?limit=${limit}&offset=${offset}`,
-    { next: { revalidate: 60 }, operation: 'fetchSessions' }
+    noCache
+      ? { cache: 'no-store', operation: 'fetchSessions' }
+      : { next: { revalidate: 60 }, operation: 'fetchSessions' }
   );
 }
 
-export async function fetchSessionDetail(id: string): Promise<SessionDetail> {
-  return apiRequest<SessionDetail>(`/sessions/${id}`, {
-    next: { revalidate: 60 },
-    operation: 'fetchSessionDetail',
-  });
+export async function fetchSessionDetail(
+  id: string,
+  noCache = false,
+): Promise<SessionDetail> {
+  return apiRequest<SessionDetail>(
+    `/sessions/${id}`,
+    noCache
+      ? { cache: 'no-store', operation: 'fetchSessionDetail' }
+      : { next: { revalidate: 60 }, operation: 'fetchSessionDetail' }
+  );
 }
 
 export async function deleteSession(id: string): Promise<void> {
@@ -451,6 +539,26 @@ export async function renameSession(id: string, title: string): Promise<void> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title }),
     operation: 'renameSession',
+  });
+}
+
+// ── Fork ──
+
+export interface ForkResponse {
+  session_id: string;
+  forked_message_count: number;
+}
+
+export async function forkSession(
+  sessionId: string,
+  fromMessageSeq: number,
+  task?: string,
+): Promise<ForkResponse> {
+  return apiRequest<ForkResponse>(`/sessions/${sessionId}/fork`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from_message_seq: fromMessageSeq, task }),
+    operation: 'forkSession',
   });
 }
 
@@ -576,6 +684,7 @@ export async function startPossession(params: {
   judgment?: string;
   worry?: string;
   unknown?: string;
+  interrogation_context?: string;
 }): Promise<StartPossessionResponse> {
   return apiRequest<StartPossessionResponse>('/possess', {
     method: 'POST',
@@ -604,26 +713,6 @@ export async function exportSessionMarkdown(id: string, title: string): Promise<
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(downloadUrl);
-}
-
-// ── Review ──
-
-export interface ReviewData {
-  most_unexpected?: string;
-  already_known?: string;
-  self_negation?: string;
-  empty_chair?: string;
-  effectiveness?: string;
-  effectiveness_note?: string;
-}
-
-export async function saveReview(sessionId: string, data: ReviewData): Promise<void> {
-  return apiRequest(`/sessions/${sessionId}/review`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-    operation: "saveReview",
-  });
 }
 
 // ── Knowledge ──
@@ -672,33 +761,6 @@ export async function fetchKnowledgeCards(params?: {
     `/knowledge/cards${qs ? `?${qs}` : ''}`,
     { operation: 'fetchKnowledgeCards' }
   );
-}
-
-export async function saveVerificationKnowledgeCard(params: {
-  session_id: string;
-  title: string;
-  action: string;
-  valid_signal: string;
-  revision_signal: string;
-}): Promise<KnowledgeCardItem> {
-  return apiRequest<KnowledgeCardItem>('/knowledge/cards', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      source_session: params.session_id,
-      title: params.title,
-      content: `## ⏳ 24小时检验项
-
-**检验行动：** ${params.action}
-
-**有效信号：** ${params.valid_signal}
-
-**修正信号：** ${params.revision_signal}`,
-      tags: ['实践检验', '24小时'],
-      source_soul: 'user',
-    }),
-    operation: 'saveVerificationKnowledgeCard',
-  });
 }
 
 // ── Synthesis (structured output §9.5) ──
@@ -856,6 +918,52 @@ export function obsEmoji(type: string): string {
   return OBS_TYPE_EMOJI[type] ?? '\u{1F4CB}';
 }
 
+export interface ReviewData {
+  practice_commitment?: string;
+  practice_horizon?: string;
+  self_negation?: string;
+  empty_chair?: string;
+  effectiveness?: string;
+  effectiveness_note?: string;
+}
+
+export async function saveReview(
+  sessionId: string,
+  data: ReviewData,
+): Promise<{ ok: boolean; review_id: string }> {
+  return apiRequest<{ ok: boolean; review_id: string }>(
+    `/sessions/${sessionId}/review`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+      operation: 'saveReview',
+    },
+  );
+}
+
+export interface SessionReview {
+  id: string;
+  session_id: string;
+  most_unexpected: string;
+  already_known: string;
+  self_negation: string;
+  empty_chair: string;
+  effectiveness: string;
+  effectiveness_note: string;
+  practice_commitment: string;
+  practice_horizon: string;
+  interrogation_passed: boolean | null;
+  interrogation_reason: string | null;
+  created_at: string;
+}
+
+export async function fetchSessionReview(id: string): Promise<SessionReview | null> {
+  return apiRequest<SessionReview | null>(`/sessions/${id}/review`, {
+    operation: 'fetchSessionReview',
+  });
+}
+
 export async function fetchSessionDigest(id: string): Promise<SessionDigest> {
   return apiRequest<SessionDigest>(`/sessions/${id}/digest`, {
     operation: 'fetchSessionDigest',
@@ -867,4 +975,201 @@ export async function triggerDistill(id: string): Promise<{ ok: boolean; message
     method: 'POST',
     operation: 'triggerDistill',
   });
+}
+
+// ── Marginalia annotations (post-conference annotation pass) ──
+
+export interface Annotation {
+  id: string;
+  session_id: string;
+  /** 写批注的魂 */
+  source_soul: string;
+  /** 被批注的魂 */
+  target_soul: string;
+  /** 引用的原文片段 */
+  target_excerpt: string;
+  /** 批注内容 */
+  comment: string;
+  /** disagree | extend | nuance | question | support | ... */
+  kind: string;
+  created_at: string;
+}
+
+export async function fetchSessionAnnotations(id: string): Promise<Annotation[]> {
+  return apiRequest<Annotation[]>(`/sessions/${id}/annotations`, {
+    cache: 'no-store',
+    operation: 'fetchSessionAnnotations',
+  });
+}
+
+// ── Interrogation gate (审查官入场反问) ──
+
+export interface InterrogationQuestion {
+  text: string;
+  required: boolean;
+}
+
+export interface InterrogationResponse {
+  gate_id: string;
+  questions: InterrogationQuestion[];
+  message?: string;
+}
+
+export interface InterrogationVerdictResponse {
+  passed: boolean;
+  reason: string;
+  questions?: InterrogationQuestion[];  // 驳回时的追加反问
+  refined_task?: string;               // 通过时的改写 task
+}
+
+export async function startInterrogation(task: string): Promise<InterrogationResponse> {
+  return apiRequest<InterrogationResponse>('/possess/interrogate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task }),
+    operation: 'startInterrogation',
+  });
+}
+
+export async function submitInterrogation(
+  gateId: string,
+  answers: { question_index: number; answer: string }[],
+): Promise<InterrogationVerdictResponse> {
+  return apiRequest<InterrogationVerdictResponse>(
+    `/possess/interrogate/${gateId}/respond`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answers }),
+      operation: 'submitInterrogation',
+    },
+  );
+}
+
+// ── Recommended souls parser (mirrors rust/possession/src/modes/conference.rs:extract_recommended_souls) ──
+
+export interface ParsedSoulRecommendation {
+  name: string;
+  rationale: string;
+  subtask?: string;
+}
+
+// Keywords that mean "structural metadata", never a soul name
+const RESERVED_LABELS = new Set([
+  "推荐理由", "理由", "推荐子任务", "子任务",
+  "需要补充", "无需补充", "推荐补充", "补充方向",
+]);
+
+/**
+ * Parse "## 七、推荐补充魂" section from synthesis content.
+ *
+ * Handles two layouts:
+ * (A) Inline:   `1. **庄子** — 推荐理由：xxx 推荐子任务：**yyy**`
+ * (B) Nested:   `1. **庄子**` followed by `   - **推荐理由**：xxx` / `   - **推荐子任务**：yyy`
+ *
+ * Algorithm:
+ * - Split the section by **top-level** numbered/dashed items (col 0 indent)
+ * - Within each item body, scan for `**推荐理由**：xxx` and `**推荐子任务**：xxx`
+ * - Reject items whose extracted name is in RESERVED_LABELS (catches nested **推荐理由** etc)
+ */
+export function extractRecommendedSouls(synthesis: string): ParsedSoulRecommendation[] {
+  const sectionStart = synthesis.indexOf("## 七、推荐补充魂");
+  if (sectionStart === -1) return [];
+
+  const fromStart = synthesis.slice(sectionStart);
+  const nextHeading = fromStart.slice(1).indexOf("\n## ");
+  const sectionText = nextHeading !== -1 ? fromStart.slice(0, nextHeading + 1) : fromStart;
+
+  if (sectionText.includes("无需补充")) return [];
+
+  // Top-level item header at column 0: `- **name**`, `* **name**`, `1. **name**` etc.
+  // We derive item bodies in a second pass to avoid JS regex's lack of \Z anchor.
+  const TOP_ITEM_HEADER_RE = /^(?:[-*]|\d+\.)\s+\*\*([^*\n]{1,80}?)\*\*[ \t]*(.*)$/gm;
+
+  // Field extractors inside an item body
+  // Lookahead terminates at: nested sub-bullet `- **...**`, next top-level item `1. **` or `- **` at column 0,
+  // another `**推荐...**` label, or end of body
+  const FIELD_END = "(?=\\n[ \\t]*[-*]\\s+\\*\\*|\\n(?:[-*]|\\d+\\.)\\s+\\*\\*|\\n\\s*\\*\\*推荐子任务\\*\\*|\\n\\s*\\*\\*推荐理由\\*\\*|\\n\\s*\\*\\*[^*\\n]{1,40}\\*\\*\\s*[：:]?|\\n\\s*推荐子任务\\s*[：:]|\\n\\s*---|$)";
+  const RATIONALE_BOLD_RE = new RegExp("\\*\\*(?:推荐理由|理由)\\*\\*\\s*[：:]\\s*([\\s\\S]+?)" + FIELD_END);
+  const SUBTASK_BOLD_RE = new RegExp("\\*\\*(?:推荐子任务|子任务)\\*\\*\\s*[：:]\\s*([\\s\\S]+?)" + FIELD_END);
+  // Inline (no leading `- **label**`)
+  const SUBTASK_INLINE_BOLD_RE = /推荐子任务\s*[：:]\s*\*\*([^*\n]+?)\*\*/;
+  const SUBTASK_INLINE_PLAIN_RE = /推荐子任务\s*[：:]\s*([^\n。！？]+?)(?=[。！？\n]|$)/;
+  const RATIONALE_INLINE_RE = /推荐理由\s*[：:]\s*([\s\S]+?)(?=推荐子任务\s*[：:]|$)/;
+
+  const stripWrap = (s: string) => s.trim().replace(/^[「""'']|[」""'']$/g, "").trim();
+  const cleanTail = (s: string) => s.replace(/\s*[。.，,;；:：]+\s*$/, "").trim();
+
+  // Pass 1: collect header positions
+  type HeaderPos = { name: string; tailStart: number; lineEnd: number };
+  const headers: HeaderPos[] = [];
+  let hm: RegExpExecArray | null;
+  TOP_ITEM_HEADER_RE.lastIndex = 0;
+  while ((hm = TOP_ITEM_HEADER_RE.exec(sectionText)) !== null) {
+    const name = hm[1].trim();
+    if (!name || name.length >= 80) continue;
+    if (RESERVED_LABELS.has(name)) continue;
+    headers.push({
+      name,
+      tailStart: hm.index + hm[0].length - hm[2].length,
+      lineEnd: hm.index + hm[0].length,
+    });
+  }
+
+  const out: ParsedSoulRecommendation[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < headers.length; i++) {
+    const h = headers[i];
+    if (seen.has(h.name)) continue;
+    seen.add(h.name);
+
+    const nextStart = i + 1 < headers.length
+      ? sectionText.lastIndexOf("\n", headers[i + 1].tailStart) + 1
+      : sectionText.length;
+    const bodyEnd = nextStart > h.tailStart ? nextStart : sectionText.length;
+    const body = sectionText.slice(h.tailStart, bodyEnd);
+
+    let rationale = "";
+    let subtask: string | undefined;
+
+    // Try nested layout first (sub-bullet **推荐子任务**: ...)
+    const subBold = body.match(SUBTASK_BOLD_RE);
+    if (subBold) {
+      subtask = stripWrap(subBold[1]).replace(/^\*\*|\*\*$/g, "").trim();
+    } else {
+      const subInlineBold = body.match(SUBTASK_INLINE_BOLD_RE);
+      const subInlinePlain = body.match(SUBTASK_INLINE_PLAIN_RE);
+      if (subInlineBold) {
+        subtask = stripWrap(subInlineBold[1]);
+      } else if (subInlinePlain) {
+        subtask = stripWrap(subInlinePlain[1]);
+      }
+    }
+
+    // Rationale: try sub-bullet first, then inline, then whole body
+    const ratBold = body.match(RATIONALE_BOLD_RE);
+    if (ratBold) {
+      rationale = ratBold[1].trim();
+    } else {
+      const ratInline = body.match(RATIONALE_INLINE_RE);
+      rationale = ratInline ? ratInline[1].trim() : body.trim();
+    }
+
+    rationale = rationale.replace(/推荐子任务\s*[：:][\s\S]*$/, "").trim();
+    rationale = rationale.replace(/^\s*[—\-:：]+\s*/, "");
+    rationale = cleanTail(rationale);
+
+    // Last item may include section-level closing paragraphs. Strip them.
+    if (i === headers.length - 1) {
+      // Non-indented paragraphs after the structured fields = section conclusion
+      rationale = rationale.replace(/\n\n(?![ \t]+(?:[-*]|\d+\.)\s)[\s\S]*$/, "").trim();
+    }
+
+    out.push({
+      name: h.name,
+      rationale: rationale || "综合官推荐补充",
+      ...(subtask ? { subtask } : {}),
+    });
+  }
+  return out;
 }

@@ -112,7 +112,7 @@ export function SearxngSearch() {
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between text-sm text-muted-foreground">
             <span>
-              找到 {data.number_of_results} 条结果
+              找到 {data.results.length} 条结果
               {data.unresponsive_engines.length > 0 && (
                 <span className="ml-2 text-xs text-muted-foreground/70">
                   (部分引擎无响应)

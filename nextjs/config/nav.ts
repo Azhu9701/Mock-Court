@@ -25,7 +25,7 @@ export const navConfig: NavGroup[] = [
     label: "回顾",
     items: [
       { key: "sessions", label: "会话历史", href: "/sessions", icon: History },
-      { key: "analytics", label: "仪表盘", href: "/analytics", icon: BarChart3 },
+      { key: "analytics", label: "蛇皮统计", href: "/analytics", icon: BarChart3 },
       { key: "knowledge", label: "知识库", href: "/knowledge", icon: Search },
     ],
   },

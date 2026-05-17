@@ -60,7 +60,10 @@ export default function CollectPage() {
                 placeholder="人物名，如：张一鸣"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && onCollect()}
+                onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                  if (e.key === "Enter") onCollect();
+                }}
                 className="flex-1"
                 data-testid="collect-name-input"
               />

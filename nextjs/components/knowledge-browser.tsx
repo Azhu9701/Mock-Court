@@ -123,6 +123,7 @@ export function KnowledgeBrowser() {
   };
 
   const handleSearchKeyDown = (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === "Enter") {
       if (query.trim()) {
         setTab("search");

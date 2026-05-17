@@ -9,7 +9,7 @@ const labels: Record<string, string> = {
   souls: "魂览",
   possess: "讨论",
   sessions: "会话历史",
-  analytics: "仪表盘",
+  analytics: "蛇皮统计",
 };
 
 export function Breadcrumb() {
@@ -30,9 +30,12 @@ export function Breadcrumb() {
           </Link>
         </li>
         {segments.map((seg, i) => {
-          const displayLabel = isLast(i) && lastLabel
+          const rawLabel = isLast(i) && lastLabel
             ? lastLabel
             : labels[seg] || decodeURIComponent(seg);
+          const displayLabel = rawLabel.length > 30
+            ? rawLabel.slice(0, 30) + "…"
+            : rawLabel;
 
           return (
             <li key={i} className="flex items-center gap-1">

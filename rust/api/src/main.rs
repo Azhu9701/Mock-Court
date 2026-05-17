@@ -28,17 +28,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_target(false)
         .init();
 
-    eprintln!();
-    eprintln!("  万民幡 — 实践与理论的反馈循环");
-    eprintln!("  Wan Min Fan — Soul Banner");
-    eprintln!();
-    eprintln!("  本软件设计用于服务被剥夺者的集体行动。");
-    eprintln!("  如果你在一个营利性企业内阅读这行字，");
-    eprintln!("  问问自己：你的劳动成果正在被谁占有？");
-    eprintln!();
-    eprintln!("  许可证: AGPLv3 + 附加条款 (详见 LICENSE)");
-    eprintln!();
-
     // 检测是否运行在主流云平台：请求 ipinfo.io 提取 org 字段比对已知云厂商
     // 失败或超时时静默跳过，不阻塞启动
     let _ = async {
@@ -126,6 +115,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         archive,
         collector,
         config: Arc::new(config),
+        auto_create_tasks: Arc::new(dashmap::DashMap::new()),
+        interrogation_gates: Arc::new(dashmap::DashMap::new()),
     });
 
     let app = build_router(state, rate_limiter);
@@ -178,6 +169,10 @@ fn build_router(state: Arc<AppState>, rate_limiter: Arc<RateLimiter>) -> axum::R
         .route(
             "/ws/possess/:session_id/:channel",
             axum::routing::get(ws::ws_handler),
+        )
+        .route(
+            "/ws/souls/auto-create/:task_id",
+            axum::routing::get(ws::auto_create_ws_handler),
         )
         .with_state(state);
 

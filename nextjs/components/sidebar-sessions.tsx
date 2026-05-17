@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { Trash2, Pencil, Check, X, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fetchSessions, deleteSession, renameSession, type SessionSummary } from "@/lib/api";
-import { modeLabel, MODE_COLORS_BG } from "@/config/possession-modes";
+import { modeLabel, MODE_COLORS_TEXT, type PossessionMode } from "@/config/possession-modes";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmButton } from "@/components/ui/confirm-button";
@@ -28,9 +28,9 @@ export function SidebarSessions() {
   const pathname = usePathname();
   const router = useRouter();
 
-  const refreshSessions = useCallback(() => {
+  const refreshSessions = useCallback((noCache = false) => {
     setRefreshing(true);
-    fetchSessions(10)
+    fetchSessions(10, 0, noCache)
       .then(setSessions)
       .catch(() => {})
       .finally(() => {
@@ -45,7 +45,7 @@ export function SidebarSessions() {
     }, 0);
 
     const handleSessionsUpdated = () => {
-      refreshSessions();
+      refreshSessions(true);
     };
     window.addEventListener(SESSIONS_UPDATED_EVENT, handleSessionsUpdated);
 
@@ -58,7 +58,7 @@ export function SidebarSessions() {
   const handleDelete = async (sessionId: string) => {
     try {
       await deleteSession(sessionId);
-      refreshSessions();
+      refreshSessions(true);
       triggerSessionsUpdate();
       if (pathname === `/sessions/${sessionId}`) {
         router.push("/sessions");
@@ -75,7 +75,7 @@ export function SidebarSessions() {
     }
     try {
       await renameSession(sessionId, editingTitle.trim());
-      refreshSessions();
+      refreshSessions(true);
       triggerSessionsUpdate();
       setEditingId(null);
     } catch (e) {
@@ -112,7 +112,7 @@ export function SidebarSessions() {
           variant="ghost"
           size="icon"
           className="h-5 w-5"
-          onClick={refreshSessions}
+          onClick={() => refreshSessions(true)}
           disabled={refreshing}
           title="刷新会话列表"
         >
@@ -135,6 +135,7 @@ export function SidebarSessions() {
                     className="h-5 text-xs px-1.5"
                     autoFocus
                     onKeyDown={(e) => {
+                      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                       if (e.key === "Enter") handleRename(s.id);
                       if (e.key === "Escape") setEditingId(null);
                     }}
@@ -148,14 +149,23 @@ export function SidebarSessions() {
                 </div>
               ) : (
                 <div className={cn(
-                  "flex items-center gap-1.5 rounded-md pl-2 pr-1 py-1 text-xs transition-colors",
+                  "flex items-center gap-1.5 rounded-md pl-1.5 pr-1 py-1 text-xs transition-colors",
                   active ? "bg-primary/10" : "hover:bg-muted"
                 )}>
-                  {/* 模式色点 */}
-                  <div className={cn(
-                    "w-1.5 h-1.5 rounded-full shrink-0",
-                    (MODE_COLORS_BG as Record<string, string>)[s.mode] || "bg-gray-400"
-                  )} />
+                  {/* 模式色 + observation 计数 (替代原色点) */}
+                  <span
+                    className={cn(
+                      "flex items-center gap-0.5 text-[10px] shrink-0 opacity-70",
+                      MODE_COLORS_TEXT[s.mode as PossessionMode] || "text-gray-400"
+                    )}
+                    title={
+                      s.observation_count > 0
+                        ? `${modeLabel(s.mode)} · ${s.observation_count} 条压缩摘要`
+                        : modeLabel(s.mode)
+                    }
+                  >
+                    {s.observation_count > 0 && s.observation_count}
+                  </span>
                   <Link
                     href={href}
                     data-testid={`sidebar-session-${s.id}`}
@@ -171,11 +181,6 @@ export function SidebarSessions() {
                   <span className="text-[10px] text-muted-foreground/50 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                     {modeLabel(s.mode)}
                   </span>
-                  {s.observation_count > 0 && (
-                    <span className="text-[10px] text-blue-500/70 shrink-0" title={`${s.observation_count} 条压缩摘要`}>
-                      📝{s.observation_count}
-                    </span>
-                  )}
                   <div className="flex items-center shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                     <Button
                       size="icon"

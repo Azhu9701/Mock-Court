@@ -7,13 +7,11 @@ import { DebateView } from "@/components/debate-view";
 import { RelayView } from "@/components/relay-view";
 import { SingleView } from "@/components/single-view";
 import { LearnView } from "@/components/learn-view";
-import { PracticeOpeningView } from "@/components/practice-opening-view";
-import { Brain, Loader2, AlertTriangle, Key, CheckCircle, Clock } from "lucide-react";
+import { Brain, Loader2, AlertTriangle, Key, ArrowRight, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { VerificationDialog } from "@/components/verification-dialog";
 import Link from "next/link";
-import { PostSessionReview } from "@/components/post-session-review";
+
 import FollowUpInput from "@/components/follow-up-input";
 import { useState, useEffect } from "react";
 
@@ -192,10 +190,6 @@ export function SessionRunner({ sessionId, mode, matchedSouls, taskTitle, onDone
     useWebSocket(sessionId);
 
   const hasMessages = Object.keys(messages).length > 0;
-  const [reviewDone, setReviewDone] = useState(false);
-  const [verificationOpen, setVerificationOpen] = useState(false);
-  const [verificationDone, setVerificationDone] = useState(false);
-
   const streamingSouls = Object.entries(messages)
     .filter(([, m]) => m.isStreaming)
     .map(([name]) => name);
@@ -269,56 +263,29 @@ export function SessionRunner({ sessionId, mode, matchedSouls, taskTitle, onDone
         {status === "done" && !error && !hasMessages && <RequireApiKeyView />}
         {hasMessages && (
           <div className="px-4 pb-4 space-y-4">
-            {mode === "conference" && <ConferenceView messages={messages} synthesis={synthesis} collisions={collisions} toolCalls={toolCalls} recommendations={soulRecommendations} />}
+            {mode === "conference" && <ConferenceView messages={messages} synthesis={synthesis} collisions={collisions} toolCalls={toolCalls} />}
             {mode === "debate" && <DebateView messages={messages} />}
             {mode === "relay" && <RelayView messages={messages} />}
             {mode === "single" && <SingleView messages={messages} />}
             {mode === "learn" && <LearnView messages={messages} />}
-            {mode === "practice_opening" && <PracticeOpeningView messages={messages} />}
           </div>
         )}
       </div>
 
       {status === "done" && hasMessages && (
         <div className="border-t p-4 space-y-6">
-          {!reviewDone ? (
-            <PostSessionReview sessionId={sessionId} onComplete={() => setReviewDone(true)} />
-          ) : (
-            <>
-              <div className="flex justify-end">
-                {verificationDone ? (
-                  <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400 px-4 py-2 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/20">
-                    <CheckCircle className="h-4 w-4" />
-                    检验项已记录到知识卡片
-                  </div>
-                ) : (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setVerificationOpen(true)}
-                    className="text-muted-foreground hover:text-foreground"
-                  >
-                    <Clock className="mr-1.5 h-4 w-4 text-blue-500" />
-                    24小时检验项
-                  </Button>
-                )}
-              </div>
-              <FollowUpInput sessionId={sessionId} />
-            </>
-          )}
+          <div className="flex flex-col items-center gap-3 py-6 text-center">
+            <Link
+              href={`/sessions/${sessionId}`}
+              className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
+            >
+              <ArrowRight className="h-4 w-4" />
+              前往完整对话
+            </Link>
+          </div>
+          <FollowUpInput sessionId={sessionId} />
         </div>
       )}
-
-      <VerificationDialog
-        open={verificationOpen}
-        sessionId={sessionId}
-        sessionTitle={taskTitle || ""}
-        onComplete={() => {
-          setVerificationOpen(false);
-          setVerificationDone(true);
-        }}
-        onClose={() => setVerificationOpen(false)}
-      />
     </div>
   );
 }

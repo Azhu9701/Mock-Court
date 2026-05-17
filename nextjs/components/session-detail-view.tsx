@@ -11,11 +11,11 @@ import SessionActions from "@/components/session-actions";
 import FollowUpInput from "@/components/follow-up-input";
 import { fetchSessionDetail, fetchSoul, analyzeTask } from "@/lib/api";
 import { readPendingSession, clearPendingSession } from "@/lib/pending-session";
-import { ArrowLeft, User, Brain, Sparkles, ShieldCheck, Zap, Play, Loader2, CheckCircle2, ChevronDown, ChevronUp, Clock } from "lucide-react";
-import { VerificationDialog } from "@/components/verification-dialog";
+import { ArrowLeft, User, Brain, Sparkles, ShieldCheck, Zap, Play, Loader2, CheckCircle2, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { MODE_LABELS_LONG, modeColorBg } from "@/config/possession-modes";
+import { MessageForkButton } from "@/components/message-fork-button";
 
 const FLOW_PHASES: { key: string; icon: React.ComponentType<{ className?: string }>; label: string; desc: string }[] = [
   { key: "classifying", icon: Brain, label: "入口分流", desc: "分析任务类型" },
@@ -34,8 +34,6 @@ export default function SessionDetailView({ id }: { id: string }) {
   const [currentFlowPhase, setCurrentFlowPhase] = useState<string | null>(null);
   const [flowExpanded, setFlowExpanded] = useState(true);
   const [loading, setLoading] = useState(true);
-  const [verificationOpen, setVerificationOpen] = useState(false);
-  const [verificationDone, setVerificationDone] = useState(false);
   const clearRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -108,7 +106,7 @@ export default function SessionDetailView({ id }: { id: string }) {
       }
 
       try {
-        const d = await fetchSessionDetail(id);
+        const d = await fetchSessionDetail(id, true);
         if (cancelled) return;
         setDetail(d);
         if (!pending?.mode) setMode(d.session.mode);
@@ -334,7 +332,7 @@ export default function SessionDetailView({ id }: { id: string }) {
       </div>
 
       {initUserMsgs.map((msg) => (
-        <div key={msg.id} className="flex gap-3 flex-row-reverse">
+        <div key={msg.id} className="group flex gap-3 flex-row-reverse">
           <div className="shrink-0">
             <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center">
               <User className="h-4 w-4 text-primary" />
@@ -347,8 +345,13 @@ export default function SessionDetailView({ id }: { id: string }) {
                 {new Date(msg.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
               </span>
             </div>
-            <div className="rounded-xl p-4 bg-primary text-primary-foreground">
-              <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+            <div className="relative">
+              <div className="rounded-xl p-4 bg-primary text-primary-foreground">
+                <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+              </div>
+              <div className="absolute -left-2 top-1/2 -translate-y-1/2 translate-x-[-100%] opacity-0 group-hover:opacity-100 transition-opacity">
+                <MessageForkButton sessionId={id} messageSeq={msg.seq} />
+              </div>
             </div>
           </div>
         </div>
@@ -379,7 +382,7 @@ export default function SessionDetailView({ id }: { id: string }) {
           <h3 className="text-sm font-semibold text-muted-foreground">追问记录</h3>
           {followPairs.map(({ question, answer }) => (
             <div key={question.id} className="space-y-4">
-              <div className="flex gap-3 flex-row-reverse">
+              <div className="group flex gap-3 flex-row-reverse">
                 <div className="shrink-0">
                   <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center">
                     <User className="h-4 w-4 text-primary" />
@@ -392,8 +395,13 @@ export default function SessionDetailView({ id }: { id: string }) {
                       {new Date(question.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
                     </span>
                   </div>
-                  <div className="rounded-xl p-4 bg-primary/5 border border-primary/10">
-                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{question.content}</p>
+                  <div className="relative">
+                    <div className="rounded-xl p-4 bg-primary/5 border border-primary/10">
+                      <p className="text-sm leading-relaxed whitespace-pre-wrap">{question.content}</p>
+                    </div>
+                    <div className="absolute -left-2 top-1/2 -translate-y-1/2 translate-x-[-100%] opacity-0 group-hover:opacity-100 transition-opacity">
+                      <MessageForkButton sessionId={id} messageSeq={question.seq} />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -403,39 +411,7 @@ export default function SessionDetailView({ id }: { id: string }) {
         </div>
       )}
 
-      {initSynths.length > 0 && (
-        <div className="flex justify-end">
-          {verificationDone ? (
-            <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400 px-4 py-2 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/20">
-              <CheckCircle2 className="h-4 w-4" />
-              检验项已记录到知识卡片
-            </div>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setVerificationOpen(true)}
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <Clock className="mr-1.5 h-4 w-4 text-blue-500" />
-              24小时检验项
-            </Button>
-          )}
-        </div>
-      )}
-
       <FollowUpInput sessionId={id} />
-
-      <VerificationDialog
-        open={verificationOpen}
-        sessionId={id}
-        sessionTitle={session.title}
-        onComplete={() => {
-          setVerificationOpen(false);
-          setVerificationDone(true);
-        }}
-        onClose={() => setVerificationOpen(false)}
-      />
     </div>
   );
 }

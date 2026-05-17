@@ -39,6 +39,7 @@ pub async fn run(
         presets.unknown.as_deref(),
         info.tier,
         presets.search_results.as_deref(),
+        presets.interrogation_context.as_deref(),
     );
 
     let mut config = CallConfig::default();

@@ -31,6 +31,7 @@ pub async fn run(
         presets.unknown.as_deref(),
         info.tier,
         presets.search_results.as_deref(),
+        presets.interrogation_context.as_deref(),
     );
     let rx = gateway.call(&LLMRequest { provider: info.provider, prompt, config: CallConfig::default() })?;
 

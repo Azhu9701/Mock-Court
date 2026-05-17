@@ -22,7 +22,7 @@ export default function SessionPage({
     let cancelled = false;
     async function load() {
       try {
-        const detail = await fetchSessionDetail(sessionId);
+        const detail = await fetchSessionDetail(sessionId, true);
         if (cancelled) return;
         setTaskTitle(detail.session.title);
 

@@ -68,6 +68,7 @@ export interface ToolCallEvent {
 export interface SoulRecommendation {
   name: string;
   rationale: string;
+  subtask?: string;
 }
 
 export interface DigestReadyEvent {
@@ -359,6 +360,16 @@ export function useWebSocket(sessionId: string) {
             setDigestReady(digest);
             addLog(`📝 记忆压缩完成: ${digest.observation_count} 条 observation`, 'success');
             // 通知 sidebar 和 timeline 刷新角标
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(new CustomEvent(SESSIONS_UPDATED_EVENT));
+            }
+          } catch {}
+          break;
+
+        case "annotations_ready":
+          try {
+            const anns = JSON.parse(event.payload) as unknown[];
+            addLog(`✦ 魂间互批已生成: ${anns.length} 条 marginalia`, 'success');
             if (typeof window !== "undefined") {
               window.dispatchEvent(new CustomEvent(SESSIONS_UPDATED_EVENT));
             }

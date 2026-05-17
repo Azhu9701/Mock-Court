@@ -67,6 +67,15 @@ pub trait Storage: Send + Sync {
     async fn get_observations_by_soul(&self, soul_name: &str, limit: u32) -> Result<Vec<SessionObservation>>;
     async fn update_session_digest(&self, session_id: &str, summary: &str) -> Result<()>;
 
+    // Annotations (marginalia 模式 — 事后批注)
+    async fn insert_annotations(&self, annotations: &[Annotation]) -> Result<()>;
+    async fn get_annotations(&self, session_id: &str) -> Result<Vec<Annotation>>;
+
+    // Session Reviews (实践反馈闭环)
+    async fn insert_session_review(&self, review: &SessionReview) -> Result<()>;
+    async fn get_session_review(&self, session_id: &str) -> Result<Option<SessionReview>>;
+    async fn get_recent_reviews(&self, limit: u32) -> Result<Vec<SessionReview>>;
+
     // Health
     async fn health_check(&self) -> Result<HealthStatus>;
 }

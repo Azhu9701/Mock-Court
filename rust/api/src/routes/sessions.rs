@@ -7,7 +7,7 @@ use axum::{Json, Router};
 use axum::http::{header, StatusCode};
 use archive::SessionDetail;
 use chrono::{DateTime, Utc};
-use foundation::{MessageRole, Session, SessionFilter, SessionObservation, SessionStatus, SessionSummary};
+use foundation::{Annotation, MessageRole, Session, SessionFilter, SessionObservation, SessionReview, SessionStatus, SessionSummary};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{map_api_error, ApiError};
@@ -19,11 +19,13 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/batch-delete", post(batch_delete_sessions))
         .route("/:id", get(get_session_detail).delete(delete_session))
         .route("/:id/digest", get(get_session_digest))
+        .route("/:id/annotations", get(get_session_annotations))
         .route("/:id/distill", post(trigger_distill))
         .route("/:id/rename", put(rename_session))
         .route("/:id/fork", put(fork_session))
         .route("/:id/export/markdown", get(export_session_markdown))
-        .route("/:id/review", post(save_review))
+        .route("/reviews/profile", get(get_user_profile))
+        .route("/:id/review", get(get_session_review).post(save_review))
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,7 +99,7 @@ async fn batch_delete_sessions(
 struct ForkRequest { task: Option<String>, from_message_seq: Option<usize> }
 
 #[derive(Debug, Serialize)]
-struct ForkResponse { session_id: String }
+struct ForkResponse { session_id: String, forked_message_count: usize }
 
 async fn fork_session(
     State(state): State<Arc<AppState>>, Path(id): Path<String>, Json(body): Json<ForkRequest>,
@@ -106,7 +108,9 @@ async fn fork_session(
         axum::http::StatusCode::NOT_FOUND, Json(ApiError { error: "Not found".into() })
     ))?;
     let cutoff = body.from_message_seq.unwrap_or(0);
-    let history: Vec<&foundation::Message> = detail.messages.iter().filter(|m| (m.seq as usize) >= cutoff).collect();
+    let history: Vec<&foundation::Message> = detail.messages.iter()
+        .filter(|m| (m.seq as usize) <= cutoff)
+        .collect();
     let new_title = body.task.unwrap_or_else(|| format!("{} (分叉)", detail.session.title));
 
     let new_sid = uuid::Uuid::new_v4().to_string();
@@ -117,16 +121,16 @@ async fn fork_session(
         digest_summary: None, digest_at: None,
     };
     state.archive.create_session(&new_session).await.map_err(map_api_error)?;
-    for msg in history {
+    for (i, msg) in history.iter().enumerate() {
         let nm = foundation::Message {
             id: uuid::Uuid::new_v4().to_string(), session_id: new_sid.clone(),
             role: msg.role.clone(), soul_name: msg.soul_name.clone(),
-            content: msg.content.clone(), seq: msg.seq, created_at: chrono::Utc::now(),
+            content: msg.content.clone(), seq: i as u32, created_at: chrono::Utc::now(),
         };
         let _ = state.archive.append_message(&nm).await;
     }
 
-    Ok(Json(ForkResponse { session_id: new_sid }))
+    Ok(Json(ForkResponse { session_id: new_sid, forked_message_count: history.len() }))
 }
 
 async fn export_session_markdown(
@@ -200,6 +204,12 @@ struct ReviewRequest {
     empty_chair: Option<String>,
     effectiveness: Option<String>,
     effectiveness_note: Option<String>,
+    practice_commitment: Option<String>,
+    practice_horizon: Option<String>,
+    #[serde(default)]
+    interrogation_passed: Option<bool>,
+    #[serde(default)]
+    interrogation_reason: Option<String>,
 }
 
 async fn save_review(
@@ -207,16 +217,51 @@ async fn save_review(
     Path(id): Path<String>,
     Json(body): Json<ReviewRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mu = body.most_unexpected.clone().unwrap_or_default();
+    let ak = body.already_known.clone().unwrap_or_default();
+    let sn = body.self_negation.clone().unwrap_or_default();
+    let ec = body.empty_chair.clone().unwrap_or_default();
+    let ef = body.effectiveness.clone().unwrap_or_default();
+    let en = body.effectiveness_note.clone().unwrap_or_default();
+    let pc = body.practice_commitment.clone().unwrap_or_default();
+    let ph = body.practice_horizon.clone().unwrap_or_default();
+
     let review_content = serde_json::json!({
         "type": "review",
-        "most_unexpected": body.most_unexpected.unwrap_or_default(),
-        "already_known": body.already_known.unwrap_or_default(),
-        "self_negation": body.self_negation.unwrap_or_default(),
-        "empty_chair": body.empty_chair.unwrap_or_default(),
-        "effectiveness": body.effectiveness.unwrap_or_default(),
-        "effectiveness_note": body.effectiveness_note.unwrap_or_default(),
+        "most_unexpected": mu,
+        "already_known": ak,
+        "self_negation": sn,
+        "empty_chair": ec,
+        "effectiveness": ef,
+        "effectiveness_note": en,
+        "practice_commitment": pc,
+        "practice_horizon": ph,
     });
 
+    let review_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now();
+
+    // 写入 reviews 表（独立持久化，供匹配/蒸馏/画像消费）
+    let review = foundation::SessionReview {
+        id: review_id,
+        session_id: id.clone(),
+        most_unexpected: mu,
+        already_known: ak,
+        self_negation: sn,
+        empty_chair: ec,
+        effectiveness: ef,
+        effectiveness_note: en,
+        practice_commitment: pc,
+        practice_horizon: ph,
+        interrogation_passed: body.interrogation_passed,
+        interrogation_reason: body.interrogation_reason.clone(),
+        created_at: now,
+    };
+    if let Err(e) = state.archive.insert_session_review(&review).await {
+        tracing::error!("Failed to write session review: {}", e);
+    }
+
+    // 保留 [REVIEW] message 作为兼容（历史数据也可见）
     let msg = foundation::Message {
         id: uuid::Uuid::new_v4().to_string(),
         session_id: id,
@@ -224,11 +269,44 @@ async fn save_review(
         soul_name: None,
         content: format!("[REVIEW]{}", review_content),
         seq: 999,
-        created_at: chrono::Utc::now(),
+        created_at: now,
     };
-
     state.archive.append_message(&msg).await.map_err(map_api_error)?;
-    Ok(Json(serde_json::json!({ "ok": true })))
+    Ok(Json(serde_json::json!({ "ok": true, "review_id": review.id })))
+}
+
+/// GET /sessions/reviews/profile
+/// 使用者画像 — 聚合所有 review 数据，产出模式摘要
+async fn get_user_profile(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let reviews = state.archive.get_recent_reviews(50).await.map_err(map_api_error)?;
+    if reviews.is_empty() {
+        return Ok(Json(serde_json::json!({"reviews": 0})));
+    }
+
+    let total = reviews.len();
+    let effective = reviews.iter().filter(|r| r.effectiveness == "effective").count();
+    let ineffective = reviews.iter().filter(|r| r.effectiveness == "invalid").count();
+
+    let top_negations = top_phrases(reviews.iter().map(|r| r.self_negation.as_str()), 5);
+    let top_chairs = top_phrases(reviews.iter().map(|r| r.empty_chair.as_str()), 5);
+
+    Ok(Json(serde_json::json!({
+        "total_reviews": total,
+        "effective_rate": if total > 0 { effective as f64 / total as f64 } else { 0.0 },
+        "ineffective_count": ineffective,
+        "top_shaken_presets": top_negations.iter().map(|(w, c)| serde_json::json!({"phrase": w, "count": c})).collect::<Vec<_>>(),
+        "top_missing_voices": top_chairs.iter().map(|(w, c)| serde_json::json!({"phrase": w, "count": c})).collect::<Vec<_>>(),
+    })))
+}
+
+async fn get_session_review(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Option<SessionReview>>, (StatusCode, Json<ApiError>)> {
+    let review = state.archive.get_session_review(&id).await.map_err(map_api_error)?;
+    Ok(Json(review))
 }
 
 // ── Session Digest (claude-mem 3-layer access) ──
@@ -278,6 +356,14 @@ async fn get_session_digest(
     }))
 }
 
+async fn get_session_annotations(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<Annotation>>, (StatusCode, Json<ApiError>)> {
+    let annotations = state.archive.get_annotations(&id).await.map_err(map_api_error)?;
+    Ok(Json(annotations))
+}
+
 async fn trigger_distill(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -308,4 +394,21 @@ async fn trigger_distill(
     );
 
     Ok(Json(serde_json::json!({ "ok": true, "message": "Distill started" })))
+}
+
+fn top_phrases<'a>(texts: impl Iterator<Item = &'a str>, limit: usize) -> Vec<(&'a str, u32)> {
+    let mut counts: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+    for text in texts {
+        if text.is_empty() { continue; }
+        for word in text.split(|c: char| c == '，' || c == '。' || c == '、' || c == '；') {
+            let w = word.trim();
+            if w.len() >= 2 && w.len() <= 30 {
+                *counts.entry(w).or_default() += 1;
+            }
+        }
+    }
+    let mut top: Vec<_> = counts.into_iter().collect();
+    top.sort_by(|a, b| b.1.cmp(&a.1));
+    top.truncate(limit);
+    top
 }

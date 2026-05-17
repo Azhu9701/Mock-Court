@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { SessionRunner } from "@/components/session-runner";
@@ -8,16 +9,18 @@ import {
   Brain, Loader2, Sparkles, ShieldCheck, Zap, Play, ChevronDown, ChevronUp,
   CheckCircle2, AlertCircle, ArrowRightCircle, Globe, Search, Copy, Check
 } from "lucide-react";
-import { analyzeTask, startPossession, searchWeb, type SearxngResultItem } from "@/lib/api";
+import {
+  analyzeTask, startPossession, searchWeb, startInterrogation, submitInterrogation,
+  type SearxngResultItem, type InterrogationQuestion, type InterrogationVerdictResponse,
+} from "@/lib/api";
 import { MODE_LABELS_LONG } from "@/config/possession-modes";
 import { triggerSessionsUpdate } from "@/components/sidebar-sessions";
 import { AttachmentUpload } from "@/components/attachment-upload";
 import { SoulCarousel } from "@/components/soul-carousel";
-import { PracticeOpeningDialog } from "@/components/practice-opening-dialog";
 import { cn } from "@/lib/utils";
 import { SessionContextHeader } from "@/components/session-context-header";
 
-type Phase = "input" | "classifying" | "matching" | "reviewing" | "adjusting" | "starting" | "running" | "practice_opening";
+type Phase = "input" | "interrogation" | "classifying" | "matching" | "reviewing" | "adjusting" | "starting" | "running";
 
 const PHASES: { key: Phase; icon: React.ComponentType<{ className?: string }>; label: string; desc: string }[] = [
   { key: "classifying", icon: Brain, label: "入口分流", desc: "分析任务类型" },
@@ -52,7 +55,14 @@ function classifyLogType(line: string): "key" | "soul" | "review" | "other" {
 }
 
 export function PossessionEntry() {
-  const [task, setTask] = useState("");
+  const searchParams = useSearchParams();
+  const initialTaskFromUrl = searchParams?.get("task") || "";
+  const initialSoulsFromUrl = (searchParams?.get("souls") || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const [task, setTask] = useState(initialTaskFromUrl);
+  const prefilledSouls = initialSoulsFromUrl;
   const [taskHistory, setTaskHistory] = useState<string[]>(() => {
     if (typeof window === "undefined") return [];
     try { return JSON.parse(localStorage.getItem("possess-task-history") || "[]"); } catch { return []; }
@@ -70,9 +80,12 @@ export function PossessionEntry() {
   const [isCancelled, setIsCancelled] = useState(false);
   const [searchTopic, setSearchTopic] = useState(true);
   const [taskCards, setTaskCards] = useState<Record<string, string>>({});
-  const [judgment, setJudgment] = useState("");
-  const [worry, setWorry] = useState("");
-  const [unknown, setUnknown] = useState("");
+  // Interrogation gate states
+  const [igGateId, setIgGateId] = useState("");
+  const [igQuestions, setIgQuestions] = useState<InterrogationQuestion[]>([]);
+  const [igAnswers, setIgAnswers] = useState<string[]>([]);
+  const [igReason, setIgReason] = useState("");
+  const [igSubmitting, setIgSubmitting] = useState(false);
   const [progressLine, setProgressLine] = useState("");
   const [logFilter, setLogFilter] = useState<LogFilter>("全部");
   const [logsCollapsed, setLogsCollapsed] = useState(true);
@@ -109,6 +122,82 @@ export function PossessionEntry() {
       return trimmed ? `${block}\n\n---\n\n${trimmed}` : block;
     });
   }, []);
+
+  /** 审查官审讯：提交使用者对反问的逐条回答 → 获得裁决 */
+  const onInterrogationSubmit = async () => {
+    if (igSubmitting) return;
+    setIgSubmitting(true);
+    setError("");
+
+    const answers = igQuestions
+      .map((_q, i) => ({ question_index: i, answer: igAnswers[i]?.trim() ?? "" }))
+      .filter((a) => a.answer.length > 0);
+
+    if (answers.length === 0) {
+      setError("请至少回答一个反问。");
+      setIgSubmitting(false);
+      return;
+    }
+
+    try {
+      addLog(`📝 提交 ${answers.length}/${igQuestions.length} 条反问回答…`);
+      const verdict: InterrogationVerdictResponse = await submitInterrogation(igGateId, answers);
+
+      if (verdict.passed) {
+        // 通过 → 继续合议流程
+        addLog("✅ 审查官放行：" + verdict.reason);
+        if (verdict.refined_task) {
+          addLog("📝 审查官改写议题：" + verdict.refined_task);
+          setTask(verdict.refined_task);
+        }
+        // 保存审查官 Q&A 供注入魂共享上下文
+        const qaText = igQuestions
+          .map((q, i) => `Q${i + 1}: ${q.text}\nA${i + 1}: ${igAnswers[i]?.trim() || "（未答）"}`)
+          .join("\n\n");
+        interrogationContextRef.current = qaText ? `审查官入场审讯了使用者的提问动机和行动承诺。以下为审讯记录：\n\n${qaText}` : "";
+        setPhase("classifying");
+        setIgQuestions([]);
+        setIgReason("");
+        // 继续 onStart 被截断的逻辑 —— trigger it from the classifying phase's flow
+        // The classifying effect will kick in via the phase change above;
+        // but we were in the middle of onStart before the interrogation break,
+        // so we need to re-trigger the original flow. Easiest: set a flag.
+        // Actually the simplest is to re-enter onStart with the interpolated phase machine:
+        // But onStart sets phase to "interrogation" again — we need a bypass flag for "passed" state.
+        // Better: pass a `bypassInterrogation` flag or use the refined_task.
+        //
+        // Simplest path: if verdict.refined_task is set, task is already updated.
+        // The "input" phase expects canStart. The flow from "classifying" onwards is the same as before.
+        // We need to jump to the original flow that onStart was executing when interrupted.
+        //
+        // The cleanest solution: re-call a function that performs the "after-interrogation" flow.
+        // We'll extract that to a shared function, but for now:
+        //   re-enter the original onStart with a flag to skip interrogation.
+        //   But onStart always calls startInterrogation...
+        // Better: add a `skipInterrogation` ref to skip the interrogation block
+        setPhase("classifying");
+        skipInterrogationRef.current = true;
+        // re-trigger onStart:
+        onStart();
+      } else {
+        // 驳回 → 显示原因 + 更新反问列表
+        setIgReason(verdict.reason);
+        addLog(`❌ 审查官驳回：${verdict.reason}`);
+        if (verdict.questions && verdict.questions.length > 0) {
+          setIgQuestions(verdict.questions);
+          setIgAnswers(new Array(verdict.questions.length).fill(""));
+          addLog(`🗣️ 审查官追加 ${verdict.questions.length} 个反问`);
+        }
+      }
+    } catch (e: any) {
+      setError(e.message || "审讯失败");
+    } finally {
+      setIgSubmitting(false);
+    }
+  };
+
+  const skipInterrogationRef = useRef(false);
+  const interrogationContextRef = useRef("");
 
   const handleSearch = useCallback(async () => {
     if (!searchQuery.trim()) return;
@@ -157,14 +246,72 @@ export function PossessionEntry() {
     
     console.log("=== 开始讨论流程");
     setIsCancelled(false);
-    setPhase("classifying");
     setLog([]);
     setError("");
     setMatchedSouls([]);
     setReview(null);
     setSessionDone(false);
 
+    // ── 审查官入场审讯 ──
+    if (skipInterrogationRef.current) {
+      skipInterrogationRef.current = false;
+      // 已经通过了审查，直接跳过
+    } else try {
+      setPhase("interrogation");
+      setProgressLine("审查官正在审问你的提问意图…");
+      addLog("🔍 审查官正在分析你的提问『意图』…");
+      const igResp = await startInterrogation(task);
+      setIgGateId(igResp.gate_id);
+      setIgQuestions(igResp.questions);
+      setIgAnswers(new Array(igResp.questions.length).fill(""));
+      setIgReason("");
+
+      if (igResp.questions.length === 0) {
+        // 审查官直接放行
+        addLog("✅ 审查官判定：无需反问，直接入场");
+        setPhase("classifying");
+      } else {
+        addLog(`🗣️ 审查官提出 ${igResp.questions.length} 个反问 —— 请逐一回应后继续`);
+        return; // 暂停，等用户填写反问
+      }
+    } catch (e: any) {
+      addLog(`❌ 审查官审讯失败: ${e.message || e}——请稍后重试`);
+      setPhase("input");
+      setError(`审查官审讯出错: ${e.message || e}`);
+      return;
+    }
+
     try {
+      // Fast path: souls pre-selected via URL (e.g. from soul-recommendation card)
+      // → skip analyzeTask and start session directly with these souls
+      if (prefilledSouls.length > 0) {
+        addLog(`🎯 已预选魂：${prefilledSouls.join("、")}`);
+        setProgressLine(`正在启动附体会话（已预选 ${prefilledSouls.length} 个魂）…`);
+        setPhase("starting");
+        setMode("conference");
+
+        console.log("=== fast-path startPossession with prefilled souls:", prefilledSouls);
+        const { session_id } = await startPossession({
+          mode: "conference",
+          task,
+          souls: prefilledSouls,
+          search_topic: searchTopic,
+          interrogation_context: interrogationContextRef.current || undefined,
+        });
+        console.log("=== startPossession 完成, session_id:", session_id);
+
+        if (isCancelled) {
+          setPhase("input");
+          return;
+        }
+
+        setSessionId(session_id);
+        setPhase("running");
+        triggerSessionsUpdate();
+        addLog("🎉 附体会话已启动");
+        return;
+      }
+
       addLog("开始分析任务...");
       setProgressLine("正在分析任务，入口分流中…");
       console.log("=== 调用 analyzeTask API (streaming)...");
@@ -211,9 +358,28 @@ export function PossessionEntry() {
       }
 
       if (data.entry_type === "practice_opening") {
-        setPhase("practice_opening");
-        addLog("✨ 检测到实践者在场 → 进入实践开口流程");
-        setProgressLine("检测到实践者在场，进入实践开口流程");
+        setPhase("starting");
+        setProgressLine("检测到实践者在场，启动实践开口流程…");
+        addLog("✨ 启动实践开口附体会话...");
+        try {
+          const { session_id } = await startPossession({
+            mode: "practice_opening",
+            task,
+            souls: [],
+            interrogation_context: interrogationContextRef.current || undefined,
+          });
+          setSessionId(session_id);
+          setMode("practice_opening");
+          setPhase("running");
+          addLog("🎉 实践开口附体会话已启动");
+          setProgressLine("实践开口进行中…");
+          triggerSessionsUpdate();
+        } catch (e: any) {
+          const errorMsg = e.message || e.toString() || "启动失败";
+          setError(errorMsg);
+          addLog(`❌ 错误: ${errorMsg}`);
+          setPhase("input");
+        }
         return;
       }
 
@@ -238,9 +404,7 @@ export function PossessionEntry() {
         mode: finalMode, task, souls: souls.map((s: any) => s.name),
         task_cards: Object.keys(cards).length > 0 ? cards : undefined,
         search_topic: searchTopic,
-        judgment: judgment || undefined,
-        worry: worry || undefined,
-        unknown: unknown || undefined,
+        interrogation_context: interrogationContextRef.current || undefined,
       });
       console.log("=== startPossession 完成, session_id:", session_id);
 
@@ -275,37 +439,6 @@ export function PossessionEntry() {
     setPhase("input");
     setProgressLine("");
     addLog("⏹️ 用户取消了操作");
-  };
-
-  const handlePracticeOpeningStart = async (j: string, w: string, u: string) => {
-    setJudgment(j);
-    setWorry(w);
-    setUnknown(u);
-    setPhase("starting");
-    setProgressLine("正在启动实践开口流程…");
-    addLog("🚀 启动实践开口附体会话...");
-
-    try {
-      const { session_id } = await startPossession({
-        mode: "practice_opening",
-        task,
-        souls: [],
-        judgment: j || undefined,
-        worry: w || undefined,
-        unknown: u || undefined,
-      });
-      setSessionId(session_id);
-      setMode("practice_opening");
-      setPhase("running");
-      addLog("🎉 实践开口附体会话已启动");
-      setProgressLine("实践开口进行中…");
-      triggerSessionsUpdate();
-    } catch (e: any) {
-      const errorMsg = e.message || e.toString() || "启动失败";
-      setError(errorMsg);
-      addLog(`❌ 错误: ${errorMsg}`);
-      setPhase("input");
-    }
   };
 
   const getModeLabel = (m: string) => (MODE_LABELS_LONG as Record<string, string>)[m] || m;
@@ -359,11 +492,6 @@ export function PossessionEntry() {
     );
   }
 
-  const activePhases = PHASES.filter((p, i) => {
-    const idx = currentPhaseIndex;
-    return i <= idx && idx >= 0;
-  });
-
   return (
     <div className="max-w-2xl mx-auto space-y-6" data-testid="possession-entry">
       {phase === "input" && (
@@ -379,6 +507,14 @@ export function PossessionEntry() {
           
           <div className="rounded-xl border bg-background p-6 shadow-sm">
             <div className="space-y-4">
+              {prefilledSouls.length > 0 && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+                  <Sparkles className="h-4 w-4 text-amber-500 shrink-0" />
+                  <span className="text-xs text-amber-700 dark:text-amber-300">
+                    <strong>已预选魂：</strong>{prefilledSouls.join("、")} · 跳过自动匹配，直接以此召唤合议
+                  </span>
+                </div>
+              )}
               <AttachmentUpload onOcrResults={handleOcrResults} />
               <Textarea
                 placeholder="描述你的问题或任务..."
@@ -388,6 +524,7 @@ export function PossessionEntry() {
                   setTaskHistoryIdx(-1);
                 }}
                 onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { onStart(); return; }
                   if (e.key === "ArrowUp" && taskHistory.length > 0) {
                     const textarea = e.currentTarget as HTMLTextAreaElement;
@@ -468,7 +605,10 @@ export function PossessionEntry() {
                         type="text"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
+                        onKeyDown={(e) => {
+                          if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                          if (e.key === "Enter") handleSearch();
+                        }}
                         placeholder={task ? `搜索: ${task.slice(0, 40)}...` : "输入搜索关键词..."}
                         className="w-full rounded-lg border bg-background pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                       />
@@ -557,15 +697,71 @@ export function PossessionEntry() {
         </div>
       )}
 
-      {phase === "practice_opening" && (
-        <PracticeOpeningDialog
-          open={true}
-          onStart={handlePracticeOpeningStart}
-          onCancel={() => setPhase("input")}
-        />
+      {/* 审查官入场审讯 — 反问卡片 */}
+      {phase === "interrogation" && igQuestions.length > 0 && (
+        <div className="space-y-6">
+          <div className="text-center space-y-2">
+            <h2 className="text-2xl font-bold bg-gradient-to-r from-red-500 to-orange-500 bg-clip-text text-transparent">
+              审查官有话说
+            </h2>
+            <p className="text-sm text-muted-foreground max-w-md mx-auto">
+              在进入合议前，审查官要求你回应以下问题。
+              <br/>无法跳过——你不能绕过ta的脸。
+            </p>
+          </div>
+
+          {igReason && (
+            <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-950/20 p-3">
+              <p className="text-sm text-red-700 dark:text-red-300">{igReason}</p>
+            </div>
+          )}
+
+          <div className="space-y-4">
+            {igQuestions.map((q, i) => (
+              <div key={i} className="rounded-lg border bg-background p-4 space-y-2">
+                <div className="flex items-start gap-2">
+                  <span className="text-xs font-mono text-muted-foreground mt-1">#{i + 1}</span>
+                  <label className="text-sm font-semibold flex-1">{q.text}</label>
+                  {q.required && (
+                    <span className="text-[10px] text-red-500 font-medium">必答</span>
+                  )}
+                </div>
+                <textarea
+                  className="w-full min-h-[80px] text-sm rounded-md border bg-muted/30 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30 resize-y"
+                  placeholder="你的回应..."
+                  value={igAnswers[i] ?? ""}
+                  onChange={(e) => {
+                    const next = [...igAnswers];
+                    next[i] = e.target.value;
+                    setIgAnswers(next);
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+
+          <div className="flex justify-end gap-3">
+            <Button
+              onClick={onInterrogationSubmit}
+              disabled={igSubmitting || igAnswers.every((a) => !a?.trim())}
+            >
+              {igSubmitting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  审查中...
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                  提交回答
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
       )}
 
-      {phase !== "input" && phase !== "practice_opening" && phase !== "running" && (
+      {phase !== "input" && phase !== "running" && (
         <div className="space-y-6">
           {error && (
             <div className="rounded-xl border-2 border-red-200 bg-gradient-to-br from-red-50 to-red-100 dark:from-red-950/50 dark:to-red-950 p-6 text-center shadow-sm">

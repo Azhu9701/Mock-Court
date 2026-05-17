@@ -912,6 +912,46 @@ pub struct SessionObservation {
     pub created_at: DateTime<Utc>,
 }
 
+/// 实践反馈闭环 — 使用者对一次合议的事后复盘。
+/// 被魂匹配、审查官校验、知识蒸馏、使用者画像消费。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionReview {
+    pub id: String,
+    pub session_id: String,
+    pub most_unexpected: String,
+    pub already_known: String,
+    pub self_negation: String,
+    pub empty_chair: String,
+    pub effectiveness: String,
+    pub effectiveness_note: String,
+    pub practice_commitment: String,
+    pub practice_horizon: String,
+    /// 审查官入场审讯的裁决（passed = 通过）
+    pub interrogation_passed: Option<bool>,
+    /// 审查官裁决理由 / 享乐判定
+    pub interrogation_reason: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Marginalia annotation produced by the post-stream annotation pass.
+/// 一个 source 魂对 target 魂某段输出的事后批注。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Annotation {
+    pub id: String,
+    pub session_id: String,
+    /// 写批注的魂
+    pub source_soul: String,
+    /// 被批注的魂
+    pub target_soul: String,
+    /// 引用的原文片段（target 输出的一句或一段）
+    pub target_excerpt: String,
+    /// 批注内容
+    pub comment: String,
+    /// 类型: "disagree" | "extend" | "nuance" | "question" | "support" | ...
+    pub kind: String,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SessionObservationFilter {
     pub session_id: Option<String>,

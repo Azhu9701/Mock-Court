@@ -36,6 +36,7 @@ pub struct PossessionInput {
     pub judgment: Option<String>,
     pub worry: Option<String>,
     pub unknown: Option<String>,
+    pub interrogation_context: Option<String>,
     pub search_topic: bool,
     pub search_results: Option<String>,
     #[allow(dead_code)]
@@ -47,6 +48,7 @@ pub struct UserPresets {
     pub judgment: Option<String>,
     pub worry: Option<String>,
     pub unknown: Option<String>,
+    pub interrogation_context: Option<String>,
     pub search_results: Option<String>,
 }
 
@@ -56,6 +58,7 @@ impl From<&PossessionInput> for UserPresets {
             judgment: input.judgment.clone(),
             worry: input.worry.clone(),
             unknown: input.unknown.clone(),
+            interrogation_context: input.interrogation_context.clone(),
             search_results: input.search_results.clone(),
         }
     }
@@ -296,6 +299,9 @@ pub enum WsEventType {
     // Session distilled into observations
     #[serde(rename = "observations_ready")]
     ObservationsReady,
+    // Marginalia annotations ready (post-conference annotation pass)
+    #[serde(rename = "annotations_ready")]
+    AnnotationsReady,
 }
 
 pub struct PossessionEngine {
@@ -395,6 +401,13 @@ impl PossessionEngine {
             })
             .await;
 
+            // Async distill: compress session into observations BEFORE SessionComplete,
+            // so follow-up requests (which use observations for context) don't fall back
+            // to full message history when distill hasn't finished yet.
+            if result.is_ok() {
+                distiller::spawn_distill(store.clone(), gateway.clone(), ws.clone(), sid.clone());
+            }
+
             let _ = system_tx.try_send(WsEvent {
         event_type: WsEventType::SessionComplete,
         payload: String::new(),
@@ -402,11 +415,6 @@ impl PossessionEngine {
         soul_name: None,
         seq: 0,
     }).ok();
-
-            // Async distill: compress session into observations (claude-mem style)
-            if result.is_ok() {
-                distiller::spawn_distill(store.clone(), gateway.clone(), ws.clone(), sid.clone());
-            }
 
             if let Err(e) = result {
                 tracing::error!("Session {} failed: {}", sid, e);

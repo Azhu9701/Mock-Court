@@ -62,10 +62,9 @@ export function SoulPanel({
 
   return (
     <div
-      className={`flex flex-col rounded-lg border bg-background overflow-hidden transition-all duration-300 cursor-pointer hover:shadow-md ${
+      className={`flex flex-col rounded-lg border bg-background overflow-hidden transition-all duration-300 hover:shadow-md ${
         isExpanded ? "flex-1 min-h-[300px]" : "h-40"
       }`}
-      onClick={onToggleExpand}
     >
       {/* 头部 */}
       <div className="px-4 py-2 border-b bg-muted/30 flex items-center justify-between">

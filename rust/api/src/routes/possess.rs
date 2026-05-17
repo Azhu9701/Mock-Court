@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::extract::{Multipart, Path, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -11,13 +12,15 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::error::{map_api_error, ApiError};
 use crate::ocr;
-use crate::state::AppState;
+use crate::state::{AppState, InterrogationGate, InterrogationQuestion};
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", post(start_possession))
         .route("/analyze", post(analyze_task))
         .route("/ocr", post(ocr_upload))
+        .route("/interrogate", post(start_interrogation))
+        .route("/interrogate/:gate_id/respond", post(submit_interrogation))
         .route("/:session_id/status", get(possession_status))
         .route("/:session_id/follow-up", post(follow_up))
 }
@@ -31,6 +34,7 @@ struct StartPossessionRequest {
     #[serde(default)] judgment: Option<String>,
     #[serde(default)] worry: Option<String>,
     #[serde(default)] unknown: Option<String>,
+    #[serde(default)] interrogation_context: Option<String>,
     #[serde(default)] task_cards: std::collections::HashMap<String, String>,
     #[serde(default)] search_topic: bool,
 }
@@ -70,6 +74,7 @@ async fn start_possession(
         mode: body.mode.and_then(|m| foundation::PossessionMode::from_str(&m)),
         task: body.task, souls: body.souls, topic: body.topic,
         judgment: body.judgment, worry: body.worry, unknown: body.unknown,
+        interrogation_context: body.interrogation_context,
         task_cards: body.task_cards,
         search_topic: body.search_topic,
         search_results,
@@ -623,6 +628,55 @@ async fn analyze_task(
             (s, composite, if ismism_prox > 0.4 { "ismism" } else if kw_hits > 0 { "keyword" } else if ft_score > 0.2 { "semantic" } else { "fallback" })
         }).collect();
 
+        // ── 实践反馈加权 ──
+        let recent_reviews = state.archive.get_recent_reviews(5).await.unwrap_or_default();
+        let mut review_boosts: std::collections::HashMap<String, (f64, String)> = std::collections::HashMap::new();
+
+        // Pre-compute lowercase names/fields/domains once per soul
+        let soul_lower: Vec<(String, String, Vec<String>)> = scored.iter()
+            .map(|(s, _, _)| (s.name.to_lowercase(), s.field.to_lowercase(), s.domains.iter().map(|d| d.to_lowercase()).collect()))
+            .collect();
+
+        for review in &recent_reviews {
+            let chair_lower = review.empty_chair.to_lowercase();
+            for (i, (s, _, _)) in scored.iter().enumerate() {
+                if chair_lower.contains(&soul_lower[i].0) {
+                    let boost = (0.15_f64, format!("反馈「缺失发言权」提到 {}", s.name));
+                    review_boosts.entry(s.name.clone()).or_insert(boost);
+                }
+            }
+            if !review.most_unexpected.is_empty() {
+                let unexpected_lower = review.most_unexpected.to_lowercase();
+                for (i, (s, _, _)) in scored.iter().enumerate() {
+                    if review_boosts.contains_key(&s.name) { continue; }
+                    let (name_lower, field_lower, domains_lower) = &soul_lower[i];
+                    let _ = name_lower;
+                    let field_hit = field_lower.split(|c: char| c == ',' || c == '，' || c == '|')
+                        .any(|f| unexpected_lower.contains(f.trim()));
+                    let domain_hit = domains_lower.iter()
+                        .any(|d| unexpected_lower.contains(d.as_str()));
+                    if field_hit || domain_hit {
+                        review_boosts.entry(s.name.clone())
+                            .or_insert((0.08, format!("反馈「最没想到」主题匹配 {}", s.name)));
+                    }
+                }
+            }
+        }
+
+        // Apply review boosts to composite scores
+        let mut boost_reasons: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for (i, (s, score, _match_type)) in scored.iter_mut().enumerate() {
+            if let Some((boost, reason)) = review_boosts.get(&s.name) {
+                *score += boost;
+                boost_reasons.insert(s.name.clone(), reason.clone());
+                // 如果之前是 fallback，改成 review_boost 类型
+                if *_match_type == "fallback" {
+                    *_match_type = "review_boost";
+                }
+            }
+            _ = i;
+        }
+
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| b.0.summon_count.cmp(&a.0.summon_count)));
 
@@ -650,10 +704,12 @@ async fn analyze_task(
                 .filter(|kw| task_lower.contains(&kw.to_lowercase()))
                 .count();
             let ismism_prox = ismism_proximity_score(&task_ismism, s);
+            let review_note = boost_reasons.get(&s.name).cloned().unwrap_or_default();
             let rationale = match *match_type {
                 "keyword" => format!("命中 {} 个关键词 | 坐标邻近度 {:.0}% | 综合分 {:.3}", kw_hits, ismism_prox*100.0, composite),
                 "ismism" => format!("坐标邻近度 {:.0}% | 综合分 {:.3}", ismism_prox*100.0, composite),
                 "semantic" => format!("全文相关性 | 坐标邻近度 {:.0}% | 综合分 {:.3}", ismism_prox*100.0, composite),
+                "review_boost" => format!("🔄 {} | 综合分 {:.3}", review_note, composite),
                 _ => format!("综合相关性 | 坐标邻近度 {:.0}% | 综合分 {:.3}", ismism_prox*100.0, composite),
             };
             SoulMatch {
@@ -997,6 +1053,8 @@ fn spawn_follow_up_agent(
     ws: possession::WsSessionManager,
     session_id: String,
     archive: Arc<archive::ArchiveSystem>,
+    summoned_soul: Option<(SoulProfile, String)>, // (profile, summon_reason)
+    search_enabled: bool,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let provider = gateway
@@ -1006,11 +1064,16 @@ fn spawn_follow_up_agent(
             .map(|i| i.provider)
             .unwrap_or(foundation::Provider::Claude);
 
-        let system_prompt = banner_lord.summon_prompt;
+        let is_soul_summon = summoned_soul.is_some();
+        let soul_name = if let Some((ref profile, _)) = summoned_soul {
+            profile.name.clone()
+        } else {
+            banner_lord.name.clone()
+        };
 
-        // 议题搜索：用追问问题（fallback 到原 task 即 history[0] 解析）做 SearXNG，
+        // 议题搜索：用追问问题做 SearXNG，由前端开关控制。
         // 失败/超时静默 fallback 到无搜索结果。
-        let search_results: Option<String> = if !question.trim().is_empty() {
+        let search_results: Option<String> = if search_enabled && !question.trim().is_empty() {
             let query = question.clone();
             let trunc = query.len().min(160);
             let safe_idx = (0..=trunc).rev().find(|&i| query.is_char_boundary(i)).unwrap_or(0);
@@ -1053,15 +1116,27 @@ fn spawn_follow_up_agent(
             s
         };
 
+        let summon_reason_block = if let Some((ref _profile, ref reason)) = summoned_soul {
+            format!("\n\n## 你被召唤的原因\n{}\n\n## 你的专属任务\n{}\n", reason, question)
+        } else {
+            String::new()
+        };
+
         let user_prompt = if history.is_empty() {
             format!(
-                "## 新问题\n{}{}{}\n\n根据这个新问题，以你的立场和视角回应。你是{}，ismism坐标{}。",
-                question, attachment_section, search_section, banner_lord.name, banner_lord.ismism_code
+                "## 新问题\n{}{}{}\n\n根据这个新问题，以你的立场和视角回应。你是{}，ismism坐标{}。{}",
+                question, attachment_section, search_section,
+                if is_soul_summon { &soul_name } else { &banner_lord.name },
+                if is_soul_summon { summoned_soul.as_ref().map(|(p, _)| p.ismism_code.as_str()).unwrap_or("") } else { banner_lord.ismism_code.as_str() },
+                summon_reason_block,
             )
         } else {
             format!(
-                "## 历史对话\n{}\n\n## 新问题\n{}{}{}\n\n以上是之前的多魂附体会话。作为{}（ismism={}），请以你的立场和视角回应这个追问。如果上面有「议题搜索结果」，请将其作为事实弹药融入批判。",
-                history.join("\n\n"), question, attachment_section, search_section, banner_lord.name, banner_lord.ismism_code
+                "## 历史对话\n{}\n\n## 新问题\n{}{}{}\n\n以上会话中，综合官判定需要补充你的视角。作为{}（ismism={}），请以你的立场和视角回应。如果上面有「议题搜索结果」，请将其作为事实弹药融入批判。{}",
+                history.join("\n\n"), question, attachment_section, search_section,
+                if is_soul_summon { &soul_name } else { &banner_lord.name },
+                if is_soul_summon { summoned_soul.as_ref().map(|(p, _)| p.ismism_code.as_str()).unwrap_or("") } else { banner_lord.ismism_code.as_str() },
+                summon_reason_block,
             )
         };
 
@@ -1076,68 +1151,152 @@ fn spawn_follow_up_agent(
         };
         let _ = archive.append_message(&q_msg).await;
 
-        let config = CallConfig {
-            temperature: 0.7,
-            max_tokens: 16384,
-            stream: true,
-            model: None,
-            reasoning_effort: Some(foundation::ReasoningEffort::Think),
-            structured_output: None,
-            thinking_enabled: None,
-            tools: None,
-            tool_choice: None,
-        };
-
-        let req = LLMRequest {
-            provider,
-            prompt: Prompt {
-                messages: vec![
-                    PromptMessage {
-                        role: "system".into(),
-                        content: system_prompt,
-                        reasoning_content: None,
-                        tool_call_id: None,
-                        tool_calls: None,
-                    },
-                    PromptMessage {
-                        role: "user".into(),
-                        content: user_prompt,
-                        reasoning_content: None,
-                        tool_call_id: None,
-                        tool_calls: None,
-                    },
-                ],
-            },
-            config,
+        // Build the LLM prompt — use PromptBuilder for summoned souls to get full identity
+        let (req, effective_soul_name) = if let Some((ref soul_profile, _)) = summoned_soul {
+            let pb = ai_gateway::prompt::PromptBuilder::new();
+            let tier = foundation::ModelTier::Pro;
+            // Combine history + summon reason as facts context
+            let facts = if history.is_empty() {
+                summon_reason_block.trim().to_string()
+            } else {
+                format!("## 历史会话\n{}\n\n{}", history.join("\n\n"), summon_reason_block)
+            };
+            let ctx = ai_gateway::prompt::DynamicContext::new(question.clone())
+                .with_facts_opt(if facts.is_empty() { None } else { Some(facts.as_str()) })
+                .with_role(format!("你是被综合官点名补充视角的魂。你的任务是：{}", question));
+            let prompt = pb.build_summon(soul_profile, &ctx, &tier, false);
+            let config = CallConfig {
+                temperature: 0.7,
+                max_tokens: 16384,
+                stream: true,
+                model: None,
+                reasoning_effort: Some(foundation::ReasoningEffort::Think),
+                structured_output: None,
+                thinking_enabled: None,
+                tools: None,
+                tool_choice: None,
+            };
+            (LLMRequest { provider, prompt, config }, soul_profile.name.clone())
+        } else {
+            let config = CallConfig {
+                temperature: 0.7,
+                max_tokens: 16384,
+                stream: true,
+                model: None,
+                reasoning_effort: Some(foundation::ReasoningEffort::Think),
+                structured_output: None,
+                thinking_enabled: None,
+                tools: None,
+                tool_choice: None,
+            };
+            (LLMRequest {
+                provider,
+                prompt: Prompt {
+                    messages: vec![
+                        PromptMessage {
+                            role: "system".into(),
+                            content: banner_lord.summon_prompt.clone(),
+                            reasoning_content: None,
+                            tool_call_id: None,
+                            tool_calls: None,
+                        },
+                        PromptMessage {
+                            role: "user".into(),
+                            content: user_prompt,
+                            reasoning_content: None,
+                            tool_call_id: None,
+                            tool_calls: None,
+                        },
+                    ],
+                },
+                config,
+            }, soul_name.clone())
         };
 
         match gateway.call(&req) {
             Ok(rx) => {
-                match possession::stream::stream_synthesis(rx, &session_id, &ws).await {
-                    Ok((content, _)) => {
-                        let msg = foundation::Message {
-                            id: uuid::Uuid::new_v4().to_string(),
-                            session_id,
-                            role: foundation::MessageRole::Synthesis,
-                            soul_name: Some(banner_lord.name),
-                            content,
-                            seq: 991,
-                            created_at: chrono::Utc::now(),
-                        };
-                        let _ = archive.append_message(&msg).await;
-                    }
-                    Err(e) => {
-                        tracing::error!("Follow-up agent stream error: {}", e);
-                        let _ = ws.broadcast_system(
-                            &session_id,
-                            &possession::WsEvent {
-                                event_type: possession::WsEventType::Error,
-                                payload: format!("流式响应错误: {}", e),
+                if is_soul_summon {
+                    // 直接以魂身份流式输出 — 不走 synthesis
+                    match possession::stream::stream_single_soul(rx, &session_id, &effective_soul_name, &ws).await {
+                        output => {
+                            let content = output.content.clone();
+                            let notes = output.error.clone().unwrap_or_default();
+                            let msg = foundation::Message {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                session_id: session_id.clone(),
+                                role: foundation::MessageRole::Soul,
+                                soul_name: Some(effective_soul_name.clone()),
+                                content,
+                                seq: 991,
+                                created_at: chrono::Utc::now(),
+                            };
+                            let _ = archive.append_message(&msg).await;
+                            let record = foundation::CallRecord {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                session_id: session_id.clone(),
+                                soul_name: effective_soul_name.clone(),
+                                mode: foundation::PossessionMode::Conference,
+                                task_summary: question.clone(),
+                                effectiveness: if output.error.is_some() { foundation::Effectiveness::Invalid } else { foundation::Effectiveness::Effective },
+                                notes: format!("[summoned-via-recommendation]{}", notes),
+                                created_at: chrono::Utc::now(),
+                                self_negation: None,
+                                empty_chair: None,
+                                user_feedback: None,
+                                usage: output.usage,
+                            };
+                            let _ = archive.record_call(&record).await;
+                            let _ = ws.broadcast_system(&session_id, &possession::WsEvent {
+                                event_type: possession::WsEventType::SoulDone,
+                                payload: String::new(),
                                 reasoning_content: None,
-                                soul_name: None,
+                                soul_name: Some(soul_name.clone()),
                                 seq: 0,
-                            },
-                        );
+                            });
+                        }
+                    }
+                } else {
+                    match possession::stream::stream_synthesis(rx, &session_id, &ws).await {
+                        Ok((content, usage)) => {
+                            let msg = foundation::Message {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                session_id: session_id.clone(),
+                                role: foundation::MessageRole::Synthesis,
+                                soul_name: Some(banner_lord.name.clone()),
+                                content,
+                                seq: 991,
+                                created_at: chrono::Utc::now(),
+                            };
+                            let _ = archive.append_message(&msg).await;
+                            let record = foundation::CallRecord {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                session_id: session_id.clone(),
+                                soul_name: banner_lord.name,
+                                mode: foundation::PossessionMode::Conference,
+                                task_summary: question.clone(),
+                                effectiveness: foundation::Effectiveness::Partial,
+                                notes: "[follow-up]".to_string(),
+                                created_at: chrono::Utc::now(),
+                                self_negation: None,
+                                empty_chair: None,
+                                user_feedback: None,
+                                usage,
+                            };
+                            let _ = archive.record_call(&record).await;
+                        }
+                        Err(e) => {
+                            tracing::error!("Follow-up agent stream error: {}", e);
+                            let _ = ws.broadcast_system(
+                                &session_id,
+                                &possession::WsEvent {
+                                    event_type: possession::WsEventType::Error,
+                                    payload: format!("流式响应错误: {}", e),
+                                    reasoning_content: None,
+                                    soul_name: None,
+                                    seq: 0,
+                                },
+                            );
+                        }
                     }
                 }
             }
@@ -1179,12 +1338,24 @@ async fn follow_up(
 
     let mut question = String::new();
     let mut attachments: Vec<AttachmentContent> = Vec::new();
+    let mut requested_soul = String::new();
+    let mut search_enabled = true; // default: enabled
 
     while let Ok(Some(field)) = multipart.next_field().await {
         match field.name() {
             Some("question") => {
                 if let Ok(text) = field.text().await {
                     question = text;
+                }
+            }
+            Some("soul") => {
+                if let Ok(text) = field.text().await {
+                    requested_soul = text;
+                }
+            }
+            Some("search") => {
+                if let Ok(text) = field.text().await {
+                    search_enabled = text == "true" || text == "1";
                 }
             }
             Some("attachments") => {
@@ -1238,26 +1409,92 @@ async fn follow_up(
     let sid = session_id.clone();
     ws.create_session(&sid);
 
-    let history: Vec<String> = match state.archive.get_session_detail(&session_id).await {
-        Ok(session) => {
-            session.messages.iter().map(|m| format!("[{:?}] {}: {}", m.role, m.soul_name.as_deref().unwrap_or("系统"), m.content)).collect()
+    // 优先用 observation 摘要替代原始魂输出作为追问上下文。
+    // 6 个 observation ~600 字 vs 6 篇魂原文 ~20K 字，省两个数量级。
+    // 自动蒸馏在 SessionComplete 前触发，但因异步可能尚未完成——轮询等待最多 8s。
+    let mut history: Vec<String> = {
+        let mut obs_result = state.archive.get_session_observations(&session_id).await;
+        if obs_result.as_ref().map_or(true, |o| o.is_empty()) {
+            tracing::info!("Observations not ready yet for {}, waiting up to 8s for distill...", session_id);
+            for _ in 0..8 {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                obs_result = state.archive.get_session_observations(&session_id).await;
+                if obs_result.as_ref().map_or(false, |o| !o.is_empty()) {
+                    break;
+                }
+            }
         }
-        Err(e) => {
-            tracing::warn!("Session not found: {}, proceeding with basic prompt", e);
-            vec![]
+        match obs_result {
+            Ok(obs) if !obs.is_empty() => {
+                tracing::info!("Using {} observations as context for follow-up", obs.len());
+                let mut ctx = vec![format!("## 历史会话核心观点（observation 摘要，{} 条）", obs.len())];
+                for o in &obs {
+                    let soul = o.soul_name.as_deref().unwrap_or("综合");
+                    ctx.push(format!("- [{}] {}: {}", soul, o.title, o.content));
+                }
+                ctx
+            }
+            _ => {
+                tracing::info!("Falling back to full message history for follow-up");
+                match state.archive.get_session_detail(&session_id).await {
+                    Ok(session) => {
+                        session.messages.iter().map(|m| format!("[{:?}] {}: {}", m.role, m.soul_name.as_deref().unwrap_or("系统"), m.content)).collect()
+                    }
+                    Err(e) => {
+                        tracing::warn!("Session not found: {}, proceeding with basic prompt", e);
+                        vec![]
+                    }
+                }
+            }
         }
     };
+    // Truncate to recent context only — LLM context window is finite
+    const MAX_HISTORY_ENTRIES: usize = 60;
+    if history.len() > MAX_HISTORY_ENTRIES {
+        let keep = history.len() - MAX_HISTORY_ENTRIES;
+        history.drain(..keep);
+    }
 
-    let reviewer_name = std::env::var("AIONUI_REVIEWER_SOUL").unwrap_or_else(|_| "未明子".to_string());
-    let banner_lord = state.registry.get_soul(&reviewer_name).map_err(|e| {
-        tracing::error!("Reviewer soul not found: {}", e);
-        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("审查官 {} 不可用", reviewer_name) }))
-    })?;
+    // If frontend specified a soul, use it; otherwise fall back to default banner lord
+    let responder = if !requested_soul.is_empty() {
+        match state.registry.get_soul(&requested_soul) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("Requested soul '{}' not found, falling back to default: {}", requested_soul, e);
+                let reviewer_name = std::env::var("AIONUI_REVIEWER_SOUL").unwrap_or_else(|_| "未明子".to_string());
+                state.registry.get_soul(&reviewer_name).map_err(|_| {
+                    (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("审查官 {} 不可用", reviewer_name) }))
+                })?
+            }
+        }
+    } else {
+        let reviewer_name = std::env::var("AIONUI_REVIEWER_SOUL").unwrap_or_else(|_| "未明子".to_string());
+        state.registry.get_soul(&reviewer_name).map_err(|_| {
+            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("审查官 {} 不可用", reviewer_name) }))
+        })?
+    };
 
     let gateway = state.engine.gateway().clone();
     let archive = state.archive.clone();
     let collector = state.collector.clone();
     let attachment_count = attachments.len();
+
+    // When a specific soul is requested, pass it as summoned_soul so it outputs
+    // directly as a sub-agent rather than through the synthesis pipeline.
+    let default_banner_lord = || -> Result<SoulProfile, _> {
+        let reviewer_name = std::env::var("AIONUI_REVIEWER_SOUL").unwrap_or_else(|_| "未明子".to_string());
+        state.registry.get_soul(&reviewer_name).map_err(|_| {
+            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("审查官 {} 不可用", reviewer_name) }))
+        })
+    };
+
+    let (banner_lord, summoned_soul) = if !requested_soul.is_empty() {
+        let soul_profile = responder; // already looked up above
+        let reason = format!("综合官在合议后发现需要补充你的视角。你的专属分析任务是：{}", question);
+        (default_banner_lord()?, Some((soul_profile, reason)))
+    } else {
+        (responder, None)
+    };
 
     let _ = spawn_follow_up_agent(
         gateway,
@@ -1269,6 +1506,8 @@ async fn follow_up(
         ws,
         sid,
         archive,
+        summoned_soul,
+        search_enabled,
     );
 
     tracing::info!("Follow-up sub-agent spawned with {} attachments", attachment_count);
@@ -1375,4 +1614,260 @@ async fn ocr_upload(
     }
 
     Ok(Json(OcrUploadResponse { results }))
+}
+
+// ─────────────────────────────────────────────
+// 审查官入场审讯 — 合议前拦截
+// ─────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct InterrogateRequest { task: String }
+
+#[derive(Debug, Serialize)]
+struct InterrogateResponse {
+    gate_id: String,
+    questions: Vec<InterrogationQuestion>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InterrogateRespondRequest {
+    answers: Vec<QuestionAnswer>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QuestionAnswer {
+    question_index: usize,
+    answer: String,
+}
+
+#[derive(Debug, Serialize)]
+struct InterrogateVerdictResponse {
+    passed: bool,
+    reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    questions: Option<Vec<InterrogationQuestion>>,
+    /// 审查官可能改写后的 finalized task（通过时）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refined_task: Option<String>,
+}
+
+/// POST /interrogate
+/// 使用者提交议题 → 审查官生成 2-4 反问卡 → 返回 gate_id + questions
+async fn start_interrogation(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<InterrogateRequest>,
+) -> Result<Json<InterrogateResponse>, (axum::http::StatusCode, Json<ApiError>)> {
+    let gateway = state.engine.gateway().clone();
+    let pb = ai_gateway::prompt::PromptBuilder::new();
+    let prompt = pb.build_interrogation_prompt(&body.task);
+
+    let provider = pick_provider(&state)?;
+    let req = LLMRequest {
+        provider,
+        prompt,
+        config: CallConfig {
+            temperature: 0.6,
+            max_tokens: 1024,
+            stream: false,
+            ..Default::default()
+        },
+    };
+
+    let mut rx = gateway.call(&req).map_err(|e| {
+        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() }))
+    })?;
+
+    let mut raw = String::new();
+    while let Some(r) = rx.recv().await {
+        if let Ok(c) = r { raw.push_str(&c.content); }
+    }
+
+    let trimmed = raw.trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    match serde_json::from_str::<Vec<InterrogationQuestion>>(trimmed) {
+        Ok(questions) => {
+            let gate_id = uuid::Uuid::new_v4().to_string();
+            let gate = InterrogationGate {
+                _gate_id: gate_id.clone(),
+                task: body.task.clone(),
+                questions: questions.clone(),
+                qa_rounds: vec![],
+                _created_at: Instant::now(),
+            };
+            state.interrogation_gates.insert(gate_id.clone(), gate);
+
+            if questions.is_empty() {
+                // 审查官不可缴械——重试一次
+                tracing::warn!("审查官返回空反问数组，重试…");
+                let retry_raw = {
+                    let retry_req = LLMRequest {
+                        provider: provider.clone(),
+                        prompt: pb.build_interrogation_prompt(&body.task),
+                        config: CallConfig { temperature: 0.8, max_tokens: 1024, stream: false, ..Default::default() },
+                    };
+                    let mut retry_rx = gateway.call(&retry_req).map_err(|e| {
+                        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() }))
+                    })?;
+                    let mut buf = String::new();
+                    while let Some(r) = retry_rx.recv().await {
+                        if let Ok(c) = r { buf.push_str(&c.content); }
+                    }
+                    buf.trim()
+                        .trim_start_matches("```json")
+                        .trim_start_matches("```")
+                        .trim_end_matches("```")
+                        .trim()
+                        .to_string()
+                };
+                let retry_questions = serde_json::from_str::<Vec<InterrogationQuestion>>(&retry_raw)
+                    .unwrap_or_else(|e| {
+                        tracing::error!("审查官重试反问仍失败: {} (raw={})", e, retry_raw);
+                        vec![
+                            InterrogationQuestion { text: "你提问是为了什么——分析问题，还是推迟决定？".into(), required: true },
+                            InterrogationQuestion { text: "在明天结束之前，你准备因为这个提问做什么具体动作？".into(), required: true },
+                        ]
+                    });
+                if retry_questions.is_empty() {
+                    // 最后的硬编码底线——审查官可被罢免，但门不能空
+                    return Err((
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ApiError { error: "审查官未能生成反问，请稍后重试".into() }),
+                    ));
+                }
+                Ok(Json(InterrogateResponse {
+                    gate_id,
+                    questions: retry_questions,
+                    message: None,
+                }))
+            } else {
+                Ok(Json(InterrogateResponse {
+                    gate_id,
+                    questions,
+                    message: None,
+                }))
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to parse interrogation questions: {} (raw={})", e, raw);
+            Err((
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError { error: format!("审查官反问解析失败: {}", e) }),
+            ))
+        }
+    }
+}
+
+/// POST /interrogate/:gate_id/respond
+/// 使用者提交对反问的回答 → 审查官裁决是否通过
+async fn submit_interrogation(
+    State(state): State<Arc<AppState>>,
+    Path(gate_id): Path<String>,
+    Json(body): Json<InterrogateRespondRequest>,
+) -> Result<Json<InterrogateVerdictResponse>, (axum::http::StatusCode, Json<ApiError>)> {
+    // 查找 gate
+    let mut gate = state.interrogation_gates
+        .get_mut(&gate_id)
+        .ok_or_else(|| {
+            (axum::http::StatusCode::NOT_FOUND, Json(ApiError { error: "审讯门未找到，可能已过期".into() }))
+        })?;
+
+    // 按 question_index 排序配对
+    let mut qa: Vec<(String, String)> = vec![];
+    for ans in &body.answers {
+        if let Some(q) = gate.questions.get(ans.question_index) {
+            qa.push((q.text.clone(), ans.answer.clone()));
+        }
+    }
+    gate.qa_rounds.push(qa.clone());
+
+    // 如果无反问，直接通过
+    if gate.questions.is_empty() {
+        return Ok(Json(InterrogateVerdictResponse {
+            passed: true,
+            reason: "无需反问。".into(),
+            questions: None,
+            refined_task: Some(gate.task.clone()),
+        }));
+    }
+
+    // 构建裁决 prompt
+    let pb = ai_gateway::prompt::PromptBuilder::new();
+    let vendict_prompt = pb.build_interrogation_verdict(&gate.task, &qa);
+
+    let gateway = state.engine.gateway().clone();
+    let provider = pick_provider(&state)?;
+    let req = LLMRequest {
+        provider,
+        prompt: vendict_prompt,
+        config: CallConfig {
+            temperature: 0.3,
+            max_tokens: 512,
+            stream: false,
+            ..Default::default()
+        },
+    };
+
+    let mut rx = gateway.call(&req).map_err(|e| {
+        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() }))
+    })?;
+
+    let mut raw = String::new();
+    while let Some(r) = rx.recv().await {
+        if let Ok(c) = r { raw.push_str(&c.content); }
+    }
+
+    let trimmed = raw.trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    #[derive(Deserialize)]
+    struct RawVerdict {
+        passed: bool,
+        reason: String,
+        #[serde(default)]
+        questions: Option<Vec<InterrogationQuestion>>,
+    }
+
+    match serde_json::from_str::<RawVerdict>(trimmed) {
+        Ok(v) => {
+            // 若有追加反问，更新 gate 状态
+            if let Some(ref extra) = v.questions {
+                if !extra.is_empty() {
+                    gate.questions = extra.clone();
+                }
+            }
+
+            if v.passed {
+                state.interrogation_gates.remove(&gate_id);
+                Ok(Json(InterrogateVerdictResponse {
+                    passed: true,
+                    reason: v.reason,
+                    questions: None,
+                    refined_task: Some(gate.task.clone()),
+                }))
+            } else {
+                Ok(Json(InterrogateVerdictResponse {
+                    passed: false,
+                    reason: v.reason,
+                    questions: v.questions,
+                    refined_task: None,
+                }))
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to parse verdict JSON: {} (raw={})", e, raw);
+            Err((
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError { error: format!("审查官裁决解析失败: {}", e) }),
+            ))
+        }
+    }
 }

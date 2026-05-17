@@ -83,10 +83,16 @@ pub async fn distill_session(
         });
     }
 
-    // Build conversation text for the prompt (truncate to ~8000 chars to fit context)
+    // Build conversation text for the prompt (truncate to ~8000 bytes, UTF-8 safe)
     let conversation = build_conversation_text(&messages, &session.title);
     let truncated = if conversation.len() > 8000 {
-        format!("{}...(共 {} 字符，已截断)", &conversation[..8000], conversation.len())
+        let boundary = conversation
+            .char_indices()
+            .take_while(|(i, _)| *i < 8000)
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0);
+        format!("{}...(共 {} 字符，已截断)", &conversation[..boundary], conversation.len())
     } else {
         conversation
     };
@@ -129,9 +135,13 @@ pub async fn distill_session(
     })?;
 
     let mut raw = String::new();
+    let mut distill_usage = foundation::UsageStats::default();
     while let Some(r) = rx.recv().await {
         match r {
-            Ok(c) => raw.push_str(&c.content),
+            Ok(c) => {
+                if let Some(u) = c.usage { distill_usage = u; }
+                raw.push_str(&c.content);
+            }
             Err(e) => {
                 tracing::warn!("distill chunk error: {}", e);
                 break;
@@ -191,6 +201,23 @@ pub async fn distill_session(
     let count = rows.len();
     store.insert_session_observations(&rows).await?;
     store.update_session_digest(session_id, &parsed.summary).await?;
+
+    if distill_usage.total_tokens > 0 {
+        let _ = store.record_call(&foundation::CallRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            session_id: session_id.to_string(),
+            soul_name: "蒸馏官".to_string(),
+            mode: foundation::PossessionMode::Conference,
+            task_summary: format!("distill: {}", &parsed.summary[..parsed.summary.len().min(80)]),
+            effectiveness: foundation::Effectiveness::Effective,
+            notes: "[distill]".to_string(),
+            created_at: Utc::now(),
+            self_negation: None,
+            empty_chair: None,
+            user_feedback: None,
+            usage: distill_usage,
+        }).await;
+    }
 
     Ok(DigestSummary {
         summary: parsed.summary,

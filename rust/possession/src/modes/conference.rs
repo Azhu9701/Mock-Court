@@ -22,7 +22,7 @@ use super::topology;
 
 const MAX_PARALLEL_SOULS: usize = 10;
 const SOUL_TIMEOUT_SECS: u64 = 300;
-const MAX_INTERVENTION_ROUNDS: usize = 3;
+const _MAX_INTERVENTION_ROUNDS: usize = 3;
 
 // 用于魂流式输出的消息
 #[derive(Debug, Clone)]
@@ -101,6 +101,7 @@ pub async fn run(
                         presets.unknown.as_deref(),
                         tier,
                         presets.search_results.as_deref(),
+                        presets.interrogation_context.as_deref(),
                     )
                 } else if use_cache {
                     prompt_builder.build_summon_cached(
@@ -110,6 +111,7 @@ pub async fn run(
                         presets.unknown.as_deref(),
                         tier,
                         presets.search_results.as_deref(),
+                        presets.interrogation_context.as_deref(),
                     )
                 } else {
                     prompt_builder.build_summon_prompt(
@@ -119,6 +121,7 @@ pub async fn run(
                         presets.unknown.as_deref(),
                         tier,
                         presets.search_results.as_deref(),
+                        presets.interrogation_context.as_deref(),
                     )
                 };
                 profiles.push(profile.clone());
@@ -297,6 +300,23 @@ pub async fn run(
                     .collect();
                 crate::emit_session_cost(system_tx, &per_soul_costs, Some(synth_usage.total_tokens));
 
+                if synth_usage.total_tokens > 0 {
+                    let _ = store.record_call(&foundation::CallRecord {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        session_id: session_id.to_string(),
+                        soul_name: "综合官".to_string(),
+                        mode: foundation::PossessionMode::Conference,
+                        task_summary: task.to_string(),
+                        effectiveness: foundation::Effectiveness::Effective,
+                        notes: "[synthesis]".to_string(),
+                        created_at: chrono::Utc::now(),
+                        self_negation: None,
+                        empty_chair: None,
+                        user_feedback: None,
+                        usage: synth_usage,
+                    }).await;
+                }
+
                 if let Err(e) = store.archive_synthesis(session_id, &content).await {
                     tracing::error!("Failed to archive synthesis: {}", e);
                 }
@@ -343,25 +363,136 @@ pub async fn run(
                     card_config.stream = false;
                 }
                 let card_req = LLMRequest { provider: card_provider, prompt: card_prompt, config: card_config };
-                if let Ok(mut card_rx) = gateway.call(&card_req) {
-                    let mut card = String::new();
-                    while let Some(r) = card_rx.recv().await {
-                        if let Ok(c) = r { card.push_str(&c.content); }
+
+                // ── Knowledge card + Annotation pass: parallel LLM calls ──
+                let annotation_prompt = prompt_builder.build_annotation_prompt(task, &synthesis_outputs);
+                let annotation_req = LLMRequest {
+                    provider: synthesis_provider.clone(),
+                    prompt: annotation_prompt,
+                    config: CallConfig { temperature: 0.4, max_tokens: 4096, stream: false, ..Default::default() },
+                };
+
+                let card_fut = async {
+                    if let Ok(mut card_rx) = gateway.call(&card_req) {
+                        let mut card = String::new();
+                        let mut card_usage = foundation::UsageStats::default();
+                        while let Some(r) = card_rx.recv().await {
+                            if let Ok(c) = r {
+                                if let Some(u) = c.usage { card_usage = u; }
+                                card.push_str(&c.content);
+                            }
+                        }
+                        if !card.is_empty() {
+                            let card_entity = KnowledgeCard {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                title: task.to_string(),
+                                content: card,
+                                source_soul: None,
+                                source_session: Some(session_id.to_string()),
+                                tags: souls.to_vec(),
+                                created_at: chrono::Utc::now(),
+                                updated_at: chrono::Utc::now(),
+                            };
+                            let _ = store.insert_knowledge_card(&card_entity).await;
+                        }
+                        if card_usage.total_tokens > 0 {
+                            let _ = store.record_call(&foundation::CallRecord {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                session_id: session_id.to_string(),
+                                soul_name: "综合官".to_string(),
+                                mode: foundation::PossessionMode::Conference,
+                                task_summary: task.to_string(),
+                                effectiveness: foundation::Effectiveness::Effective,
+                                notes: "[knowledge_card]".to_string(),
+                                created_at: chrono::Utc::now(),
+                                self_negation: None,
+                                empty_chair: None,
+                                user_feedback: None,
+                                usage: card_usage,
+                            }).await;
+                        }
                     }
-                    if !card.is_empty() {
-                        let card_entity = KnowledgeCard {
+                };
+
+                let ann_fut = async {
+                    if let Ok(mut ann_rx) = gateway.call(&annotation_req) {
+                    let mut raw = String::new();
+                    let mut ann_usage = foundation::UsageStats::default();
+                    while let Some(r) = ann_rx.recv().await {
+                        if let Ok(c) = r {
+                            if let Some(u) = c.usage { ann_usage = u; }
+                            raw.push_str(&c.content);
+                        }
+                    }
+                    if ann_usage.total_tokens > 0 {
+                        let _ = store.record_call(&foundation::CallRecord {
                             id: uuid::Uuid::new_v4().to_string(),
-                            title: task.to_string(),
-                            content: card.clone(),
-                            source_soul: None,
-                            source_session: Some(session_id.to_string()),
-                            tags: souls.to_vec(),
+                            session_id: session_id.to_string(),
+                            soul_name: "批注官".to_string(),
+                            mode: foundation::PossessionMode::Conference,
+                            task_summary: task.to_string(),
+                            effectiveness: foundation::Effectiveness::Effective,
+                            notes: "[annotation]".to_string(),
                             created_at: chrono::Utc::now(),
-                            updated_at: chrono::Utc::now(),
-                        };
-                        let _ = store.insert_knowledge_card(&card_entity).await;
+                            self_negation: None,
+                            empty_chair: None,
+                            user_feedback: None,
+                            usage: ann_usage,
+                        }).await;
                     }
-                }
+                    let trimmed = raw.trim();
+                    let json_str = trimmed
+                        .trim_start_matches("```json")
+                        .trim_start_matches("```")
+                        .trim_end_matches("```")
+                        .trim();
+                    match serde_json::from_str::<Vec<serde_json::Value>>(json_str) {
+                        Ok(items) => {
+                            let now = chrono::Utc::now();
+                            let annotations: Vec<foundation::Annotation> = items.iter().filter_map(|v| {
+                                Some(foundation::Annotation {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    session_id: session_id.to_string(),
+                                    source_soul: v.get("source_soul")?.as_str()?.to_string(),
+                                    target_soul: v.get("target_soul")?.as_str()?.to_string(),
+                                    target_excerpt: v.get("target_excerpt")?.as_str()?.to_string(),
+                                    comment: v.get("comment")?.as_str()?.to_string(),
+                                    kind: v.get("kind").and_then(|k| k.as_str()).unwrap_or("nuance").to_string(),
+                                    created_at: now,
+                                })
+                            }).collect();
+                            if !annotations.is_empty() {
+                                match store.insert_annotations(&annotations).await {
+                                    Ok(_) => {
+                                        let payload = serde_json::to_string(&annotations)
+                                            .unwrap_or_else(|_| "[]".to_string());
+                                        let _ = system_tx.try_send(WsEvent {
+                                            event_type: WsEventType::AnnotationsReady,
+                                            payload,
+                                            reasoning_content: None,
+                                            soul_name: None,
+                                            seq: 0,
+                                        }).ok();
+                                        tracing::info!(
+                                            "Persisted {} marginalia annotations for session {}",
+                                            annotations.len(),
+                                            session_id
+                                        );
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to persist annotations: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to parse annotation JSON: {} (raw len={})", e, raw.len());
+                        }
+                    }
+                    }
+                };
+
+                tokio::join!(card_fut, ann_fut);
             }
         }
 
@@ -403,7 +534,7 @@ async fn run_soul_with_tools(
     let max_rounds = crate::tools::max_tool_rounds();
     let mut history: Vec<foundation::PromptMessage> = prompt.messages.clone();
     let name = soul_name.to_string();
-    let mut intervention_count = 0usize;
+    let mut _intervention_count = 0usize;
 
     for _round in 0..max_rounds {
         let req = foundation::LLMRequest {
@@ -428,71 +559,6 @@ async fn run_soul_with_tools(
         ).await;
 
         match outcome {
-            StreamOutcome::Interrupted { partial_content, partial_tool_calls, intervention } => {
-                intervention_count += 1;
-
-                // 注入部分输出到历史
-                if !partial_content.is_empty() {
-                    history.push(foundation::PromptMessage {
-                        role: "assistant".to_string(),
-                        content: partial_content,
-                        reasoning_content: None,
-                        tool_calls: if partial_tool_calls.is_empty() { None } else { Some(partial_tool_calls) },
-                        tool_call_id: None,
-                    });
-                }
-
-                // 将干预转为 user 消息注入，迫使魂在下轮推理中回应
-                let intervention_msg = intervention_to_message(&intervention);
-                history.push(foundation::PromptMessage {
-                    role: "user".to_string(),
-                    content: intervention_msg,
-                    reasoning_content: None,
-                    tool_calls: None,
-                    tool_call_id: None,
-                });
-
-                // 干预轮次上限保护，避免死循环
-                if intervention_count >= MAX_INTERVENTION_ROUNDS {
-                    tracing::warn!(
-                        "Soul '{}' reached max intervention rounds ({}), forcing completion",
-                        name, MAX_INTERVENTION_ROUNDS
-                    );
-                    // 最后再调一次 LLM 并正常返回
-                    let final_req = foundation::LLMRequest {
-                        provider: provider.clone(),
-                        prompt: foundation::Prompt { messages: history.clone() },
-                        config: config.clone(),
-                    };
-                    if let Ok(final_rx) = gw.call(&final_req) {
-                        let final_outcome = stream_single_soul_with_detection(
-                            final_rx, session_id, &name, ws, chunk_tx.clone(), &mut intervention_rx,
-                        ).await;
-                        if let StreamOutcome::Completed(output) = final_outcome {
-                            return output;
-                        }
-                    }
-                    return SoulOutput {
-                        soul_name: name,
-                        content: history.iter()
-                            .filter(|m| m.role == "assistant")
-                            .map(|m| m.content.clone())
-                            .collect::<Vec<_>>()
-                            .join("\n\n"),
-                        usage: foundation::UsageStats::default(),
-                        error: None,
-                        tool_calls: Vec::new(),
-                    };
-                }
-
-                // 继续循环，用带干预消息的 history 重新调 LLM
-                tracing::info!(
-                    "Soul '{}' restarting inference after intervention #{}, history_len={}",
-                    name, intervention_count, history.len()
-                );
-                continue;
-            }
-
             StreamOutcome::Completed(output) => {
                 if output.error.is_some() {
                     return output;
@@ -570,7 +636,7 @@ async fn run_soul_with_tools(
 }
 
 /// 将干预决策转为注入魂对话的 user 消息
-fn intervention_to_message(decision: &InterventionDecision) -> String {
+fn _intervention_to_message(decision: &InterventionDecision) -> String {
     match decision {
         InterventionDecision::InjectQuestion { question } => {
             format!(
@@ -594,14 +660,8 @@ fn intervention_to_message(decision: &InterventionDecision) -> String {
     }
 }
 
-/// 流式输出结果：完成或被干预打断
 enum StreamOutcome {
     Completed(SoulOutput),
-    Interrupted {
-        partial_content: String,
-        partial_tool_calls: Vec<foundation::ToolCall>,
-        intervention: InterventionDecision,
-    },
 }
 
 /// 流式输出单个魂，同时发送给交叉检测器，并监听实时干预信号
@@ -713,23 +773,14 @@ async fn stream_single_soul_with_detection(
             intervention = intervention_rx.recv() => {
                 match intervention {
                     Some(decision) => {
+                        // Marginalia mode: don't interrupt, just log.
                         tracing::info!(
-                            "Soul '{}' interrupted mid-stream with {:?}, partial_content={} chars",
-                            name, decision, content.len()
+                            "Soul '{}' received intervention {:?} mid-stream — suppressed (marginalia mode)",
+                            name, decision
                         );
-                        let system_tx = chunk_tx.clone();
-                        let _ = system_tx.send(SoulStreamMessage::Chunk {
-                            soul_name: name.clone(),
-                            token: format!("\n\n[干预信号: {:?}]\n", decision),
-                        });
-                        return StreamOutcome::Interrupted {
-                            partial_content: content,
-                            partial_tool_calls: tool_calls,
-                            intervention: decision,
-                        };
+                        continue;
                     }
                     None => {
-                        // 干预通道关闭，继续等待 LLM
                         continue;
                     }
                 }
