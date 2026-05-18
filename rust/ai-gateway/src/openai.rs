@@ -12,6 +12,7 @@ pub struct OpenAIClient {
     client: Client,
     base_url: String,
     provider_type: Provider,
+    system_prompt_override: Option<String>,
 }
 
 impl OpenAIClient {
@@ -23,6 +24,7 @@ impl OpenAIClient {
             model,
             base_url: "https://api.openai.com/v1".into(),
             provider_type: Provider::OpenAI,
+            system_prompt_override: None,
             client: Client::builder()
                 .timeout(Duration::from_secs(120))
                 .build()
@@ -36,11 +38,14 @@ impl OpenAIClient {
         let model = std::env::var("LMSTUDIO_MODEL").unwrap_or_else(|_| "local-model".into());
         let base_url = std::env::var("LMSTUDIO_BASE_URL")
             .unwrap_or_else(|_| "http://localhost:1234/v1".into());
+        let system_prompt_override = std::env::var("LMSTUDIO_SYSTEM_PROMPT").ok()
+            .filter(|s| !s.is_empty());
         OpenAIClient {
             api_key,
             model,
             base_url,
             provider_type: Provider::LMStudio,
+            system_prompt_override,
             client: Client::builder()
                 .timeout(Duration::from_secs(300)) // 本地模型可能较慢
                 .build()
@@ -81,20 +86,43 @@ impl Gateway for OpenAIClient {
         let base_url = self.base_url.clone();
         let config = config.clone();
 
-        let messages: Vec<serde_json::Value> = prompt
-            .messages
-            .iter()
-            .map(|m| {
-                let mut msg = serde_json::json!({"role": m.role, "content": m.content});
-                if let Some(tc) = &m.tool_calls {
-                    msg["tool_calls"] = serde_json::to_value(tc).unwrap();
+        let messages: Vec<serde_json::Value> = {
+            let mut msgs: Vec<serde_json::Value> = prompt
+                .messages
+                .iter()
+                .map(|m| {
+                    let mut msg = serde_json::json!({"role": m.role, "content": m.content});
+                    if let Some(tc) = &m.tool_calls {
+                        msg["tool_calls"] = serde_json::to_value(tc).unwrap();
+                    }
+                    if let Some(tcid) = &m.tool_call_id {
+                        msg["tool_call_id"] = serde_json::json!(tcid);
+                    }
+                    msg
+                })
+                .collect();
+
+            // LM Studio: 注入系统提示词，追加在已有 system message 后面
+            if let Some(ref sp) = self.system_prompt_override {
+                if let Some(first) = msgs.first() {
+                    if first["role"].as_str() == Some("system") {
+                        // 找到最后一条连续的 system message，拼接在它后面
+                        let last_sys_idx = msgs.iter()
+                            .position(|m| m["role"].as_str() != Some("system"))
+                            .map(|i| i.saturating_sub(1))
+                            .unwrap_or(msgs.len() - 1);
+                        let existing = msgs[last_sys_idx]["content"].as_str().unwrap_or("");
+                        msgs[last_sys_idx]["content"] = serde_json::json!(format!("{}\n\n{}", existing, sp));
+                    } else {
+                        msgs.insert(0, serde_json::json!({"role": "system", "content": sp}));
+                    }
+                } else {
+                    msgs.insert(0, serde_json::json!({"role": "system", "content": sp}));
                 }
-                if let Some(tcid) = &m.tool_call_id {
-                    msg["tool_call_id"] = serde_json::json!(tcid);
-                }
-                msg
-            })
-            .collect();
+            }
+
+            msgs
+        };
 
         let use_stream = config.stream || !is_lmstudio; // 尊重 config.stream 设置
         let mut body = serde_json::json!({
