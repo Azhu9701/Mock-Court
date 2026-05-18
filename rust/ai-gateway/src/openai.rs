@@ -96,7 +96,7 @@ impl Gateway for OpenAIClient {
             })
             .collect();
 
-        let use_stream = !is_lmstudio; // LM Studio: go non-streaming to avoid compatibility issues
+        let use_stream = config.stream || !is_lmstudio; // 尊重 config.stream 设置
         let mut body = serde_json::json!({
             "model": model,
             "messages": messages,

@@ -60,6 +60,7 @@ pub struct GatewayRegistry {
     providers: HashMap<Provider, Arc<dyn Gateway>>,
     all_info: Vec<ProviderInfo>,
     cache: Arc<RwLock<Option<Arc<LlMCache>>>>,
+    preferred_provider: Arc<RwLock<Option<Provider>>>,
 }
 
 impl GatewayRegistry {
@@ -121,11 +122,26 @@ impl GatewayRegistry {
         });
         providers.insert(Provider::LMStudio, Arc::new(lmstudio));
 
-        GatewayRegistry { providers, all_info, cache: Arc::new(RwLock::new(None)) }
+        GatewayRegistry { providers, all_info, cache: Arc::new(RwLock::new(None)), preferred_provider: Arc::new(RwLock::new(None)) }
     }
 
     pub fn list_providers(&self) -> Vec<ProviderInfo> {
         self.all_info.clone()
+    }
+
+    pub fn set_preferred_provider(&self, provider: Option<Provider>) {
+        let mut p = self.preferred_provider.write().expect("lock poisoned");
+        *p = provider;
+    }
+
+    pub fn pick_provider(&self) -> Option<Provider> {
+        let pref = self.preferred_provider.read().expect("lock poisoned").clone();
+        if let Some(ref p) = pref {
+            if self.providers.contains_key(p) {
+                return Some(*p);
+            }
+        }
+        self.providers.keys().next().copied()
     }
 
     pub fn set_cache(&self, cache: Arc<LlMCache>) {

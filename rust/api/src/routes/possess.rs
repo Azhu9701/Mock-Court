@@ -107,22 +107,10 @@ struct AnalyzeRequest { task: String, #[serde(default)] judgment: Option<String>
 struct SoulMatch { name: String, field: String, ismism_code: String, rationale: String }
 
 fn pick_provider(state: &AppState) -> Result<Provider, (axum::http::StatusCode, Json<ApiError>)> {
-    let providers = state.engine.gateway().list_providers();
-    let preferred = state.preferred_provider.read().unwrap().clone();
-
-    // 有偏好时优先用偏好 provider
-    if let Some(ref pref) = preferred {
-        if let Some(info) = providers.iter().find(|i| i.provider == *pref && i.available) {
-            return Ok(info.provider);
-        }
-        tracing::warn!("Preferred provider {:?} not available, falling back", pref);
-    }
-
-    providers.into_iter().find(|i| i.available).map(|i| i.provider)
-        .ok_or_else(|| {
-            tracing::error!("No LLM provider available");
-            (axum::http::StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "No LLM provider".into() }))
-        })
+    state.engine.gateway().pick_provider().ok_or_else(|| {
+        tracing::error!("No LLM provider available");
+        (axum::http::StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "No LLM provider".into() }))
+    })
 }
 
 /// Extract a JSON object from text that may contain reasoning prose before/after the JSON.
@@ -221,11 +209,7 @@ fn spawn_banner_lord_review(
     soul_catalog: String,
 ) -> tokio::task::JoinHandle<Result<serde_json::Value, String>> {
     tokio::spawn(async move {
-        let provider = gateway
-            .list_providers()
-            .into_iter()
-            .find(|i| i.available)
-            .map(|i| i.provider)
+        let provider = gateway.pick_provider()
             .ok_or_else(|| "No LLM provider available".to_string())?;
 
         let review_system = format!(
@@ -1155,11 +1139,7 @@ fn spawn_follow_up_agent(
     search_enabled: bool,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let provider = gateway
-            .list_providers()
-            .into_iter()
-            .find(|i| i.available)
-            .map(|i| i.provider)
+        let provider = gateway.pick_provider()
             .unwrap_or(foundation::Provider::Claude);
 
         let is_soul_summon = summoned_soul.is_some();

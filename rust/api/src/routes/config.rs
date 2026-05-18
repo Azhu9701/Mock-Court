@@ -99,6 +99,7 @@ async fn set_provider(
         let mut pref = state.preferred_provider.write().unwrap();
         *pref = p;
     }
+    state.engine.gateway().set_preferred_provider(p);
     let provider = p.map(|p| format!("{:?}", p).to_lowercase());
     Ok(Json(ProviderResponse { provider }))
 }
