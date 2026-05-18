@@ -10,6 +10,8 @@ pub struct OpenAIClient {
     api_key: Option<String>,
     pub model: String,
     client: Client,
+    base_url: String,
+    provider_type: Provider,
 }
 
 impl OpenAIClient {
@@ -19,8 +21,27 @@ impl OpenAIClient {
         OpenAIClient {
             api_key,
             model,
+            base_url: "https://api.openai.com/v1".into(),
+            provider_type: Provider::OpenAI,
             client: Client::builder()
                 .timeout(Duration::from_secs(120))
+                .build()
+                .expect("Failed to build reqwest Client"),
+        }
+    }
+
+    pub fn new_lmstudio() -> Self {
+        let api_key = std::env::var("LMSTUDIO_API_KEY").ok().or_else(|| Some("lm-studio".into()));
+        let model = std::env::var("LMSTUDIO_MODEL").unwrap_or_else(|_| "local-model".into());
+        let base_url = std::env::var("LMSTUDIO_BASE_URL")
+            .unwrap_or_else(|_| "http://localhost:1234/v1".into());
+        OpenAIClient {
+            api_key,
+            model,
+            base_url,
+            provider_type: Provider::LMStudio,
+            client: Client::builder()
+                .timeout(Duration::from_secs(300)) // 本地模型可能较慢
                 .build()
                 .expect("Failed to build reqwest Client"),
         }
@@ -29,11 +50,11 @@ impl OpenAIClient {
 
 impl Gateway for OpenAIClient {
     fn provider(&self) -> Provider {
-        Provider::OpenAI
+        self.provider_type
     }
 
     fn is_available(&self) -> bool {
-        self.api_key.is_some()
+        self.provider_type == Provider::LMStudio || self.api_key.is_some()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -57,6 +78,7 @@ impl Gateway for OpenAIClient {
         };
         let model = self.model.clone();
         let client = self.client.clone();
+        let base_url = self.base_url.clone();
         let config = config.clone();
 
         let messages: Vec<serde_json::Value> = prompt
@@ -85,7 +107,7 @@ impl Gateway for OpenAIClient {
 
         tokio::spawn(async move {
             let result = client
-                .post("https://api.openai.com/v1/chat/completions")
+                .post(format!("{}/chat/completions", base_url))
                 .header("Authorization", format!("Bearer {}", api_key))
                 .header("Content-Type", "application/json")
                 .json(&body)

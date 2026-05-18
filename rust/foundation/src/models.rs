@@ -370,6 +370,7 @@ impl ModelTier {
                 m if m.contains("v4") || m.contains("r1") => ModelTier::Pro,
                 _ => ModelTier::Economy,
             },
+            Provider::LMStudio => ModelTier::Pro, // 本地模型统一按 Pro 对待
         }
     }
 }
@@ -508,6 +509,7 @@ pub enum Provider {
     Claude,
     OpenAI,
     DeepSeek,
+    LMStudio,
 }
 
 #[derive(Debug, Clone)]

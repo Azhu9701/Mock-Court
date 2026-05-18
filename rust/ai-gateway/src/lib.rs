@@ -109,6 +109,18 @@ impl GatewayRegistry {
             providers.insert(Provider::DeepSeek, Arc::new(deepseek));
         }
 
+        // LM Studio (本地 OpenAI 兼容)
+        let lmstudio = OpenAIClient::new_lmstudio();
+        let lmstudio_available = true; // 本地服务总是"可用"，连接失败在实际调用时处理
+        let lmstudio_tier = ModelTier::for_provider(&Provider::LMStudio, &lmstudio.model);
+        all_info.push(ProviderInfo {
+            provider: Provider::LMStudio,
+            model: lmstudio.model.clone(),
+            available: lmstudio_available,
+            tier: lmstudio_tier,
+        });
+        providers.insert(Provider::LMStudio, Arc::new(lmstudio));
+
         GatewayRegistry { providers, all_info, cache: Arc::new(RwLock::new(None)) }
     }
 

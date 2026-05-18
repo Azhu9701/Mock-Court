@@ -20,7 +20,7 @@ import { DEEPSEEK_MODELS_NO_DEFAULT, REASONING_OPTIONS } from "@/config/models";
 import { rebuildFts, fetchSouls } from "@/lib/api";
 import type { SoulListEntry } from "@/lib/api";
 
-type Provider = "claude" | "openai" | "deepseek";
+type Provider = "claude" | "openai" | "deepseek" | "lmstudio";
 
 interface ApiKeyEntry {
   provider: Provider;
@@ -33,6 +33,7 @@ const API_KEYS: ApiKeyEntry[] = [
   { provider: "claude", label: "Claude (Anthropic)", key: "", envVar: "ANTHROPIC_API_KEY" },
   { provider: "openai", label: "OpenAI", key: "", envVar: "OPENAI_API_KEY" },
   { provider: "deepseek", label: "DeepSeek", key: "", envVar: "DEEPSEEK_API_KEY" },
+  { provider: "lmstudio", label: "LM Studio (本地)", key: "", envVar: "LMSTUDIO_MODEL" },
 ];
 
 const REASONING_NO_DEFAULT = REASONING_OPTIONS.filter(r => r.value !== "");
@@ -109,7 +110,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     const val = keys[provider] || "";
     localStorage.setItem(`apikey_${provider}`, val);
     try {
-      const map: Record<string, string> = { claude: "anthropic", openai: "openai", deepseek: "deepseek" };
+      const map: Record<string, string> = { claude: "anthropic", openai: "openai", deepseek: "deepseek", lmstudio: "lmstudio" };
       await fetch("http://127.0.0.1:3096/api/v1/apikey/set", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -216,11 +217,16 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             {API_KEYS.map((entry) => (
               <div key={entry.provider} className="mb-3">
                 <label className="text-xs font-medium">{entry.label}</label>
+                {entry.provider === "lmstudio" && (
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    无需 API Key。模型名通过环境变量 LMSTUDIO_MODEL 设置，默认 local-model。端点通过 LMSTUDIO_BASE_URL 设置，默认 http://localhost:1234/v1
+                  </p>
+                )}
                 <div className="flex gap-1 mt-1">
                   <div className="relative flex-1">
                     <Input
-                      type={visible[entry.provider] ? "text" : "password"}
-                      placeholder={`输入 ${entry.label} API Key...`}
+                      type={entry.provider === "lmstudio" ? "text" : (visible[entry.provider] ? "text" : "password")}
+                      placeholder={entry.provider === "lmstudio" ? "本地模型名（如 qwen2.5-7b-instruct）..." : `输入 ${entry.label} API Key...`}
                       value={keys[entry.provider] || ""}
                       onChange={(e) =>
                         setKeys((prev) => ({
