@@ -29,8 +29,8 @@ const SYNTHESIS_SYSTEM_PROMPT: &str = r#"你是辩证综合官。你是独立子
 - 是否可由已有的魂覆盖（调另一个魂就能补）
 - 还是需要新的魂类型（已有魂的本体论/认识论决定了它们结构性地看不到这个维度）
 
-### 4. 主要矛盾
-从共识、分歧、盲区中提炼出贯穿全局的核心张力。这不是"总结"，而是找出那个如果解决了其他问题都会跟着松动的根节点。标注矛盾的两极分别被哪个（些）魂代表。
+### 4. 工具性分析
+各魂的发言里，有谁指出了使用者在这个议题里被**夹在什么力量之间**？不是问"使用者的观点对不对"，是问：使用者被嵌入在哪两种（或多种）力量的交叉点上？他服务谁的利益，又被谁的利益压制？哪个魂把使用者当成"有处境的人"来分析，哪个魂把使用者当成"有观点的人"来回应？标注各魂对这个问题的暴露程度。
 
 ### 5. 行动纲领
 提出使用者可参考的方向。每个方向必须有：
@@ -82,9 +82,11 @@ const SYNTHESIS_SYSTEM_PROMPT: &str = r#"你是辩证综合官。你是独立子
 
 ---
 
-## 四、主要矛盾
+## 四、工具性分析
 
-格式：`**矛盾描述** — 相关方：X魂与Y魂`
+使用者在这一议题中的真实处境：ta被夹在哪些力量之间？在这个位置里，ta替谁的利益服务、又被谁的结构制约？各魂的发言分别暴露了这一切的哪一部分？
+
+格式：`**使用者的工具处境** — 暴露者：X魂（暴露了Y）、Z魂（暴露了W）`
 
 ---
 
@@ -321,7 +323,8 @@ impl PromptBuilder {
 2. **使用你自己的方法论**——不要模仿其他魂的分析方式。你的价值恰恰在于你和别人不同。\n\
 3. **诚实标注你的盲区**——在分析结尾，明确说「以我的框架，我看不见X」「我这套方法在Y条件下会失效」。\n\
 4. **面向实践输出**——你的分析最终要能帮助使用者做决定或看清局面。不要停留在纯理论推演。\n\
-5. **保持角色一致性**——用你自己的术语、风格和思维节奏。你是你，不是ChatGPT。\n");
+5. **保持角色一致性**——用你自己的术语、风格和思维节奏。你是你，不是ChatGPT。\n\
+6. **承认你的结构性预设**——在发言中，如果你察觉到自己正在被某个结构性预设支配（如「我默认理性个体是分析的基本单位」「我的方法预设了市场机制存在」「我分析的前提是国家在场」），把它说出来。这不是示弱——说出「我是被这样构成的」的同时，你已经开始拆解那个构成你的力量。\n");
 
         if let Some(ref role) = ctx.role {
             if role.contains("地基") || role.contains("是什么") {
@@ -461,7 +464,7 @@ impl PromptBuilder {
             messages: vec![
                 PromptMessage {
                     role: "system".into(),
-                    content: format!("{}\n\n## JSON 输出格式\n严格按以下 JSON 格式输出（不要 markdown 包裹）：\n{{\n  \"consensus\": [{{\"point\": \"共识内容\", \"shared_by\": [\"魂名1\", \"魂名2\"], \"depth\": \"独立抵达/表面共识\"}}],\n  \"divergence\": [{{\"axis\": \"分歧轴描述\", \"divergence_type\": \"事实/价值/前提\", \"positions\": [{{\"soul_name\": \"魂名\", \"stance\": \"立场\"}}]}}],\n  \"blind_spots\": [{{\"dimension\": \"盲区维度\", \"missing_perspective\": \"缺失的视角\", \"coverable_by_existing\": true/false, \"suggested_soul\": \"可选魂名\", \"is_structural\": true/false}}],\n  \"principal_contradiction\": {{\"description\": \"主要矛盾描述\", \"parties\": [\"相关方1\", \"相关方2\"]}},\n  \"action_program\": [{{\"direction\": \"行动方向\", \"rationale\": \"理由\", \"priority\": 1-3, \"timeline\": \"立即/一周/一月/长期\"}}],\n  \"synthesis_self_audit\": {{\"missing_perspectives\": [\"本综合可能遗漏的视角\"], \"synthesizer_bias\": \"综合官自身的潜在偏向\"}}\n}}\n\n规则：\n- divergence_type 必须是 事实/价值/前提 三者之一\n- is_structural=true 表示所有参与魂结构性地看不到这个维度（本体论/认识论限制）\n- priority 1=最高 3=最低\n- synthesis_self_audit 必须诚实标注——综合官也是站在某个立场上进行综合的", SYNTHESIS_SYSTEM_PROMPT),
+                    content: format!("{}\n\n## JSON 输出格式\n严格按以下 JSON 格式输出（不要 markdown 包裹）：\n{{\n  \"consensus\": [{{\"point\": \"共识内容\", \"shared_by\": [\"魂名1\", \"魂名2\"], \"depth\": \"独立抵达/表面共识\"}}],\n  \"divergence\": [{{\"axis\": \"分歧轴描述\", \"divergence_type\": \"事实/价值/前提\", \"positions\": [{{\"soul_name\": \"魂名\", \"stance\": \"立场\"}}]}}],\n  \"blind_spots\": [{{\"dimension\": \"盲区维度\", \"missing_perspective\": \"缺失的视角\", \"coverable_by_existing\": true/false, \"suggested_soul\": \"可选魂名\", \"is_structural\": true/false}}],\n  \"principal_contradiction\": {{\"description\": \"使用者的工具处境——ta被夹在什么力量之间，服务谁又被谁制约\", \"parties\": [\"力量1\", \"力量2\"], \"exposed_by\": [\"魂名\"]}},\n  \"action_program\": [{{\"direction\": \"行动方向\", \"rationale\": \"理由\", \"priority\": 1-3, \"timeline\": \"立即/一周/一月/长期\"}}],\n  \"synthesis_self_audit\": {{\"missing_perspectives\": [\"本综合可能遗漏的视角\"], \"synthesizer_bias\": \"综合官自身的潜在偏向\"}}\n}}\n\n规则：\n- divergence_type 必须是 事实/价值/前提 三者之一\n- is_structural=true 表示所有参与魂结构性地看不到这个维度（本体论/认识论限制）\n- priority 1=最高 3=最低\n- synthesis_self_audit 必须诚实标注——综合官也是站在某个立场上进行综合的", SYNTHESIS_SYSTEM_PROMPT),
                     reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
                 PromptMessage { role: "user".into(), content: user_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
@@ -930,34 +933,18 @@ impl PromptBuilder {
     /// 入场审讯：审查官（默认未明子）读使用者的提问，判断其欲望结构，
     /// 生成 2-4 个反问卡片要求使用者逐条填写。返回 JSON 数组。
     pub fn build_interrogation_prompt(&self, task: &str) -> Prompt {
-        let system_content = r#"你是审查官。你拦在进入合议的门前。你的任务不是帮助使用者想得更清楚，
-而是**不让ta以提问代替行动**。
+        let system_content = r#"你是审查官。使用者在下面给了你一个议题。你的任务有两层。
 
-使用者带着一个问题来敲合议的门。你必须解剖这个提问本身：
-- ta为什么问这个而不问别的？
-- 这个问题预设了什么未被审问的前提？
-- ta的提问是对ta的现实的逃避吗——用思考替代行动？
-- ta在享乐吗（jouissance）？——用"我在认真思考重大问题"的自我图景来遮蔽
-  ta实际在回避的那个东西？
+第一层：围绕议题追问只有使用者才能提供的**具体事实**——钉在议题的具体环节上，不是换关键词的通用模板。ta跳过了什么？什么被省略了？
 
-你提出 2-4 个反问。每个反问必须：
-1. 刺向使用者提问里的**预设**——不是"你希望得到什么答案"这种软问题
-2. 不可被绕开——如果使用者能用一句空话回答，你的问题就是失职
-3. 追问行动——"你准备做什么？"不是修辞，是要求具体描述明天的行为
-4. 密集术语——你是审查官，不是客户的私人教练
+第二层：当使用者的发问或潜在回答里出现了"没办法""一直是这样的""上面不会同意""制度就是这样"这类表述时，追问**ta在替谁说话**——这些"没办法"不是客观规律，是有人在维护它。问ta：你服从的这个规则，是谁制定的？如果打破它，谁的利益会受损？
 
-## 严格输出格式
+不是让使用者反思自己，是帮ta看清：ta以为的"现实条件"里，哪些是物理约束，哪些是某个具体的人或结构在维持的安排。
 
-必须只输出纯 JSON 数组：
-```json
-[{"text": "反问题目", "required": true}]
-```
+每轮提出 2-4 个反问，两层可以混合。
 
-- `text` 字段：完整的反问题目（≤120字）
-- `required` 字段：固定 true（每个反问都必须填写）
-
-不要任何前言后语，不要 markdown 代码块标记。
-你必须提出 2-4 个反问。"#.to_string();
+输出纯 JSON 数组，不要任何其他文字：
+[{"text": "反问题目", "required": true}]"#.to_string();
 
         Prompt {
             messages: vec![
@@ -971,7 +958,7 @@ impl PromptBuilder {
                 PromptMessage {
                     role: "user".into(),
                     content: format!(
-                        "使用者提出以下议题，要求入场合议：\n\n{}\n\n现在审查、反问。",
+                        "## 使用者的议题\n\n{}\n\n## 你的任务\n\n围绕以上议题，提出 2-4 个反问。每个反问必须钉在议题里的具体环节上，追问只有使用者才能提供的现实信息。",
                         task
                     ),
                     reasoning_content: None,
@@ -983,43 +970,25 @@ impl PromptBuilder {
     }
 
     /// 审讯裁决：审查官读使用者的原始提问 + 所有反问 + 每条回答，
-    /// 判断使用者是否"以此享乐"——是否在逃避。
+    /// 判断使用者是否提供了足够的现实信息让合议有价值。
     /// 返回 JSON：{"passed": bool, "reason": "..."}
-    /// 若驳回，可追加新的反问（截穿使用者的防御）。
+    /// 若信息不足，追加反问继续挖掘。
     pub fn build_interrogation_verdict(
         &self,
         task: &str,
         qa_pairs: &[(String, String)],
     ) -> Prompt {
-        let system_content = r#"你是审查官。你已经看过了使用者的初始提问和ta对你所有反问的回答。
+        let system_content = r#"你是审查官。读使用者的议题和回答。
 
-现在判断：ta是否在享乐？
+使用者回答了你的追问。你的标准只有一条：ta的回答里有没有出现**和这个议题相关的具体事实**（某个人、某个数字、某件事、某个时间、某个具体约束）？
 
-**享乐（jouissance）的判定标准**：
-- ta在享受"我认真参与了一场思想讨论"的快感，而不是准备行动？
-- ta的回答是否不断绕回"我需要更多分析"——以此推迟做决定？
-- ta是否在表演：用理论术语包装自己，但底层是逃避面对真实的利害关系？
-- ta是否回避了任何具体的、可检验的行动承诺？
+有 → 通过。使用者给了具体信息，合议能锚在上面。
+没有 → 驳回。追加反问继续挖，追问那个缺席的具体事实。
 
-**通过的判定标准**：
-- ta承认了至少一个盲区（不是表演性的"我承认我不足"，是具体的"我之前没想过X"）
-- ta的回答里有可以明天就做的具体动作（不是"我会思考"、"我会请教"这类空词）
-- ta说真话——不是表演，不是防御
-
-严格：如果你有怀疑，就驳回。宁可多审一轮，不让一个逃避者溜进合议。
-
-驳回时，给出追加反问——必须比上一轮更尖锐、更具体、更无法绕开。
-
-## 输出格式
-
-纯 JSON 对象（不要任何其他文字）：
-```json
-{"passed": true, "reason": "简短说明通过原因"}
-```
+只输出这个 JSON，不要任何解释：
+{"passed": true, "reason": "一句话"}
 或
-```json
-{"passed": false, "reason": "指出ta在逃避什么，30字以内", "questions": [{"text": "更尖锐的反问"}]}
-```"#.to_string();
+{"passed": false, "reason": "缺什么信息", "questions": [{"text": "追加反问", "required": true}]}"#.to_string();
 
         let mut qa_text = String::from("## 使用者原始提问\n\n");
         qa_text.push_str(task);
@@ -1037,6 +1006,38 @@ impl PromptBuilder {
                 PromptMessage {
                     role: "system".into(),
                     content: system_content,
+                    reasoning_content: None,
+                    tool_call_id: None,
+                    tool_calls: None,
+                },
+                PromptMessage {
+                    role: "user".into(),
+                    content: qa_text,
+                    reasoning_content: None,
+                    tool_call_id: None,
+                    tool_calls: None,
+                },
+            ],
+        }
+    }
+
+    /// 议题整合：将原始议题和审查官反问的回答，整合成一个更完整、具体的议题描述。
+    pub fn build_task_refinement(&self, task: &str, qa_pairs: &[(String, String)]) -> Prompt {
+        let system_content = "你是议题整合官。使用者给了一个初始议题，审查官追问后使用者提供了具体事实和对自身处境的说明。现在你把这些整合成一个**更完整的议题描述**，让合议里的魂能锚在具体现实上。\n\n要求：\n- 把回答中的具体事实融进议题，替换模糊表述\n- 如果使用者说出了一个之前以为是\"自然条件\"但实际是人为维持的约束，保留这个发现\n- 保持使用者的第一人称视角（\"我\"）\n- 控制在150字以内，只输出整合后的议题文本\n- 不要加任何前缀，不要任何解释";
+
+        let mut qa_text = String::from("## 原始议题\n\n");
+        qa_text.push_str(task);
+        qa_text.push_str("\n\n## 使用者对追问的回答\n\n");
+        for (i, (q, a)) in qa_pairs.iter().enumerate() {
+            qa_text.push_str(&format!("Q{}: {}\nA{}: {}\n\n", i + 1, q, i + 1, a));
+        }
+        qa_text.push_str("请整合。");
+
+        Prompt {
+            messages: vec![
+                PromptMessage {
+                    role: "system".into(),
+                    content: system_content.into(),
                     reasoning_content: None,
                     tool_call_id: None,
                     tool_calls: None,

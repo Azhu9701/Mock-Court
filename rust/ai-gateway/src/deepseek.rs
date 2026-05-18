@@ -112,13 +112,16 @@ impl Gateway for DeepSeekClient {
             body["max_tokens"] = serde_json::json!(config.max_tokens);
         }
 
-        let reasoning_effort = config.reasoning_effort.unwrap_or(self.default_reasoning_effort);
-        body["reasoning_effort"] = serde_json::json!(reasoning_effort.as_str());
-
         let thinking_enabled = config.thinking_enabled.unwrap_or(self.default_thinking_enabled);
         body["thinking"] = serde_json::json!({
             "type": if thinking_enabled { "enabled" } else { "disabled" }
         });
+
+        // reasoning_effort 和 thinking:disabled 互斥，只在启用 thinking 时发送
+        if thinking_enabled {
+            let reasoning_effort = config.reasoning_effort.unwrap_or(self.default_reasoning_effort);
+            body["reasoning_effort"] = serde_json::json!(reasoning_effort.as_str());
+        }
 
         if let Some(tools) = &config.tools {
             body["tools"] = serde_json::to_value(tools).unwrap();

@@ -573,7 +573,7 @@ export interface AnalyzeResponse {
 }
 
 export interface AnalyzeStreamEvent {
-  phase: "classifying" | "matched" | "reviewing" | "review_done" | "adjusting" | "practice_opening" | "done";
+  phase: "classifying" | "matching" | "matched" | "reviewing" | "review_done" | "adjusting" | "practice_opening" | "done";
   entry_type?: string;
   souls?: { name: string; field: string; ismism_code: string; rationale: string }[];
   mode?: string;
@@ -1028,6 +1028,7 @@ export async function startInterrogation(task: string): Promise<InterrogationRes
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ task }),
     operation: 'startInterrogation',
+    timeout: 120000,
   });
 }
 
@@ -1042,6 +1043,7 @@ export async function submitInterrogation(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ answers }),
       operation: 'submitInterrogation',
+      timeout: 120000,
     },
   );
 }

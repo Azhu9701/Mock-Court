@@ -233,7 +233,8 @@ export function PossessionEntry() {
   const canStart = task.trim().length > 0;
 
   const onStart = async () => {
-    if (!canStart || phase !== "input") return;
+    if (!canStart) return;
+    if (phase !== "input" && !skipInterrogationRef.current) return;
 
     // 保存到历史
     const taskText = task.trim();
@@ -323,6 +324,9 @@ export function PossessionEntry() {
 
         if (event.phase === "classifying") {
           setProgressLine("入口分流完成，正在算法匹配…");
+        }
+        if (event.phase === "matching") {
+          setProgressLine("正在多因子匹配魂…");
         }
         if (event.phase === "matched" && event.souls && event.souls.length > 0) {
           setPhase("reviewing");

@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Instant;
 
 use axum::extract::{Multipart, Path, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -124,6 +123,41 @@ fn extract_json(text: &str) -> Option<&str> {
     } else {
         None
     }
+}
+
+/// Extract a JSON array from text that may contain non-JSON prose before/after.
+fn extract_json_array(text: &str) -> Option<&str> {
+    let start = text.find('[')?;
+    let end = text.rfind(']')?;
+    if end > start {
+        Some(&text[start..=end])
+    } else {
+        None
+    }
+}
+
+/// 收集 LLM 流式响应的全部内容，同时记录第一个错误。
+async fn collect_llm_stream(rx: &mut tokio::sync::mpsc::Receiver<Result<foundation::Chunk, foundation::FoundationError>>) -> (String, Option<String>) {
+    let mut raw = String::new();
+    let mut first_err: Option<String> = None;
+    while let Some(r) = rx.recv().await {
+        match r {
+            Ok(c) => {
+                if !c.content.is_empty() {
+                    raw.push_str(&c.content);
+                } else if let Some(ref rc) = c.reasoning_content {
+                    raw.push_str(rc);
+                }
+            }
+            Err(e) => {
+                if first_err.is_none() {
+                    first_err = Some(e.to_string());
+                }
+                tracing::warn!("LLM stream chunk error: {}", e);
+            }
+        }
+    }
+    (raw, first_err)
 }
 
 fn build_soul_match(js: &serde_json::Value, all_souls: &[SoulListEntry]) -> Option<SoulMatch> {
@@ -496,6 +530,56 @@ fn ismism_proximity_score(profile: &TaskIsmismProfile, soul: &SoulListEntry) -> 
     field_weight * 0.6 + coord_prox * 0.4
 }
 
+/// 工具意识分数：魂越明确承认自己的边界和结构性位置，分数越高。
+/// 承认工具性不是示弱——说出"我被这样构成"的同时已经开始拆解。
+fn tool_awareness_score(soul: &SoulListEntry) -> f64 {
+    let decl = soul.self_declare.to_lowercase();
+    if decl.is_empty() {
+        return 0.0;
+    }
+
+    let mut score = 0.0;
+
+    // 有明确的"我不做"——边界意识
+    let boundary_markers = ["我不做", "我不", "我不能", "我不擅长", "不是我的"];
+    for m in &boundary_markers {
+        if decl.contains(m) {
+            score += 0.25;
+            break;
+        }
+    }
+
+    // 有明确的"我做"/"我是"——位置声明
+    let position_markers = ["我做", "我是", "我的位置", "我的方法", "我的核心功能", "我做的事"];
+    for m in &position_markers {
+        if decl.contains(m) {
+            score += 0.25;
+            break;
+        }
+    }
+
+    // 有"互补"——知道谁补自己的盲区
+    if decl.contains("互补") {
+        score += 0.20;
+    }
+
+    // 有具体人名/学派名——不是抽象描述，是锚在具体思想上
+    let concrete_names = ["马克思", "列宁", "毛泽东", "费曼", "庄子", "尼采", "葛兰西",
+        "黑格尔", "胡塞尔", "鲁迅", "孔子", "稻盛和夫", "波伏娃", "未明子", "韩炳哲"];
+    let name_count = concrete_names.iter().filter(|&&n| decl.contains(&n.to_lowercase())).count();
+    if name_count >= 3 {
+        score += 0.20;
+    } else if name_count >= 1 {
+        score += 0.10;
+    }
+
+    // self_declare 长度——越长越具体（但设上限避免过长也不加分）
+    let len_score = (decl.len() as f64 / 200.0).min(0.10);
+    score += len_score;
+
+    score.min(1.0)
+}
+
 /// 统计任务文本命中魂的领域术语的次数
 fn count_domain_term_hits(task_lower: &str, soul: &SoulListEntry) -> usize {
     let mut hits = 0;
@@ -598,6 +682,8 @@ async fn analyze_task(
 
         // ── Phase: classifying ──
         send(serde_json::json!({ "phase": "classifying", "entry_type": entry_type }).to_string());
+        // 立即进入匹配阶段，避免前端卡在入口分流
+        send(serde_json::json!({ "phase": "matching" }).to_string());
 
         // ── Step 1: Algorithmic matching ──
         // 1a. FT semantic search
@@ -617,12 +703,13 @@ async fn analyze_task(
             let ft_score = ft_scores.get(&s.name).copied().unwrap_or(0.0);
             let ismism_prox = ismism_proximity_score(&task_ismism, s);
             let domain_hits = count_domain_term_hits(&task_lower, s);
+            let tool_score = tool_awareness_score(s);
 
-            // Composite: Ismism(50%) + Domain(20%) + Keywords(15%) + FT(15%)
-            // Ismism 是核心区分维度——魂的哲学立场才是匹配的灵魂，字面重叠只是辅助
-            let composite = ismism_prox * 0.50
+            // Composite: Ismism(40%) + Tool(15%) + Domain(20%) + Keywords(10%) + FT(15%)
+            let composite = ismism_prox * 0.40
+                + tool_score * 0.15
                 + (domain_hits as f64).min(3.0) / 3.0 * 0.20
-                + (kw_hits as f64).min(3.0) / 3.0 * 0.15
+                + (kw_hits as f64).min(3.0) / 3.0 * 0.10
                 + ft_score * 0.15;
 
             (s, composite, if ismism_prox > 0.4 { "ismism" } else if kw_hits > 0 { "keyword" } else if ft_score > 0.2 { "semantic" } else { "fallback" })
@@ -1631,16 +1718,6 @@ struct InterrogateResponse {
     message: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct InterrogateRespondRequest {
-    answers: Vec<QuestionAnswer>,
-}
-
-#[derive(Debug, Deserialize)]
-struct QuestionAnswer {
-    question_index: usize,
-    answer: String,
-}
 
 #[derive(Debug, Serialize)]
 struct InterrogateVerdictResponse {
@@ -1679,26 +1756,21 @@ async fn start_interrogation(
         (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() }))
     })?;
 
-    let mut raw = String::new();
-    while let Some(r) = rx.recv().await {
-        if let Ok(c) = r { raw.push_str(&c.content); }
+    let (raw, first_err) = collect_llm_stream(&mut rx).await;
+    if raw.is_empty() {
+        let detail = first_err.unwrap_or_else(|| "LLM 返回空内容".to_string());
+        return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: format!("审查官反问生成失败: {}", detail) })));
     }
 
-    let trimmed = raw.trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
+    let json_str = extract_json_array(&raw).unwrap_or(&raw);
+    tracing::debug!(raw_len = raw.len(), json_len = json_str.len(), "interrogate llm response");
 
-    match serde_json::from_str::<Vec<InterrogationQuestion>>(trimmed) {
+    match serde_json::from_str::<Vec<InterrogationQuestion>>(json_str) {
         Ok(questions) => {
             let gate_id = uuid::Uuid::new_v4().to_string();
             let gate = InterrogationGate {
-                _gate_id: gate_id.clone(),
                 task: body.task.clone(),
                 questions: questions.clone(),
-                qa_rounds: vec![],
-                _created_at: Instant::now(),
             };
             state.interrogation_gates.insert(gate_id.clone(), gate);
 
@@ -1714,16 +1786,8 @@ async fn start_interrogation(
                     let mut retry_rx = gateway.call(&retry_req).map_err(|e| {
                         (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() }))
                     })?;
-                    let mut buf = String::new();
-                    while let Some(r) = retry_rx.recv().await {
-                        if let Ok(c) = r { buf.push_str(&c.content); }
-                    }
-                    buf.trim()
-                        .trim_start_matches("```json")
-                        .trim_start_matches("```")
-                        .trim_end_matches("```")
-                        .trim()
-                        .to_string()
+                    let (retry_raw, _) = collect_llm_stream(&mut retry_rx).await;
+                    extract_json_array(&retry_raw).unwrap_or(&retry_raw).to_string()
                 };
                 let retry_questions = serde_json::from_str::<Vec<InterrogationQuestion>>(&retry_raw)
                     .unwrap_or_else(|e| {
@@ -1754,10 +1818,12 @@ async fn start_interrogation(
             }
         }
         Err(e) => {
+            let preview = &raw[..raw.len().min(200)];
             tracing::error!("Failed to parse interrogation questions: {} (raw={})", e, raw);
+            tracing::error!("Failed to parse interrogation questions: {} (json_str={})", e, json_str);
             Err((
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiError { error: format!("审查官反问解析失败: {}", e) }),
+                Json(ApiError { error: format!("审查官反问解析失败: {} | raw={}", e, preview) }),
             ))
         }
     }
@@ -1768,106 +1834,79 @@ async fn start_interrogation(
 async fn submit_interrogation(
     State(state): State<Arc<AppState>>,
     Path(gate_id): Path<String>,
-    Json(body): Json<InterrogateRespondRequest>,
+    Json(body): Json<serde_json::Value>,
 ) -> Result<Json<InterrogateVerdictResponse>, (axum::http::StatusCode, Json<ApiError>)> {
-    // 查找 gate
-    let mut gate = state.interrogation_gates
-        .get_mut(&gate_id)
-        .ok_or_else(|| {
-            (axum::http::StatusCode::NOT_FOUND, Json(ApiError { error: "审讯门未找到，可能已过期".into() }))
-        })?;
+    tracing::info!("submit_interrogation called with gate_id={}", gate_id);
 
-    // 按 question_index 排序配对
-    let mut qa: Vec<(String, String)> = vec![];
-    for ans in &body.answers {
-        if let Some(q) = gate.questions.get(ans.question_index) {
-            qa.push((q.text.clone(), ans.answer.clone()));
-        }
-    }
-    gate.qa_rounds.push(qa.clone());
-
-    // 如果无反问，直接通过
-    if gate.questions.is_empty() {
-        return Ok(Json(InterrogateVerdictResponse {
-            passed: true,
-            reason: "无需反问。".into(),
-            questions: None,
-            refined_task: Some(gate.task.clone()),
-        }));
-    }
-
-    // 构建裁决 prompt
-    let pb = ai_gateway::prompt::PromptBuilder::new();
-    let vendict_prompt = pb.build_interrogation_verdict(&gate.task, &qa);
-
-    let gateway = state.engine.gateway().clone();
-    let provider = pick_provider(&state)?;
-    let req = LLMRequest {
-        provider,
-        prompt: vendict_prompt,
-        config: CallConfig {
-            temperature: 0.3,
-            max_tokens: 512,
-            stream: false,
-            ..Default::default()
-        },
+    // 读取 gate，提取 task 和 questions
+    let (task, questions) = {
+        let gate = state.interrogation_gates
+            .get(&gate_id)
+            .ok_or_else(|| {
+                (axum::http::StatusCode::NOT_FOUND, Json(ApiError { error: "审讯门未找到，可能已过期".into() }))
+            })?;
+        (gate.task.clone(), gate.questions.clone())
     };
 
-    let mut rx = gateway.call(&req).map_err(|e| {
-        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() }))
-    })?;
-
-    let mut raw = String::new();
-    while let Some(r) = rx.recv().await {
-        if let Ok(c) = r { raw.push_str(&c.content); }
+    // 配对所有回答与反问
+    let answers_arr = body.get("answers").and_then(|a| a.as_array()).cloned().unwrap_or_default();
+    let mut qa_pairs: Vec<(String, String)> = Vec::new();
+    for ans in &answers_arr {
+        let idx = ans.get("question_index").and_then(|v| v.as_u64()).unwrap_or(usize::MAX as u64) as usize;
+        let text = ans.get("answer").and_then(|v| v.as_str()).unwrap_or("");
+        if let Some(q) = questions.get(idx) {
+            qa_pairs.push((q.text.clone(), text.to_string()));
+        }
     }
 
-    let trimmed = raw.trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
+    state.interrogation_gates.remove(&gate_id);
 
-    #[derive(Deserialize)]
-    struct RawVerdict {
-        passed: bool,
-        reason: String,
-        #[serde(default)]
-        questions: Option<Vec<InterrogationQuestion>>,
-    }
-
-    match serde_json::from_str::<RawVerdict>(trimmed) {
-        Ok(v) => {
-            // 若有追加反问，更新 gate 状态
-            if let Some(ref extra) = v.questions {
-                if !extra.is_empty() {
-                    gate.questions = extra.clone();
-                }
-            }
-
-            if v.passed {
-                state.interrogation_gates.remove(&gate_id);
-                Ok(Json(InterrogateVerdictResponse {
+    // 调 LLM 整合议题：把使用者的回答融进原始议题
+    let refined_task = if !qa_pairs.is_empty() {
+        let provider = match pick_provider(&state) {
+            Ok(p) => p,
+            Err(_) => {
+                return Ok(Json(InterrogateVerdictResponse {
                     passed: true,
-                    reason: v.reason,
+                    reason: "已收到回答。".into(),
                     questions: None,
-                    refined_task: Some(gate.task.clone()),
-                }))
-            } else {
-                Ok(Json(InterrogateVerdictResponse {
-                    passed: false,
-                    reason: v.reason,
-                    questions: v.questions,
                     refined_task: None,
                 }))
             }
+        };
+        let pb = ai_gateway::prompt::PromptBuilder::new();
+        let prompt = pb.build_task_refinement(&task, &qa_pairs);
+        let req = LLMRequest {
+            provider,
+            prompt,
+            config: CallConfig {
+                temperature: 0.3,
+                max_tokens: 256,
+                stream: false,
+                thinking_enabled: Some(false),
+                ..Default::default()
+            },
+        };
+
+        match state.engine.gateway().call(&req) {
+            Ok(mut rx) => {
+                let (raw, _) = collect_llm_stream(&mut rx).await;
+                let refined = raw.trim().to_string();
+                if refined.is_empty() { None } else { Some(refined) }
+            }
+            Err(e) => {
+                tracing::warn!("Task refinement LLM call failed: {}", e);
+                None
+            }
         }
-        Err(e) => {
-            tracing::error!("Failed to parse verdict JSON: {} (raw={})", e, raw);
-            Err((
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiError { error: format!("审查官裁决解析失败: {}", e) }),
-            ))
-        }
-    }
+    } else {
+        None
+    };
+
+    Ok(Json(InterrogateVerdictResponse {
+        passed: true,
+        reason: if refined_task.is_some() { "议题已整合。".into() } else { "已收到回答。".into() },
+        questions: None,
+        refined_task,
+    }))
 }

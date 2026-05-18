@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Instant;
 
 use archive::ArchiveSystem;
 use dashmap::DashMap;
@@ -26,16 +25,14 @@ pub struct AutoCreateEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterrogationQuestion {
     pub text: String,
+    #[serde(default)]
     pub required: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct InterrogationGate {
-    pub _gate_id: String,
     pub task: String,
     pub questions: Vec<InterrogationQuestion>,
-    pub qa_rounds: Vec<Vec<(String, String)>>,
-    pub _created_at: Instant,
 }
 
 #[derive(Clone)]
