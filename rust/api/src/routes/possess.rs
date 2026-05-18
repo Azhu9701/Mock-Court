@@ -1757,7 +1757,7 @@ async fn start_interrogation(
         prompt,
         config: CallConfig {
             temperature: 0.6,
-            max_tokens: 1024,
+            max_tokens: 4096, // 思考模型需要更多 token
             stream: false,
             ..Default::default()
         },
@@ -1792,7 +1792,7 @@ async fn start_interrogation(
                     let retry_req = LLMRequest {
                         provider: provider.clone(),
                         prompt: pb.build_interrogation_prompt(&body.task),
-                        config: CallConfig { temperature: 0.8, max_tokens: 1024, stream: false, ..Default::default() },
+                        config: CallConfig { temperature: 0.8, max_tokens: 4096, stream: false, ..Default::default() },
                     };
                     let mut retry_rx = gateway.call(&retry_req).map_err(|e| {
                         (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: e.to_string() }))
@@ -1892,7 +1892,7 @@ async fn submit_interrogation(
             prompt,
             config: CallConfig {
                 temperature: 0.3,
-                max_tokens: 256,
+                max_tokens: 1024,
                 stream: false,
                 thinking_enabled: Some(false),
                 ..Default::default()

@@ -197,6 +197,7 @@
     <a href="#how" class="hide-mobile">How it works</a>
     <a href="#features" class="hide-mobile">Features</a>
     <a href="#souls" class="hide-mobile">Souls</a>
+    <a href="#docs" class="hide-mobile">Docs</a>
     <a href="https://github.com/Azhu9701/soul-banner-lite" target="_blank" rel="noopener" class="btn-gh">
       <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       GitHub
@@ -481,6 +482,269 @@
           <span style="font-size:14px; font-weight:600; color:#fff;">Open</span>
         </div>
         <div class="code-block"><span class="cmd">Frontend → </span><span class="hl">http://localhost:3000</span><br><span class="cmd">API → </span><span class="hl">http://localhost:3096/api/v1/health</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ====== DOCS: Modes ====== -->
+<section id="docs" class="section">
+  <div class="container">
+    <div class="divider" style="margin-bottom:80px;"></div>
+    <div style="text-align:center; margin-bottom:64px;">
+      <p class="reveal section-label">Usage Guide</p>
+      <h2 class="reveal reveal-d1 section-title">六合一的思辨引擎</h2>
+      <p class="reveal reveal-d2 section-desc">六种附体模式，从快速咨询到多魂合议，覆盖每一个思辨场景。</p>
+    </div>
+    <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:20px;">
+      <!-- 单魂 -->
+      <div class="card reveal" style="padding:28px;">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+          <span class="step-num">1</span>
+          <span style="font-size:16px; font-weight:600; color:#fff;">单魂</span>
+          <span style="font-size:11px; color:#52525b; margin-left:auto;">快速咨询</span>
+        </div>
+        <p style="font-size:14px; color:#71717a; line-height:1.65;">单一魂独立输出，适合快速提问与直接获取某个思想家的观点。输入问题，选择一个魂，即刻得到带有该角色独特思维方式的回答。</p>
+      </div>
+      <!-- 合议 -->
+      <div class="card reveal reveal-d1" style="padding:28px;">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+          <span class="step-num">2</span>
+          <span style="font-size:16px; font-weight:600; color:#fff;">合议</span>
+          <span style="font-size:11px; color:#52525b; margin-left:auto;">核心模式</span>
+        </div>
+        <p style="font-size:14px; color:#71717a; line-height:1.65;">多魂并行流式输出 + 实时语义碰撞检测 + 三级门控干预 + 辩证综合。每个魂作为独立 tokio task 推进，碰撞检出后立即注入干预信号，最终由辩证综合官整合为综合报告。</p>
+      </div>
+      <!-- 辩论 -->
+      <div class="card reveal reveal-d2" style="padding:28px;">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+          <span class="step-num">3</span>
+          <span style="font-size:16px; font-weight:600; color:#fff;">辩论</span>
+          <span style="font-size:11px; color:#52525b; margin-left:auto;">对立视角</span>
+        </div>
+        <p style="font-size:14px; color:#71717a; line-height:1.65;">两列对立布局，正方与反方各自推进，中间裁决栏实时呈现裁判判定。适合需要深度对比两种对立观点的场景。</p>
+      </div>
+      <!-- 接力 -->
+      <div class="card reveal" style="padding:28px;">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+          <span class="step-num">4</span>
+          <span style="font-size:16px; font-weight:600; color:#fff;">接力</span>
+          <span style="font-size:11px; color:#52525b; margin-left:auto;">阶段递进</span>
+        </div>
+        <p style="font-size:14px; color:#71717a; line-height:1.65;">横向时间轴，每个阶段由不同魂接力推进。前一个魂的输出作为下一个魂的输入，形成递进式的思考链条。</p>
+      </div>
+      <!-- 学习 -->
+      <div class="card reveal reveal-d1" style="padding:28px;">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+          <span class="step-num">5</span>
+          <span style="font-size:16px; font-weight:600; color:#fff;">学习</span>
+          <span style="font-size:11px; color:#52525b; margin-left:auto;">费曼学习法</span>
+        </div>
+        <p style="font-size:14px; color:#71717a; line-height:1.65;">魂间教学模式——一个魂作为老师分析学习者的盲区，出题考察，评分反馈。用费曼学习法循环提升理解深度。</p>
+      </div>
+      <!-- 实践 -->
+      <div class="card reveal reveal-d2" style="padding:28px;">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+          <span class="step-num">6</span>
+          <span style="font-size:16px; font-weight:600; color:#fff;">实践开口</span>
+          <span style="font-size:11px; color:#52525b; margin-left:auto;">方法论实践</span>
+        </div>
+        <p style="font-size:14px; color:#71717a; line-height:1.65;">方法论实践模式——将思辨转化为行动。每个会话结束后三问闭环：你会做什么？谁该在场？什么判断错了？</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ====== DOCS: Configuration ====== -->
+<section class="section">
+  <div class="container">
+    <div style="text-align:center; margin-bottom:64px;">
+      <p class="reveal section-label">Configuration</p>
+      <h2 class="reveal reveal-d1 section-title">五分钟上手</h2>
+      <p class="reveal reveal-d2 section-desc">从安装到第一次召唤，只需要三步。</p>
+    </div>
+    <div style="max-width:720px; margin:0 auto; display:flex; flex-direction:column; gap:24px;">
+      <!-- Step 1 -->
+      <div class="card reveal" style="padding:32px;">
+        <div style="display:flex; align-items:flex-start; gap:20px;">
+          <div style="flex-shrink:0; width:40px; height:40px; border-radius:10px; background:rgba(217,119,6,0.1); display:flex; align-items:center; justify-content:center;">
+            <span class="step-num" style="width:32px; height:32px; font-size:14px;">1</span>
+          </div>
+          <div>
+            <h3 style="font-size:16px; font-weight:600; color:#fff; margin-bottom:8px;">安装 API Keys</h3>
+            <p style="font-size:14px; color:#71717a; margin-bottom:16px;">将 API Key 写入 <code style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#d97706; background:rgba(217,119,6,0.08); padding:2px 8px; border-radius:4px;">data/apikeys.json</code>（此文件已在 .gitignore 中）：</p>
+            <div class="code-block" style="font-size:12px; line-height:1.8;">
+              <span style="color:#52525b;">{</span><br>
+              &nbsp;&nbsp;<span class="hl">"deepseek"</span>: <span class="cmd">"sk-your-deepseek-key"</span>,<br>
+              &nbsp;&nbsp;<span class="hl">"openai"</span>: <span class="cmd">"sk-your-openai-key"</span>,<br>
+              &nbsp;&nbsp;<span class="hl">"claude"</span>: <span class="cmd">"sk-your-claude-key"</span><br>
+              <span style="color:#52525b;">}</span>
+            </div>
+            <p style="font-size:12px; color:#52525b; margin-top:12px;">至少需要一个 AI 提供商的 API Key 即可启动。</p>
+          </div>
+        </div>
+      </div>
+      <!-- Step 2 -->
+      <div class="card reveal reveal-d1" style="padding:32px;">
+        <div style="display:flex; align-items:flex-start; gap:20px;">
+          <div style="flex-shrink:0; width:40px; height:40px; border-radius:10px; background:rgba(217,119,6,0.1); display:flex; align-items:center; justify-content:center;">
+            <span class="step-num" style="width:32px; height:32px; font-size:14px;">2</span>
+          </div>
+          <div>
+            <h3 style="font-size:16px; font-weight:600; color:#fff; margin-bottom:8px;">可选：编辑配置文件</h3>
+            <p style="font-size:14px; color:#71717a; margin-bottom:16px;">编辑 <code style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#d97706; background:rgba(217,119,6,0.08); padding:2px 8px; border-radius:4px;">config/default.yaml</code> 自定义路径和端口：</p>
+            <div class="code-block" style="font-size:12px; line-height:1.8;">
+              <span class="hl">data_dir</span>: <span class="cmd">"./data"</span><br>
+              <span class="hl">souls_dir</span>: <span class="cmd">"./data/souls"</span><br>
+              <span class="hl">server_port</span>: <span class="cmd">"3096"</span><br>
+              <span class="hl">nextjs_port</span>: <span class="cmd">"3000"</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Step 3 -->
+      <div class="card reveal reveal-d2" style="padding:32px;">
+        <div style="display:flex; align-items:flex-start; gap:20px;">
+          <div style="flex-shrink:0; width:40px; height:40px; border-radius:10px; background:rgba(217,119,6,0.1); display:flex; align-items:center; justify-content:center;">
+            <span class="step-num" style="width:32px; height:32px; font-size:14px;">3</span>
+          </div>
+          <div>
+            <h3 style="font-size:16px; font-weight:600; color:#fff; margin-bottom:8px;">一键启动</h3>
+            <p style="font-size:14px; color:#71717a; margin-bottom:16px;">macOS / Linux 用户使用 <code style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#d97706; background:rgba(217,119,6,0.08); padding:2px 8px; border-radius:4px;">bash start.sh</code> 一键启动 API + 前端。Windows 用户从 MSI 安装包启动即可。</p>
+            <div class="code-block" style="font-size:12px; line-height:1.8;">
+              <span class="prompt"># 一键启动</span><br>
+              <span class="cmd">bash </span><span class="hl">start.sh</span><br>
+              <br>
+              <span class="prompt"># 或分别启动</span><br>
+              <span class="cmd">cargo run -p api --release</span><br>
+              <span class="cmd">cd nextjs && pnpm dev</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ====== DOCS: Advanced Features ====== -->
+<section class="section">
+  <div class="container">
+    <div style="text-align:center; margin-bottom:64px;">
+      <p class="reveal section-label">Advanced</p>
+      <h2 class="reveal reveal-d1 section-title">不只是聊天界面</h2>
+      <p class="reveal reveal-d2 section-desc">每一个设计决策都在回答同一个问题——怎么让你真正思考，而不是消费思考。</p>
+    </div>
+    <div style="display:grid; grid-template-columns:repeat(2, 1fr); gap:20px;">
+      <!-- 语义碰撞检测 -->
+      <div class="card reveal" style="padding:32px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#d97706" stroke-width="1.5" fill="none"/><circle cx="8" cy="8" r="2" fill="#d97706"/></svg>
+          <h3 style="font-size:15px; font-weight:600; color:#fff;">语义碰撞检测</h3>
+        </div>
+        <p style="font-size:13px; color:#71717a; line-height:1.65; margin-bottom:12px;">三路径并行：L1 关键词规则(微秒) → L2 trigram Jaccard 相似度(毫秒) → L3 Flash LLM 判定(秒)。</p>
+        <div class="code-block" style="font-size:11px; line-height:1.7;">
+          <span class="hl">L1</span> <span class="cmd">关键词规则</span> → 微秒级<br>
+          <span class="hl">L2</span> <span class="cmd">Trigram Jaccard</span> → 毫秒级<br>
+          <span class="hl">L3</span> <span class="cmd">Flash LLM</span> → 秒级<br>
+          <span style="color:#52525b;">碰撞类型: 矛盾 / 差异 / 前提分歧 / 补充挑战 / 冗余 / 盲区互补</span>
+        </div>
+      </div>
+      <!-- 魂记忆图谱 -->
+      <div class="card reveal reveal-d1" style="padding:32px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="3" y="3" width="4" height="4" rx="1" stroke="#d97706" stroke-width="1.5" fill="none"/><rect x="9" y="9" width="4" height="4" rx="1" stroke="#d97706" stroke-width="1.5" fill="none"/><line x1="7" y1="5" x2="9" y2="11" stroke="#d97706" stroke-width="1"/></svg>
+          <h3 style="font-size:15px; font-weight:600; color:#fff;">魂记忆图谱</h3>
+        </div>
+        <p style="font-size:13px; color:#71717a; line-height:1.65; margin-bottom:12px;">基于 petgraph 的有向图：前提 → 结论的推导链、跨魂融合边。BFS 矛盾检测 (O(n)，零 LLM 成本)。</p>
+        <div class="code-block" style="font-size:11px; line-height:1.7;">
+          <span class="hl">前提</span> <span class="cmd">→</span> <span class="cmd">结论</span> <span class="cmd">→</span> <span class="hl">新前提</span><br>
+          <span class="hl">Integrates</span> <span class="cmd">→</span> <span class="cmd">跨魂融合边</span><br>
+          <span style="color:#52525b;">BFS 矛盾检测 · DFS 前提动摇传播</span>
+        </div>
+      </div>
+      <!-- 蛇皮指数 -->
+      <div class="card reveal" style="padding:32px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 12L6 6l4 4 6-6" stroke="#d97706" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>
+          <h3 style="font-size:15px; font-weight:600; color:#fff;">蛇皮指数</h3>
+        </div>
+        <p style="font-size:13px; color:#71717a; line-height:1.65; margin-bottom:12px;">
+          <code style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#d97706;">(无效 + 部分有效 × 0.5) / 总会话 × 100</code> — 数字越高，说明你消费的思辨越多、行动越少。
+        </p>
+        <div class="code-block" style="font-size:11px; line-height:1.7;">
+          <span class="hl">≥70</span> <span class="cmd">厚重</span> &nbsp; <span class="hl">40-69</span> <span class="cmd">中等</span><br>
+          <span class="hl">15-39</span> <span class="cmd">较薄</span> &nbsp; <span class="hl">&lt;15</span> <span class="cmd">接近蜕皮</span>
+        </div>
+      </div>
+      <!-- @mention & 搜索 -->
+      <div class="card reveal reveal-d1" style="padding:32px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="6" r="3" stroke="#d97706" stroke-width="1.5" fill="none"/><path d="M3 14c0-3 2.5-5 5-5s5 2 5 5" stroke="#d97706" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+          <h3 style="font-size:15px; font-weight:600; color:#fff;">@mention · 搜索 · 成本追踪</h3>
+        </div>
+        <p style="font-size:13px; color:#71717a; line-height:1.65; margin-bottom:12px;">输入框 @魂名 即时召唤。SearXNG 联网搜索注入上下文。Token 消耗实时追踪，模型智能路由自动选择最优模型。</p>
+        <div class="code-block" style="font-size:11px; line-height:1.7;">
+          <span class="hl">@马克思</span> <span class="cmd">→ 直接召唤回复</span><br>
+          <span class="hl">SearXNG</span> <span class="cmd">→ 自托管元搜索</span><br>
+          <span class="hl">Model Router</span> <span class="cmd">→ 自动模型选择</span>
+        </div>
+      </div>
+      <!-- 审查官机制 -->
+      <div class="card reveal" style="padding:32px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2l2 4h4l-3 3 1 4-4-2-4 2 1-4-3-3h4z" stroke="#d97706" stroke-width="1.5" fill="none" stroke-linejoin="round"/></svg>
+          <h3 style="font-size:15px; font-weight:600; color:#fff;">审查官权威机制</h3>
+        </div>
+        <p style="font-size:13px; color:#71717a; line-height:1.65; margin-bottom:12px;">算法匹配魂 → 审查官一审(pass/reject + 缺失视角) → 补充匹配 → verified_souls 作为唯一权威。讨论启动前审查官先行提问，答案注入魂共用的时代背景。</p>
+        <div class="code-block" style="font-size:11px; line-height:1.7;">
+          <span class="hl">算法匹配</span> <span class="cmd">→</span> <span class="hl">审查官一审</span> <span class="cmd">→</span> <span class="hl">终裁</span><br>
+          <span style="color:#52525b;">verified_souls 是唯一权威，算法匹配只作参考</span>
+        </div>
+      </div>
+      <!-- 自适应拓扑 -->
+      <div class="card reveal reveal-d1" style="padding:32px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="4" cy="4" r="1.5" fill="#d97706"/><circle cx="12" cy="4" r="1.5" fill="#d97706"/><circle cx="8" cy="12" r="1.5" fill="#d97706"/><line x1="5" y1="5" x2="11" y2="5" stroke="#d97706" stroke-width="1"/><line x1="5" y1="5" x2="7.5" y2="11" stroke="#d97706" stroke-width="1"/><line x1="11" y1="5" x2="8.5" y2="11" stroke="#d97706" stroke-width="1"/></svg>
+          <h3 style="font-size:15px; font-weight:600; color:#fff;">自适应合议拓扑</h3>
+        </div>
+        <p style="font-size:13px; color:#71717a; line-height:1.65; margin-bottom:12px;">5 种拓扑自动选择：Minimal / ClusteredParallel / FullMesh / Oppositional / SequentialLadder。基于魂多样性 + 任务复杂度 + 预算约束的决策树。30 秒无碰撞自动降级，节省 LLM 成本。</p>
+        <div class="code-block" style="font-size:11px; line-height:1.7;">
+          <span class="hl">Minimal</span> <span class="cmd">→</span> <span class="hl">FullMesh</span> <span class="cmd">→</span> <span class="hl">Oppositional</span><br>
+          <span style="color:#52525b;">30s 无碰撞 → 自动降级节省成本</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ====== DOCS: Tech Stack ====== -->
+<section class="section">
+  <div class="container">
+    <div style="text-align:center; margin-bottom:64px;">
+      <p class="reveal section-label">Under the Hood</p>
+      <h2 class="reveal reveal-d1 section-title">为思辨性能而生</h2>
+      <p class="reveal reveal-d2 section-desc">Rust 后端保证零延迟碰撞检测，Next.js 前端提供流畅的流式体验。</p>
+    </div>
+    <div style="max-width:720px; margin:0 auto; display:grid; grid-template-columns:repeat(2,1fr); gap:20px;">
+      <div class="card reveal" style="padding:28px;">
+        <h3 style="font-size:14px; font-weight:600; color:#d97706; margin-bottom:16px; text-transform:uppercase; letter-spacing:0.05em;">Backend</h3>
+        <div style="display:flex; flex-direction:column; gap:10px; font-size:13px; color:#71717a;">
+          <div style="display:flex; justify-content:space-between;"><span>Axum</span><span style="color:#52525b;">0.7 + WebSocket + SSE</span></div>
+          <div style="display:flex; justify-content:space-between;"><span>SQLite</span><span style="color:#52525b;">WAL + FTS5 全文搜索</span></div>
+          <div style="display:flex; justify-content:space-between;"><span>AI Gateway</span><span style="color:#52525b;">Claude / OpenAI / DeepSeek</span></div>
+          <div style="display:flex; justify-content:space-between;"><span>petgraph</span><span style="color:#52525b;">魂记忆图谱</span></div>
+          <div style="display:flex; justify-content:space-between;"><span>Tokio</span><span style="color:#52525b;">异步运行时</span></div>
+        </div>
+      </div>
+      <div class="card reveal reveal-d1" style="padding:28px;">
+        <h3 style="font-size:14px; font-weight:600; color:#d97706; margin-bottom:16px; text-transform:uppercase; letter-spacing:0.05em;">Frontend</h3>
+        <div style="display:flex; flex-direction:column; gap:10px; font-size:13px; color:#71717a;">
+          <div style="display:flex; justify-content:space-between;"><span>Next.js</span><span style="color:#52525b;">16 + React 19</span></div>
+          <div style="display:flex; justify-content:space-between;"><span>shadcn/ui</span><span style="color:#52525b;">+ Tailwind CSS</span></div>
+          <div style="display:flex; justify-content:space-between;"><span>WebSocket</span><span style="color:#52525b;">50ms 批量流式渲染</span></div>
+          <div style="display:flex; justify-content:space-between;"><span>SearXNG</span><span style="color:#52525b;">联网搜索集成</span></div>
+          <div style="display:flex; justify-content:space-between;"><span>TypeScript</span><span style="color:#52525b;">严格类型检查</span></div>
+        </div>
       </div>
     </div>
   </div>

@@ -31,7 +31,8 @@ impl OpenAIClient {
     }
 
     pub fn new_lmstudio() -> Self {
-        let api_key = std::env::var("LMSTUDIO_API_KEY").ok().or_else(|| Some("lm-studio".into()));
+        let api_key = std::env::var("LMSTUDIO_API_KEY").ok()
+            .filter(|k| !k.is_empty());
         let model = std::env::var("LMSTUDIO_MODEL").unwrap_or_else(|_| "local-model".into());
         let base_url = std::env::var("LMSTUDIO_BASE_URL")
             .unwrap_or_else(|_| "http://localhost:1234/v1".into());
@@ -67,15 +68,14 @@ impl Gateway for OpenAIClient {
         config: &CallConfig,
     ) -> mpsc::Receiver<Result<Chunk>> {
         let (tx, rx) = mpsc::channel(256);
-        let api_key = match &self.api_key {
-            Some(k) => k.clone(),
-            None => {
-                let _ = tx.try_send(Err(FoundationError::Validation(
-                    "OpenAI API key not configured".into(),
-                )));
-                return rx;
-            }
-        };
+        let api_key = self.api_key.clone();
+        let is_lmstudio = self.provider_type == Provider::LMStudio;
+        if api_key.is_none() && !is_lmstudio {
+            let _ = tx.try_send(Err(FoundationError::Validation(
+                "OpenAI API key not configured".into(),
+            )));
+            return rx;
+        }
         let model = config.model.clone().unwrap_or_else(|| self.model.clone());
         let client = self.client.clone();
         let base_url = self.base_url.clone();
@@ -96,21 +96,26 @@ impl Gateway for OpenAIClient {
             })
             .collect();
 
-        let body = serde_json::json!({
+        let use_stream = !is_lmstudio; // LM Studio: go non-streaming to avoid compatibility issues
+        let mut body = serde_json::json!({
             "model": model,
             "messages": messages,
             "temperature": config.temperature,
-            "max_tokens": config.max_tokens,
-            "stream": true,
-            "stream_options": { "include_usage": true },
+            "max_tokens": config.max_tokens.max(128), // ensure at least some tokens
+            "stream": use_stream,
         });
+        if use_stream {
+            body["stream_options"] = serde_json::json!({ "include_usage": true });
+        }
 
         tokio::spawn(async move {
-            let result = client
+            let mut req = client
                 .post(format!("{}/chat/completions", base_url))
-                .header("Authorization", format!("Bearer {}", api_key))
-                .header("Content-Type", "application/json")
-                .json(&body)
+                .header("Content-Type", "application/json");
+            if let Some(ref key) = api_key {
+                req = req.header("Authorization", format!("Bearer {}", key));
+            }
+            let result = req.json(&body)
                 .send()
                 .await;
 
@@ -129,6 +134,37 @@ impl Gateway for OpenAIClient {
                     "OpenAI API error {}: {}",
                     status, body
                 )))).await;
+                return;
+            }
+
+            if !use_stream {
+                // 非流式：解析完整 JSON 响应
+                match response.json::<serde_json::Value>().await {
+                    Ok(json) => {
+                        let msg = &json["choices"][0]["message"];
+                        let mut content = msg["content"].as_str().unwrap_or("").to_string();
+                        // LM Studio 0.3.23+: 思考内容在 reasoning 字段
+                        if content.is_empty() {
+                            content = msg["reasoning"].as_str().unwrap_or("").to_string();
+                        }
+                        let usage = UsageStats {
+                            prompt_tokens: json["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32,
+                            completion_tokens: json["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32,
+                            total_tokens: json["usage"]["total_tokens"].as_u64().unwrap_or(0) as u32,
+                        };
+                        let _ = tx.send(Ok(Chunk {
+                            content,
+                            reasoning_content: None,
+                            finish_reason: Some("stop".into()),
+                            index: 0,
+                            usage: Some(usage),
+                            tool_calls: Vec::new(),
+                        })).await;
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(FoundationError::Io(std::io::Error::other(e.to_string())))).await;
+                    }
+                }
                 return;
             }
 
