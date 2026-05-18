@@ -356,37 +356,55 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 <p className="text-[10px] text-muted-foreground mt-1">设为"自动选择"时系统按优先级自动路由</p>
               </div>
 
-              <div>
-                <label className="text-xs font-medium block mb-1.5">默认模型</label>
-                <Select value={defaultModel} onValueChange={(value) => setDefaultModel(value ?? "")}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="选择默认模型" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {DEEPSEEK_MODELS_NO_DEFAULT.map((model) => (
-                      <SelectItem key={model.value} value={model.value}>
-                        {model.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              {preferredProvider === "lmstudio" ? (
+                <div>
+                  <label className="text-xs font-medium block mb-1.5">本地模型名</label>
+                  <Input
+                    type="text"
+                    placeholder="如 qwen2.5-7b-instruct"
+                    value={defaultModel}
+                    onChange={(e) => setDefaultModel(e.target.value)}
+                    className="text-sm"
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    对应 LMSTUDIO_MODEL 环境变量。需与 LM Studio 中加载的模型名一致
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="text-xs font-medium block mb-1.5">默认模型</label>
+                    <Select value={defaultModel} onValueChange={(value) => setDefaultModel(value ?? "")}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="选择默认模型" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {DEEPSEEK_MODELS_NO_DEFAULT.map((model) => (
+                          <SelectItem key={model.value} value={model.value}>
+                            {model.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
 
-              <div>
-                <label className="text-xs font-medium block mb-1.5">默认推理强度</label>
-                <Select value={defaultReasoning} onValueChange={(value) => setDefaultReasoning(value ?? "")}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="选择推理强度" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {REASONING_NO_DEFAULT.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+                  <div>
+                    <label className="text-xs font-medium block mb-1.5">默认推理强度</label>
+                    <Select value={defaultReasoning} onValueChange={(value) => setDefaultReasoning(value ?? "")}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="选择推理强度" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {REASONING_NO_DEFAULT.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              )}
 
               <Button
                 size="sm"

@@ -76,7 +76,7 @@ impl Gateway for OpenAIClient {
                 return rx;
             }
         };
-        let model = self.model.clone();
+        let model = config.model.clone().unwrap_or_else(|| self.model.clone());
         let client = self.client.clone();
         let base_url = self.base_url.clone();
         let config = config.clone();
