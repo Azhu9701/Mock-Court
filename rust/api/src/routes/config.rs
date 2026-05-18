@@ -12,6 +12,7 @@ use crate::state::AppState;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/model", post(set_default_model).get(get_default_model))
+        .route("/provider", post(set_provider).get(get_provider))
         .route("/balance", get(check_balance))
 }
 
@@ -63,6 +64,43 @@ async fn set_default_model(
         model: config.model.clone(),
         reasoning: config.reasoning.clone(),
     }))
+}
+
+#[derive(Debug, Deserialize)]
+struct SetProviderRequest {
+    provider: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProviderResponse {
+    provider: Option<String>,
+}
+
+async fn get_provider(
+    State(state): State<Arc<AppState>>,
+) -> Json<ProviderResponse> {
+    let provider = state.preferred_provider.read().unwrap().map(|p| format!("{:?}", p).to_lowercase());
+    Json(ProviderResponse { provider })
+}
+
+async fn set_provider(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SetProviderRequest>,
+) -> Result<Json<ProviderResponse>, (axum::http::StatusCode, Json<ApiError>)> {
+    let p = match body.provider.as_deref() {
+        Some("claude") | Some("anthropic") => Some(foundation::Provider::Claude),
+        Some("openai") => Some(foundation::Provider::OpenAI),
+        Some("deepseek") => Some(foundation::Provider::DeepSeek),
+        Some("lmstudio") => Some(foundation::Provider::LMStudio),
+        Some("") | None => None,
+        _ => return Err((axum::http::StatusCode::BAD_REQUEST, Json(ApiError { error: "未知 provider".into() }))),
+    };
+    {
+        let mut pref = state.preferred_provider.write().unwrap();
+        *pref = p;
+    }
+    let provider = p.map(|p| format!("{:?}", p).to_lowercase());
+    Ok(Json(ProviderResponse { provider }))
 }
 
 async fn check_balance(

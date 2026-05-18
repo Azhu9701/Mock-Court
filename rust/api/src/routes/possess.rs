@@ -107,7 +107,18 @@ struct AnalyzeRequest { task: String, #[serde(default)] judgment: Option<String>
 struct SoulMatch { name: String, field: String, ismism_code: String, rationale: String }
 
 fn pick_provider(state: &AppState) -> Result<Provider, (axum::http::StatusCode, Json<ApiError>)> {
-    state.engine.gateway().list_providers().into_iter().find(|i| i.available).map(|i| i.provider)
+    let providers = state.engine.gateway().list_providers();
+    let preferred = state.preferred_provider.read().unwrap().clone();
+
+    // 有偏好时优先用偏好 provider
+    if let Some(ref pref) = preferred {
+        if let Some(info) = providers.iter().find(|i| i.provider == *pref && i.available) {
+            return Ok(info.provider);
+        }
+        tracing::warn!("Preferred provider {:?} not available, falling back", pref);
+    }
+
+    providers.into_iter().find(|i| i.available).map(|i| i.provider)
         .ok_or_else(|| {
             tracing::error!("No LLM provider available");
             (axum::http::StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "No LLM provider".into() }))

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use archive::ArchiveSystem;
 use dashmap::DashMap;
@@ -44,4 +44,5 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub auto_create_tasks: Arc<DashMap<String, broadcast::Sender<AutoCreateEvent>>>,
     pub interrogation_gates: Arc<DashMap<String, InterrogationGate>>,
+    pub preferred_provider: Arc<RwLock<Option<foundation::Provider>>>,
 }

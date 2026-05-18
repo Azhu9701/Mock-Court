@@ -58,6 +58,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [saved, setSaved] = useState<Record<string, boolean>>({});
   const [defaultModel, setDefaultModel] = useState<string>("deepseek-v4-pro");
   const [defaultReasoning, setDefaultReasoning] = useState<string>("think");
+  const [preferredProvider, setPreferredProvider] = useState<string>("");
 
   const [healthStatus, setHealthStatus] = useState<boolean | null>(null);
   const [healthChecking, setHealthChecking] = useState(false);
@@ -87,6 +88,9 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     setDefaultModel(localStorage.getItem("default_model") || "deepseek-v4-pro");
     setDefaultReasoning(localStorage.getItem("default_reasoning") || "think");
     setBannerLord(localStorage.getItem("aionui-banner-lord") || "");
+    fetch("http://127.0.0.1:3096/api/v1/config/provider").then(r => r.json()).then(d => {
+      setPreferredProvider(d.provider || "");
+    }).catch(() => {});
     fetchSouls().then(setSouls).catch(() => {});
 
     checkHealth();
@@ -326,6 +330,32 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             </p>
 
             <div className="space-y-4">
+              <div>
+                <label className="text-xs font-medium block mb-1.5">默认 Provider</label>
+                <Select value={preferredProvider} onValueChange={async (value) => {
+                  setPreferredProvider(value ?? "");
+                  try {
+                    await fetch("http://127.0.0.1:3096/api/v1/config/provider", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ provider: value || "" }),
+                    });
+                  } catch {}
+                }}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="自动选择" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">自动选择</SelectItem>
+                    <SelectItem value="deepseek">DeepSeek</SelectItem>
+                    <SelectItem value="claude">Claude</SelectItem>
+                    <SelectItem value="openai">OpenAI</SelectItem>
+                    <SelectItem value="lmstudio">LM Studio (本地)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground mt-1">设为"自动选择"时系统按优先级自动路由</p>
+              </div>
+
               <div>
                 <label className="text-xs font-medium block mb-1.5">默认模型</label>
                 <Select value={defaultModel} onValueChange={(value) => setDefaultModel(value ?? "")}>

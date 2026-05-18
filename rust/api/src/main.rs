@@ -117,6 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config: Arc::new(config),
         auto_create_tasks: Arc::new(dashmap::DashMap::new()),
         interrogation_gates: Arc::new(dashmap::DashMap::new()),
+        preferred_provider: Arc::new(std::sync::RwLock::new(None)),
     });
 
     let app = build_router(state, rate_limiter);
