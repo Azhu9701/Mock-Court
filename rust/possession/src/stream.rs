@@ -5,8 +5,6 @@ use tokio::sync::mpsc;
 use crate::{SoulOutput, ToolCallPayload, ToolResultPayload, WsEvent, WsEventType, WsSessionManager};
 use crate::tools::ToolRegistry;
 
-const FALLBACK_MODEL: &str = "claude-sonnet-4-6";
-
 /// Stream LLM chunks to WebSocket, aggregating content and usage stats.
 pub async fn stream_single_soul(
     mut rx: mpsc::Receiver<Result<Chunk>>,
@@ -90,19 +88,9 @@ pub async fn stream_single_soul(
     SoulOutput { soul_name: name, content, usage, error: None, tool_calls }
 }
 
-/// Pick the first available provider info (model + tier).
-/// Use `info.provider` if you only need the Provider.
+/// Pick provider info respecting preferred_provider, falling back to first available.
 pub fn pick_provider_info(gateway: &GatewayRegistry) -> ProviderInfo {
-    gateway
-        .list_providers()
-        .into_iter()
-        .find(|i| i.available)
-        .unwrap_or_else(|| ProviderInfo {
-            provider: foundation::Provider::Claude,
-            model: FALLBACK_MODEL.into(),
-            available: true,
-            tier: foundation::ModelTier::Pro,
-        })
+    gateway.pick_provider_info()
 }
 
 /// Stream synthesis to WebSocket, returning aggregated content and usage.

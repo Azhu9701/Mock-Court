@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::RwLock;
 use std::time::Duration;
 
 use foundation::{CallConfig, Chunk, FoundationError, Prompt, Provider, Result, UsageStats};
@@ -11,6 +13,12 @@ pub struct OpenAIClient {
     pub model: String,
     client: Client,
     base_url: String,
+    /// 运行时可动态切换的 base URL（仅 LM Studio 使用）
+    dynamic_base_url: Option<Arc<RwLock<String>>>,
+    /// 运行时可动态切换的 API key（仅 LM Studio 使用）
+    dynamic_api_key: Option<Arc<RwLock<Option<String>>>>,
+    /// 运行时可动态切换的模型名（仅 LM Studio 使用）
+    dynamic_model: Option<Arc<RwLock<String>>>,
     provider_type: Provider,
 }
 
@@ -27,10 +35,17 @@ impl OpenAIClient {
                 .timeout(Duration::from_secs(120))
                 .build()
                 .expect("Failed to build reqwest Client"),
+            dynamic_base_url: None,
+            dynamic_api_key: None,
+            dynamic_model: None,
         }
     }
 
-    pub fn new_lmstudio() -> Self {
+    pub fn new_lmstudio(
+        dynamic_base_url: Option<Arc<RwLock<String>>>,
+        dynamic_api_key: Option<Arc<RwLock<Option<String>>>>,
+        dynamic_model: Option<Arc<RwLock<String>>>,
+    ) -> Self {
         let api_key = std::env::var("LMSTUDIO_API_KEY").ok()
             .filter(|k| !k.is_empty());
         let model = std::env::var("LMSTUDIO_MODEL").unwrap_or_else(|_| "local-model".into());
@@ -45,7 +60,46 @@ impl OpenAIClient {
                 .timeout(Duration::from_secs(300)) // 本地模型可能较慢
                 .build()
                 .expect("Failed to build reqwest Client"),
+            dynamic_base_url,
+            dynamic_api_key,
+            dynamic_model,
         }
+    }
+
+    /// 获取当前实际使用的 base URL
+    fn effective_base_url(&self) -> String {
+        if let Some(ref lock) = self.dynamic_base_url {
+            let url = lock.read().expect("lock poisoned").clone();
+            if !url.is_empty() {
+                return url;
+            }
+        }
+        self.base_url.clone()
+    }
+
+    /// 获取当前实际使用的 API key（优先 dynamic，fallback 到静态）
+    fn effective_api_key(&self) -> Option<String> {
+        if let Some(ref lock) = self.dynamic_api_key {
+            if let Ok(key_guard) = lock.read() {
+                if let Some(ref key) = *key_guard {
+                    if !key.is_empty() {
+                        return Some(key.clone());
+                    }
+                }
+            }
+        }
+        self.api_key.clone()
+    }
+
+    /// 获取当前实际使用的模型名（优先 dynamic，fallback 到静态）
+    fn effective_model(&self) -> String {
+        if let Some(ref lock) = self.dynamic_model {
+            let model = lock.read().expect("lock poisoned").clone();
+            if !model.is_empty() {
+                return model;
+            }
+        }
+        self.model.clone()
     }
 }
 
@@ -55,7 +109,7 @@ impl Gateway for OpenAIClient {
     }
 
     fn is_available(&self) -> bool {
-        self.provider_type == Provider::LMStudio || self.api_key.is_some()
+        self.provider_type == Provider::LMStudio || self.effective_api_key().is_some()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -68,7 +122,7 @@ impl Gateway for OpenAIClient {
         config: &CallConfig,
     ) -> mpsc::Receiver<Result<Chunk>> {
         let (tx, rx) = mpsc::channel(256);
-        let api_key = self.api_key.clone();
+        let api_key = self.effective_api_key();
         let is_lmstudio = self.provider_type == Provider::LMStudio;
         if api_key.is_none() && !is_lmstudio {
             let _ = tx.try_send(Err(FoundationError::Validation(
@@ -76,13 +130,13 @@ impl Gateway for OpenAIClient {
             )));
             return rx;
         }
-        let model = config.model.clone().unwrap_or_else(|| self.model.clone());
+        let model = config.model.clone().unwrap_or_else(|| self.effective_model());
         let client = self.client.clone();
-        let base_url = self.base_url.clone();
+        let base_url = self.effective_base_url();
         let config = config.clone();
 
         let messages: Vec<serde_json::Value> = {
-            let mut msgs: Vec<serde_json::Value> = prompt
+            let msgs: Vec<serde_json::Value> = prompt
                 .messages
                 .iter()
                 .map(|m| {
@@ -147,9 +201,9 @@ impl Gateway for OpenAIClient {
                     Ok(json) => {
                         let msg = &json["choices"][0]["message"];
                         let mut content = msg["content"].as_str().unwrap_or("").to_string();
-                        // LM Studio 0.3.23+: 思考内容在 reasoning 字段
+                        // LM Studio: 思考内容在 reasoning_content 字段
                         if content.is_empty() {
-                            content = msg["reasoning"].as_str().unwrap_or("").to_string();
+                            content = msg["reasoning_content"].as_str().unwrap_or("").to_string();
                         }
                         let usage = UsageStats {
                             prompt_tokens: json["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32,
@@ -201,10 +255,12 @@ impl Gateway for OpenAIClient {
                                 if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
                                     if let Some(choices) = event["choices"].as_array() {
                                         for choice in choices {
-                                            if let Some(text) = choice["delta"]["content"].as_str() {
+                                            let content_text = choice["delta"]["content"].as_str();
+                                            let reasoning_text = choice["delta"]["reasoning_content"].as_str();
+                                            if content_text.is_some() || reasoning_text.is_some() {
                                                 let _ = tx.send(Ok(Chunk {
-                                                    content: text.to_string(),
-                                                    reasoning_content: None,
+                                                    content: content_text.unwrap_or("").to_string(),
+                                                    reasoning_content: reasoning_text.map(|s| s.to_string()),
                                                     finish_reason: choice["finish_reason"].as_str().map(|s| s.to_string()),
                                                     index: chunk_index,
                                                     usage: None,

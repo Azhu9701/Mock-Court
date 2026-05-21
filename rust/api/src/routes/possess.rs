@@ -1809,7 +1809,7 @@ async fn start_interrogation(
             }
         }
         Err(e) => {
-            let preview = &raw[..raw.len().min(200)];
+            let preview: String = raw.chars().take(200).collect();
             tracing::error!("Failed to parse interrogation questions: {} (raw={})", e, raw);
             tracing::error!("Failed to parse interrogation questions: {} (json_str={})", e, json_str);
             Err((

@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { BarChart3, Brain, Globe, History, Search, Users } from "lucide-react";
+import { BarChart3, Brain, Cpu, Globe, History, Search, Users } from "lucide-react";
 
 export interface NavItem {
   key: string;
@@ -32,6 +32,7 @@ export const navConfig: NavGroup[] = [
   {
     label: "工具",
     items: [
+      { key: "models", label: "模型配置", href: "/models", icon: Cpu },
       { key: "searxng", label: "SearXNG 搜索", href: "/searxng", icon: Globe },
     ],
   },

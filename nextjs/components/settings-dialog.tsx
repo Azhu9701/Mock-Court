@@ -8,35 +8,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  Eye, EyeOff, Trash2, Settings2, Sun, Moon, Monitor,
+  Sun, Moon, Monitor,
   Database, Search, HardDrive, Trash, Server, Terminal,
   RefreshCw, Download, Loader2, AlertTriangle, CheckCircle2,
 } from "lucide-react";
-import { DEEPSEEK_MODELS_NO_DEFAULT, REASONING_OPTIONS } from "@/config/models";
 import { rebuildFts, fetchSouls } from "@/lib/api";
 import type { SoulListEntry } from "@/lib/api";
-
-type Provider = "claude" | "openai" | "deepseek" | "lmstudio";
-
-interface ApiKeyEntry {
-  provider: Provider;
-  label: string;
-  key: string;
-  envVar: string;
-}
-
-const API_KEYS: ApiKeyEntry[] = [
-  { provider: "claude", label: "Claude (Anthropic)", key: "", envVar: "ANTHROPIC_API_KEY" },
-  { provider: "openai", label: "OpenAI", key: "", envVar: "OPENAI_API_KEY" },
-  { provider: "deepseek", label: "DeepSeek", key: "", envVar: "DEEPSEEK_API_KEY" },
-  { provider: "lmstudio", label: "LM Studio (本地)", key: "", envVar: "LMSTUDIO_MODEL" },
-];
-
-const REASONING_NO_DEFAULT = REASONING_OPTIONS.filter(r => r.value !== "");
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const themeOptions = [
   { value: "system", label: "跟随系统", icon: Monitor },
@@ -53,12 +33,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
 
-  const [keys, setKeys] = useState<Record<string, string>>({});
-  const [visible, setVisible] = useState<Record<string, boolean>>({});
   const [saved, setSaved] = useState<Record<string, boolean>>({});
-  const [defaultModel, setDefaultModel] = useState<string>("deepseek-v4-pro");
-  const [defaultReasoning, setDefaultReasoning] = useState<string>("think");
-  const [preferredProvider, setPreferredProvider] = useState<string>("");
 
   const [healthStatus, setHealthStatus] = useState<boolean | null>(null);
   const [healthChecking, setHealthChecking] = useState(false);
@@ -79,18 +54,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   useEffect(() => {
     if (!open) return;
 
-    const stored: Record<string, string> = {};
-    for (const k of API_KEYS) {
-      const val = localStorage.getItem(`apikey_${k.provider}`) || "";
-      stored[k.provider] = val;
-    }
-    setKeys(stored);
-    setDefaultModel(localStorage.getItem("default_model") || "deepseek-v4-pro");
-    setDefaultReasoning(localStorage.getItem("default_reasoning") || "think");
     setBannerLord(localStorage.getItem("aionui-banner-lord") || "");
-    fetch("http://127.0.0.1:3096/api/v1/config/provider").then(r => r.json()).then(d => {
-      setPreferredProvider(d.provider || "");
-    }).catch(() => {});
     fetchSouls().then(setSouls).catch(() => {});
 
     checkHealth();
@@ -108,40 +72,6 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     } finally {
       setHealthChecking(false);
     }
-  };
-
-  const saveKey = async (provider: string) => {
-    const val = keys[provider] || "";
-    localStorage.setItem(`apikey_${provider}`, val);
-    try {
-      const map: Record<string, string> = { claude: "anthropic", openai: "openai", deepseek: "deepseek", lmstudio: "lmstudio" };
-      await fetch("http://127.0.0.1:3096/api/v1/apikey/set", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: map[provider] || provider, key: val }),
-      });
-    } catch { /* backend may not be running */ }
-    setSaved((prev) => ({ ...prev, [provider]: true }));
-    setTimeout(() => setSaved((prev) => ({ ...prev, [provider]: false })), 2000);
-  };
-
-  const clearKey = (provider: string) => {
-    setKeys((prev) => ({ ...prev, [provider]: "" }));
-    localStorage.removeItem(`apikey_${provider}`);
-  };
-
-  const saveModelSettings = async () => {
-    localStorage.setItem("default_model", defaultModel);
-    localStorage.setItem("default_reasoning", defaultReasoning);
-    try {
-      await fetch("http://127.0.0.1:3096/api/v1/config/model", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: defaultModel, reasoning: defaultReasoning }),
-      });
-    } catch { /* backend may not be running */ }
-    setSaved((prev) => ({ ...prev, model: true }));
-    setTimeout(() => setSaved((prev) => ({ ...prev, model: false })), 2000);
   };
 
   const saveBannerLord = (value: string | null) => {
@@ -212,78 +142,6 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
         </DialogHeader>
 
         <div className="overflow-y-auto flex-1 min-h-0 space-y-6 py-2">
-          {/* ── API Keys ── */}
-          <div>
-            <h3 className="text-sm font-semibold mb-3">API Key</h3>
-            <p className="text-xs text-muted-foreground mb-3">
-              Key 存储在浏览器 localStorage 中，仅供本地使用
-            </p>
-            {API_KEYS.map((entry) => (
-              <div key={entry.provider} className="mb-3">
-                <label className="text-xs font-medium">{entry.label}</label>
-                {entry.provider === "lmstudio" && (
-                  <p className="text-[10px] text-muted-foreground mt-0.5">
-                    无需 API Key。模型名通过环境变量 LMSTUDIO_MODEL 设置，默认 local-model。端点通过 LMSTUDIO_BASE_URL 设置，默认 http://localhost:1234/v1
-                  </p>
-                )}
-                <div className="flex gap-1 mt-1">
-                  <div className="relative flex-1">
-                    <Input
-                      type={entry.provider === "lmstudio" ? "text" : (visible[entry.provider] ? "text" : "password")}
-                      placeholder={entry.provider === "lmstudio" ? "本地模型名（如 qwen2.5-7b-instruct）..." : `输入 ${entry.label} API Key...`}
-                      value={keys[entry.provider] || ""}
-                      onChange={(e) =>
-                        setKeys((prev) => ({
-                          ...prev,
-                          [entry.provider]: e.target.value,
-                        }))
-                      }
-                      className="pr-8 text-sm"
-                      data-testid={`apikey-${entry.provider}`}
-                    />
-                    <button
-                      type="button"
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                      onClick={() =>
-                        setVisible((prev) => ({
-                          ...prev,
-                          [entry.provider]: !prev[entry.provider],
-                        }))
-                      }
-                    >
-                      {visible[entry.provider] ? (
-                        <EyeOff className="h-3.5 w-3.5" />
-                      ) : (
-                        <Eye className="h-3.5 w-3.5" />
-                      )}
-                    </button>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant={saved[entry.provider] ? "default" : "outline"}
-                    onClick={() => saveKey(entry.provider)}
-                    data-testid={`save-key-${entry.provider}`}
-                  >
-                    {saved[entry.provider] ? "已保存" : "保存"}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => clearKey(entry.provider)}
-                    data-testid={`clear-key-${entry.provider}`}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-                <p className="text-[10px] text-muted-foreground mt-0.5">
-                  或设置环境变量 {entry.envVar}
-                </p>
-              </div>
-            ))}
-          </div>
-
-          <hr className="border-border" />
-
           {/* ── 外观 ── */}
           <div>
             <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
@@ -314,106 +172,6 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                   </Button>
                 );
               })}
-            </div>
-          </div>
-
-          <hr className="border-border" />
-
-          {/* ── 默认模型配置 ── */}
-          <div>
-            <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
-              <Settings2 className="h-4 w-4" />
-              默认模型配置
-            </h3>
-            <p className="text-xs text-muted-foreground mb-3">
-              设置召唤魂时默认使用的模型。单个魂可以在魂详情页单独配置
-            </p>
-
-            <div className="space-y-4">
-              <div>
-                <label className="text-xs font-medium block mb-1.5">默认 Provider</label>
-                <Select value={preferredProvider} onValueChange={async (value) => {
-                  setPreferredProvider(value ?? "");
-                  try {
-                    await fetch("http://127.0.0.1:3096/api/v1/config/provider", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ provider: value || "" }),
-                    });
-                  } catch {}
-                }}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="自动选择" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="">自动选择</SelectItem>
-                    <SelectItem value="deepseek">DeepSeek</SelectItem>
-                    <SelectItem value="claude">Claude</SelectItem>
-                    <SelectItem value="openai">OpenAI</SelectItem>
-                    <SelectItem value="lmstudio">LM Studio (本地)</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-[10px] text-muted-foreground mt-1">设为"自动选择"时系统按优先级自动路由</p>
-              </div>
-
-              {preferredProvider === "lmstudio" ? (
-                <div>
-                  <label className="text-xs font-medium block mb-1.5">本地模型名</label>
-                  <Input
-                    type="text"
-                    placeholder="如 qwen2.5-7b-instruct"
-                    value={defaultModel}
-                    onChange={(e) => setDefaultModel(e.target.value)}
-                    className="text-sm"
-                  />
-                  <p className="text-[10px] text-muted-foreground mt-1">
-                    对应 LMSTUDIO_MODEL 环境变量。需与 LM Studio 中加载的模型名一致
-                  </p>
-                </div>
-              ) : (
-                <>
-                  <div>
-                    <label className="text-xs font-medium block mb-1.5">默认模型</label>
-                    <Select value={defaultModel} onValueChange={(value) => setDefaultModel(value ?? "")}>
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder="选择默认模型" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {DEEPSEEK_MODELS_NO_DEFAULT.map((model) => (
-                          <SelectItem key={model.value} value={model.value}>
-                            {model.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div>
-                    <label className="text-xs font-medium block mb-1.5">默认推理强度</label>
-                    <Select value={defaultReasoning} onValueChange={(value) => setDefaultReasoning(value ?? "")}>
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder="选择推理强度" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {REASONING_NO_DEFAULT.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </>
-              )}
-
-              <Button
-                size="sm"
-                variant={saved.model ? "default" : "outline"}
-                onClick={saveModelSettings}
-                className="w-full"
-              >
-                {saved.model ? "已保存默认模型配置" : "保存默认模型配置"}
-              </Button>
             </div>
           </div>
 
@@ -605,30 +363,6 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                   <Button size="xs" variant="ghost" onClick={checkHealth} disabled={healthChecking}>
                     <RefreshCw className="h-3 w-3" />
                   </Button>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground flex items-center gap-1.5">
-                  <Database className="h-3.5 w-3.5" />
-                  API Key 状态
-                </span>
-                <div className="flex gap-2">
-                  {API_KEYS.map((entry) => {
-                    const hasKey = !!(keys[entry.provider]);
-                    return (
-                      <span
-                        key={entry.provider}
-                        className={`rounded-full px-2 py-0.5 text-[10px] ${
-                          hasKey
-                            ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-                            : "bg-muted text-muted-foreground"
-                        }`}
-                      >
-                        {entry.provider}
-                      </span>
-                    );
-                  })}
                 </div>
               </div>
 

@@ -61,6 +61,9 @@ pub struct GatewayRegistry {
     all_info: Vec<ProviderInfo>,
     cache: Arc<RwLock<Option<Arc<LlMCache>>>>,
     preferred_provider: Arc<RwLock<Option<Provider>>>,
+    lmstudio_base_url: Arc<RwLock<String>>,
+    lmstudio_api_key: Arc<RwLock<Option<String>>>,
+    lmstudio_model: Arc<RwLock<String>>,
 }
 
 impl GatewayRegistry {
@@ -111,7 +114,20 @@ impl GatewayRegistry {
         }
 
         // LM Studio (本地 OpenAI 兼容)
-        let lmstudio = OpenAIClient::new_lmstudio();
+        let lmstudio_base_url: Arc<RwLock<String>> = Arc::new(RwLock::new(
+            std::env::var("LMSTUDIO_BASE_URL").unwrap_or_else(|_| "http://localhost:1234/v1".into())
+        ));
+        let lmstudio_api_key: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(
+            std::env::var("LMSTUDIO_API_KEY").ok().filter(|k| !k.is_empty())
+        ));
+        let lmstudio_model: Arc<RwLock<String>> = Arc::new(RwLock::new(
+            std::env::var("LMSTUDIO_MODEL").unwrap_or_else(|_| "local-model".into())
+        ));
+        let lmstudio = OpenAIClient::new_lmstudio(
+            Some(lmstudio_base_url.clone()),
+            Some(lmstudio_api_key.clone()),
+            Some(lmstudio_model.clone()),
+        );
         let lmstudio_available = true; // 本地服务总是"可用"，连接失败在实际调用时处理
         let lmstudio_tier = ModelTier::for_provider(&Provider::LMStudio, &lmstudio.model);
         all_info.push(ProviderInfo {
@@ -122,16 +138,51 @@ impl GatewayRegistry {
         });
         providers.insert(Provider::LMStudio, Arc::new(lmstudio));
 
-        GatewayRegistry { providers, all_info, cache: Arc::new(RwLock::new(None)), preferred_provider: Arc::new(RwLock::new(None)) }
+        GatewayRegistry { providers, all_info, cache: Arc::new(RwLock::new(None)), preferred_provider: Arc::new(RwLock::new(None)), lmstudio_base_url, lmstudio_api_key, lmstudio_model }
     }
 
     pub fn list_providers(&self) -> Vec<ProviderInfo> {
-        self.all_info.clone()
+        let mut info = self.all_info.clone();
+        // 动态更新 LM Studio 模型名
+        if let Some(lmstudio) = info.iter_mut().find(|i| i.provider == Provider::LMStudio) {
+            let model = self.lmstudio_model.read().expect("lock poisoned").clone();
+            if !model.is_empty() {
+                lmstudio.model = model;
+            }
+        }
+        info
     }
 
     pub fn set_preferred_provider(&self, provider: Option<Provider>) {
         let mut p = self.preferred_provider.write().expect("lock poisoned");
         *p = provider;
+    }
+
+    pub fn lmstudio_base_url(&self) -> String {
+        self.lmstudio_base_url.read().expect("lock poisoned").clone()
+    }
+
+    pub fn set_lmstudio_base_url(&self, url: String) {
+        let mut u = self.lmstudio_base_url.write().expect("lock poisoned");
+        *u = url;
+    }
+
+    pub fn lmstudio_api_key(&self) -> Option<String> {
+        self.lmstudio_api_key.read().expect("lock poisoned").clone()
+    }
+
+    pub fn set_lmstudio_api_key(&self, key: Option<String>) {
+        let mut k = self.lmstudio_api_key.write().expect("lock poisoned");
+        *k = key;
+    }
+
+    pub fn lmstudio_model(&self) -> String {
+        self.lmstudio_model.read().expect("lock poisoned").clone()
+    }
+
+    pub fn set_lmstudio_model(&self, model: String) {
+        let mut m = self.lmstudio_model.write().expect("lock poisoned");
+        *m = model;
     }
 
     pub fn pick_provider(&self) -> Option<Provider> {
@@ -142,6 +193,26 @@ impl GatewayRegistry {
             }
         }
         self.providers.keys().next().copied()
+    }
+
+    /// Pick provider info respecting preferred_provider, falling back to first available.
+    pub fn pick_provider_info(&self) -> ProviderInfo {
+        let pref = self.preferred_provider.read().expect("lock poisoned").clone();
+        if let Some(ref p) = pref {
+            if let Some(info) = self.all_info.iter().find(|i| &i.provider == p) {
+                return info.clone();
+            }
+        }
+        self.all_info
+            .iter()
+            .find(|i| i.available)
+            .cloned()
+            .unwrap_or_else(|| ProviderInfo {
+                provider: Provider::Claude,
+                model: "deepseek-v4-pro".into(),
+                available: true,
+                tier: ModelTier::Pro,
+            })
     }
 
     pub fn set_cache(&self, cache: Arc<LlMCache>) {
