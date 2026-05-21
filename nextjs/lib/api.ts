@@ -112,12 +112,6 @@ export interface SoulListEntry {
   incompat: string[];
 }
 
-export interface SoulMatch {
-  entry: SoulListEntry;
-  relevance: number;
-  matched_fields: string[];
-}
-
 export interface SoulProfile {
   name: string;
   ismism_code: string;
@@ -168,11 +162,6 @@ export type ConferenceEvent =
   | { type: "system";       message: string }
   | { type: "error";        message: string; soul?: string }
 
-export interface FailureAlert {
-  soul_name: string;
-  alert_type: "boundary_review" | "suspension";
-}
-
 export interface KnowledgeResult {
   soul_name: string | null;
   content_snippet: string;
@@ -217,13 +206,6 @@ export async function fetchSoul(name: string): Promise<SoulProfile> {
   );
 }
 
-export async function searchSouls(query: string): Promise<SoulMatch[]> {
-  return apiRequest<SoulMatch[]>(
-    `/souls/search?q=${encodeURIComponent(query)}`,
-    { operation: 'searchSouls' }
-  );
-}
-
 export async function deleteSoul(name: string): Promise<void> {
   return apiRequest<void>(
     `/souls/${encodeURIComponent(name)}`,
@@ -244,15 +226,6 @@ export async function updateSoul(
       operation: 'updateSoul',
     }
   );
-}
-
-export async function createSoul(data: Record<string, unknown>): Promise<void> {
-  return apiRequest<void>('/souls', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-    operation: 'createSoul',
-  });
 }
 
 export interface AutoCreateAccepted {
@@ -332,22 +305,6 @@ export function watchAutoCreate(
 
 // ── Analytics ──
 
-export async function fetchSoulEffectiveness(
-  name: string
-): Promise<EffectivenessTrend> {
-  return apiRequest<EffectivenessTrend>(
-    `/analytics/soul-effectiveness/${encodeURIComponent(name)}`,
-    { next: { revalidate: 60 }, operation: 'fetchSoulEffectiveness' }
-  );
-}
-
-export async function fetchIsmismDistribution(): Promise<IsmismStats> {
-  return apiRequest<IsmismStats>('/souls/ismism/distribution', {
-    next: { revalidate: 60 },
-    operation: 'fetchIsmismDistribution',
-  });
-}
-
 export interface SummonStatsResponse {
   total_calls: number;
   unique_souls_called: number;
@@ -378,23 +335,6 @@ export interface BoundaryReview {
   total_calls: number;
   threshold: number;
   recommendation: string;
-}
-
-export interface EffectivenessTrend {
-  soul_name: string;
-  total_calls: number;
-  effective: number;
-  partial: number;
-  invalid: number;
-  effective_rate: number;
-}
-
-export interface IsmismStats {
-  field_distribution: Record<number, number>;
-  ontology_distribution: Record<number, number>;
-  epistemology_distribution: Record<number, number>;
-  teleology_distribution: Record<number, number>;
-  total_souls: number;
 }
 
 export interface PleasureStats {
@@ -443,12 +383,6 @@ export async function fetchLowEffectiveness(threshold = 0.3): Promise<BoundaryRe
   );
 }
 
-export async function fetchAudit(): Promise<FailureAlert[]> {
-  return apiRequest<FailureAlert[]>('/analytics/audit', {
-    next: { revalidate: 60 },
-    operation: 'fetchAudit',
-  });
-}
 
 // ── Sessions ──
 

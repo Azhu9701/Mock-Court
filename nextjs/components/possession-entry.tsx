@@ -245,7 +245,6 @@ export function PossessionEntry() {
     });
     setTaskHistoryIdx(-1);
     
-    console.log("=== 开始讨论流程");
     setIsCancelled(false);
     setLog([]);
     setError("");
@@ -291,7 +290,6 @@ export function PossessionEntry() {
         setPhase("starting");
         setMode("conference");
 
-        console.log("=== fast-path startPossession with prefilled souls:", prefilledSouls);
         const { session_id } = await startPossession({
           mode: "conference",
           task,
@@ -299,7 +297,6 @@ export function PossessionEntry() {
           search_topic: searchTopic,
           interrogation_context: interrogationContextRef.current || undefined,
         });
-        console.log("=== startPossession 完成, session_id:", session_id);
 
         if (isCancelled) {
           setPhase("input");
@@ -315,7 +312,6 @@ export function PossessionEntry() {
 
       addLog("开始分析任务...");
       setProgressLine("正在分析任务，入口分流中…");
-      console.log("=== 调用 analyzeTask API (streaming)...");
       const reviewer = localStorage.getItem("aionui-banner-lord") || undefined;
       abortRef.current = new AbortController();
 
@@ -353,10 +349,7 @@ export function PossessionEntry() {
         }
       });
 
-      console.log("=== analyzeTask 完成:", data);
-
       if (isCancelled) {
-        console.log("=== 用户取消");
         setPhase("input");
         return;
       }
@@ -392,7 +385,6 @@ export function PossessionEntry() {
       setTaskCards(cards);
 
       if (isCancelled) {
-        console.log("=== 用户取消");
         setPhase("input");
         return;
       }
@@ -403,17 +395,14 @@ export function PossessionEntry() {
       addLog("🚀 启动附体会话...");
       setProgressLine("正在启动附体会话…");
 
-      console.log("=== 调用 startPossession API...");
       const { session_id } = await startPossession({
         mode: finalMode, task, souls: souls.map((s: any) => s.name),
         task_cards: Object.keys(cards).length > 0 ? cards : undefined,
         search_topic: searchTopic,
         interrogation_context: interrogationContextRef.current || undefined,
       });
-      console.log("=== startPossession 完成, session_id:", session_id);
 
       if (isCancelled) {
-        console.log("=== 用户取消");
         setPhase("input");
         return;
       }

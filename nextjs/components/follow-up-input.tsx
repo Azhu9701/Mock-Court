@@ -172,8 +172,8 @@ export default function FollowUpInput({
     return { soul: found.name, cleanText };
   }, [allSouls]);
 
-  const log = (msg: string, ...args: unknown[]) => {
-    console.log(`[FollowUp] ${msg}`, ...args);
+  const log = (_msg: string, ..._args: unknown[]) => {
+    // debug logging disabled
   };
 
   const scheduleFlush = useCallback(() => {
