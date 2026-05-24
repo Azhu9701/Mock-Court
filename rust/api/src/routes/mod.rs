@@ -1,6 +1,7 @@
 mod analytics;
 mod apikey;
 mod archive;
+mod auth_route;
 mod config;
 mod knowledge;
 mod possess;
@@ -26,6 +27,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .nest("/apikey", apikey::router())
         .nest("/knowledge", knowledge::router())
         .nest("/config", config::router())
+        .nest("/auth", auth_route::router())
         .nest("/searxng", searxng::router())
 }
 

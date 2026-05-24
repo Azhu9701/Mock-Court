@@ -73,12 +73,14 @@ async fn auth_middleware(
         return next.run(request).await;
     }
 
-    // 模式 2：无 API_TOKEN → 检查 X-Forwarded-User（tinyauth forward-auth）
-    let forwarded_user = request
-        .headers()
-        .get("X-Forwarded-User")
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.is_empty())
+    // 模式 2：无 API_TOKEN → 检查 forward-auth header（tinyauth → Caddy → API）
+    let forwarded_user = ["X-Forwarded-User", "X-Tinyauth-User", "Remote-User"]
+        .iter()
+        .find_map(|name| {
+            request.headers().get(*name)
+                .and_then(|v| v.to_str().ok())
+                .filter(|s| !s.is_empty())
+        })
         .map(|s| s.to_string());
 
     if let Some(user) = forwarded_user {

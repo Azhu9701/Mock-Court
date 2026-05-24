@@ -50,9 +50,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.web
+      args:
+        - NEXT_PUBLIC_API_URL=https://api.${DOMAIN}
     restart: unless-stopped
     environment:
       - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=https://api.${DOMAIN}
     networks:
       - banner
 
