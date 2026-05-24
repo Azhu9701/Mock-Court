@@ -135,7 +135,11 @@ impl Gateway for DeepSeekClient {
                 if let Some(schema) = &structured.json_schema {
                     body["response_format"] = serde_json::json!({
                         "type": "json_schema",
-                        "json_schema": schema
+                        "json_schema": {
+                            "name": "structured_output",
+                            "strict": true,
+                            "schema": schema
+                        }
                     });
                 } else {
                     body["response_format"] = serde_json::json!({
@@ -146,8 +150,9 @@ impl Gateway for DeepSeekClient {
         }
 
         tokio::spawn(async move {
+            let url = crate::relay_base_url("https://api.deepseek.com");
             let result = client
-                .post("https://api.deepseek.com/chat/completions")
+                .post(format!("{}/chat/completions", url))
                 .header("Authorization", format!("Bearer {}", api_key))
                 .header("Content-Type", "application/json")
                 .json(&body)
@@ -177,12 +182,19 @@ impl Gateway for DeepSeekClient {
             let mut stream = response.bytes_stream();
             let mut buffer = String::new();
             let mut chunk_index: u32 = 0;
+            const MAX_BUFFER: usize = 1_048_576; // 1MB — 防止畸形 SSE 流导致内存无限增长
 
             while let Some(bytes_result) = stream.next().await {
                 match bytes_result {
                     Ok(bytes) => {
                         if let Ok(s) = std::str::from_utf8(&bytes) {
                             buffer.push_str(s);
+                        }
+                        if buffer.len() > MAX_BUFFER {
+                            let _ = tx.send(Err(FoundationError::Validation(
+                                "SSE buffer exceeded 1MB limit".into()
+                            ))).await;
+                            return;
                         }
                         let mut pos = 0usize;
                         while let Some(end) = buffer[pos..].find('\n') {
@@ -299,6 +311,15 @@ impl Gateway for DeepSeekClient {
                     }
                 }
             }
+            // Stream EOF without [DONE] — send terminal chunk to unblock receiver
+            let _ = tx.send(Ok(Chunk {
+                content: String::new(),
+                reasoning_content: None,
+                finish_reason: Some("stop".into()),
+                index: chunk_index,
+                usage: None,
+                tool_calls: Vec::new(),
+            })).await;
         });
 
         rx

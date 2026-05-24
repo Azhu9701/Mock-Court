@@ -95,8 +95,9 @@ impl Gateway for ClaudeClient {
         };
 
         tokio::spawn(async move {
+            let url = crate::relay_base_url("https://api.anthropic.com/v1");
             let result = client
-                .post("https://api.anthropic.com/v1/messages")
+                .post(format!("{}/messages", url))
                 .header("x-api-key", &api_key)
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
@@ -191,6 +192,15 @@ impl Gateway for ClaudeClient {
                     }
                 }
             }
+            // Stream EOF without message_stop — send terminal chunk to unblock receiver
+            let _ = tx.send(Ok(Chunk {
+                content: String::new(),
+                reasoning_content: None,
+                finish_reason: Some("stop".into()),
+                index: chunk_index,
+                usage: None,
+                tool_calls: Vec::new(),
+            })).await;
         });
 
         rx

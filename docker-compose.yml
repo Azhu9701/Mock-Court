@@ -28,20 +28,6 @@ services:
     networks:
       - banner
 
-  # ── AI 中转站 ──
-  litellm:
-    image: ghcr.io/berriai/litellm:main-stable
-    restart: unless-stopped
-    volumes:
-      - ./deploy/litellm_config.yaml:/app/config.yaml
-      - litellm_data:/app/data
-    environment:
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
-      - CLAUDE_API_KEY=${CLAUDE_API_KEY}
-    networks:
-      - banner
-
   api:
     build:
       context: .
@@ -49,6 +35,14 @@ services:
     restart: unless-stopped
     volumes:
       - api_data:/app/data
+    environment:
+      - AI_RELAY_URL=${AI_RELAY_URL}
+      - OPENAI_API_KEY=${AGENT_PROXY_KEY}
+      - OPENAI_MODEL=gpt-4o
+      - DEEPSEEK_API_KEY=${AGENT_PROXY_KEY}
+      - DEEPSEEK_MODEL=deepseek-v4-pro
+      - CLAUDE_API_KEY=${AGENT_PROXY_KEY}
+      - CLAUDE_MODEL=claude-opus-4-7
     networks:
       - banner
 
@@ -66,7 +60,6 @@ volumes:
   caddy_data:
   caddy_config:
   api_data:
-  litellm_data:
 
 networks:
   banner:

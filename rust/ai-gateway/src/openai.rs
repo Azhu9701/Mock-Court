@@ -1,5 +1,6 @@
 use std::sync::Arc;
-use std::sync::RwLock;
+
+use parking_lot::RwLock;
 use std::time::Duration;
 
 use foundation::{CallConfig, Chunk, FoundationError, Prompt, Provider, Result, UsageStats};
@@ -29,7 +30,7 @@ impl OpenAIClient {
         OpenAIClient {
             api_key,
             model,
-            base_url: "https://api.openai.com/v1".into(),
+            base_url: crate::relay_base_url("https://api.openai.com/v1"),
             provider_type: Provider::OpenAI,
             client: Client::builder()
                 .timeout(Duration::from_secs(120))
@@ -41,35 +42,10 @@ impl OpenAIClient {
         }
     }
 
-    pub fn new_lmstudio(
-        dynamic_base_url: Option<Arc<RwLock<String>>>,
-        dynamic_api_key: Option<Arc<RwLock<Option<String>>>>,
-        dynamic_model: Option<Arc<RwLock<String>>>,
-    ) -> Self {
-        let api_key = std::env::var("LMSTUDIO_API_KEY").ok()
-            .filter(|k| !k.is_empty());
-        let model = std::env::var("LMSTUDIO_MODEL").unwrap_or_else(|_| "local-model".into());
-        let base_url = std::env::var("LMSTUDIO_BASE_URL")
-            .unwrap_or_else(|_| "http://localhost:1234/v1".into());
-        OpenAIClient {
-            api_key,
-            model,
-            base_url,
-            provider_type: Provider::LMStudio,
-            client: Client::builder()
-                .timeout(Duration::from_secs(300)) // 本地模型可能较慢
-                .build()
-                .expect("Failed to build reqwest Client"),
-            dynamic_base_url,
-            dynamic_api_key,
-            dynamic_model,
-        }
-    }
-
     /// 获取当前实际使用的 base URL
     fn effective_base_url(&self) -> String {
         if let Some(ref lock) = self.dynamic_base_url {
-            let url = lock.read().expect("lock poisoned").clone();
+            let url = lock.read().clone();
             if !url.is_empty() {
                 return url;
             }
@@ -80,11 +56,10 @@ impl OpenAIClient {
     /// 获取当前实际使用的 API key（优先 dynamic，fallback 到静态）
     fn effective_api_key(&self) -> Option<String> {
         if let Some(ref lock) = self.dynamic_api_key {
-            if let Ok(key_guard) = lock.read() {
-                if let Some(ref key) = *key_guard {
-                    if !key.is_empty() {
-                        return Some(key.clone());
-                    }
+            let key_guard = lock.read();
+            if let Some(ref key) = *key_guard {
+                if !key.is_empty() {
+                    return Some(key.clone());
                 }
             }
         }
@@ -94,7 +69,7 @@ impl OpenAIClient {
     /// 获取当前实际使用的模型名（优先 dynamic，fallback 到静态）
     fn effective_model(&self) -> String {
         if let Some(ref lock) = self.dynamic_model {
-            let model = lock.read().expect("lock poisoned").clone();
+            let model = lock.read().clone();
             if !model.is_empty() {
                 return model;
             }
@@ -154,16 +129,55 @@ impl Gateway for OpenAIClient {
             msgs
         };
 
-        let use_stream = config.stream || !is_lmstudio; // 尊重 config.stream 设置
+        // LM Studio 开启全局结构化输出时，流式 + 自由文本 = 空内容。
+        // Workaround：无 schema 时强制非流式，并提供一个自由文本 JSON schema，
+        // 让模型输出 {"response": "..."}，后端解析提取。
+        let use_stream = if is_lmstudio && config.structured_output.is_none() {
+            false
+        } else {
+            config.stream || !is_lmstudio
+        };
         let mut body = serde_json::json!({
             "model": model,
             "messages": messages,
             "temperature": config.temperature,
-            "max_tokens": config.max_tokens.max(128), // ensure at least some tokens
+            "max_tokens": config.max_tokens.max(128),
             "stream": use_stream,
         });
         if use_stream {
             body["stream_options"] = serde_json::json!({ "include_usage": true });
+        }
+        // response_format 控制
+        if let Some(ref so) = config.structured_output {
+            if so.enabled {
+                if let Some(ref schema) = so.json_schema {
+                    body["response_format"] = serde_json::json!({
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "response",
+                            "schema": schema,
+                            "strict": true
+                        }
+                    });
+                } else {
+                    body["response_format"] = serde_json::json!({ "type": "json_object" });
+                }
+            }
+        } else if is_lmstudio {
+            // LM Studio 只支持 json_schema / text，不支持 json_object。
+            // 用一个极简 schema 让模型输出 {"response": "..."}
+            body["response_format"] = serde_json::json!({
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "text_response",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "response": { "type": "string" }
+                        }
+                    }
+                }
+            });
         }
 
         tokio::spawn(async move {
@@ -199,11 +213,28 @@ impl Gateway for OpenAIClient {
                 // 非流式：解析完整 JSON 响应
                 match response.json::<serde_json::Value>().await {
                     Ok(json) => {
+                        tracing::debug!("LM Studio raw response json: {}", serde_json::to_string(&json).unwrap_or_default());
                         let msg = &json["choices"][0]["message"];
                         let mut content = msg["content"].as_str().unwrap_or("").to_string();
+                        tracing::debug!("LM Studio message content: '{}'", content);
                         // LM Studio: 思考内容在 reasoning_content 字段
                         if content.is_empty() {
                             content = msg["reasoning_content"].as_str().unwrap_or("").to_string();
+                            tracing::debug!("LM Studio fallback to reasoning_content: '{}'", content);
+                        }
+                        // LM Studio 全局结构化输出 workaround：提取 {"response": "..."} 中的文本
+                        if is_lmstudio && content.trim_start().starts_with('{') {
+                            tracing::debug!("LM Studio content looks like JSON, attempting parse");
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+                                if let Some(text) = parsed["response"].as_str() {
+                                    tracing::debug!("LM Studio extracted response: '{}'", text);
+                                    content = text.to_string();
+                                } else {
+                                    tracing::debug!("LM Studio JSON parse ok but no 'response' field, keys: {:?}", parsed.as_object().map(|o| o.keys().collect::<Vec<_>>()));
+                                }
+                            } else {
+                                tracing::debug!("LM Studio JSON parse failed");
+                            }
                         }
                         let usage = UsageStats {
                             prompt_tokens: json["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32,
@@ -296,6 +327,15 @@ impl Gateway for OpenAIClient {
                     }
                 }
             }
+            // Stream EOF without [DONE] — send terminal chunk to unblock receiver
+            let _ = tx.send(Ok(Chunk {
+                content: String::new(),
+                reasoning_content: None,
+                finish_reason: Some("stop".into()),
+                index: chunk_index,
+                usage: None,
+                tool_calls: Vec::new(),
+            })).await;
         });
 
         rx
