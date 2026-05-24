@@ -40,6 +40,7 @@ interface TestResult {
   ok: boolean;
   message: string;
   latency_ms: number | null;
+  model?: string;
 }
 
 const PROVIDER_META: Record<
@@ -98,6 +99,8 @@ export default function ModelsPage() {
   const [defaultModel, setDefaultModel] = useState("deepseek-v4-pro");
   const [defaultReasoning, setDefaultReasoning] = useState("think");
   const [savingDefaults, setSavingDefaults] = useState(false);
+  const [defaultsSaved, setDefaultsSaved] = useState(false);
+  const [defaultsError, setDefaultsError] = useState("");
 
   const fetchLmstudioModel = useCallback(async () => {
     try {
@@ -110,6 +113,70 @@ export default function ModelsPage() {
       }
     } catch {}
   }, []);
+
+  // ── 中转站 (Agent Proxy) ──
+  const [relayUrl, setRelayUrl] = useState("http://123.156.230.251:3000/v1");
+  const [relayUrlDraft, setRelayUrlDraft] = useState("http://123.156.230.251:3000/v1");
+  const [relayKey, setRelayKey] = useState("");
+  const [relayKeyDraft, setRelayKeyDraft] = useState("");
+  const [savingRelay, setSavingRelay] = useState(false);
+  const [relaySaved, setRelaySaved] = useState(false);
+  const [testingRelay, setTestingRelay] = useState(false);
+  const [relayTestResult, setRelayTestResult] = useState<{
+    ok: boolean; models_count?: number; models?: string[];
+    latency_ms?: number; chat_ok?: boolean;
+  } | null>(null);
+  const relayDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const fetchRelayConfig = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/config/relay`);
+      if (res.ok) {
+        const data = await res.json();
+        setRelayUrl(data.url || "http://123.156.230.251:3000/v1");
+        setRelayUrlDraft(data.url || "http://123.156.230.251:3000/v1");
+        setRelayKey(data.has_key ? "••••••••" : "");
+        setRelayKeyDraft("");
+      }
+    } catch {}
+  }, []);
+
+  const saveRelay = useCallback(async (url: string, key: string) => {
+    if (relayDebounceRef.current) clearTimeout(relayDebounceRef.current);
+    relayDebounceRef.current = setTimeout(async () => {
+      setSavingRelay(true);
+      try {
+        const realKey = key === "••••••••" ? "" : key;
+        const res = await fetch(`${API_BASE}/config/relay`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url, api_key: realKey }),
+        });
+        if (res.ok) {
+          setRelayUrl(url);
+          if (key && key !== "••••••••") setRelayKey("••••••••");
+          setRelaySaved(true); setTimeout(() => setRelaySaved(false), 2000);
+        }
+      } catch {}
+      setSavingRelay(false);
+    }, 800);
+  }, []);
+
+  const testRelay = async () => {
+    setTestingRelay(true); setRelayTestResult(null);
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 15000);
+      const k = relayKeyDraft === "••••••••" ? "" : relayKeyDraft;
+      const res = await fetch(`${API_BASE}/config/relay/test`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: relayUrlDraft, api_key: k }),
+        signal: ctrl.signal,
+      });
+      clearTimeout(t);
+      setRelayTestResult(res.ok ? await res.json() : { ok: false });
+    } catch { setRelayTestResult({ ok: false }); }
+    setTestingRelay(false);
+  };
 
   const saveLmstudioModel = useCallback(async (model: string) => {
     if (modelDebounceRef.current) clearTimeout(modelDebounceRef.current);
@@ -125,6 +192,7 @@ export default function ModelsPage() {
           setLmstudioModel(model);
           setLmstudioModelSaved(true);
           setTimeout(() => setLmstudioModelSaved(false), 2000);
+          fetchProviders();
         }
       } catch {}
       setSavingLmstudioModel(false);
@@ -173,6 +241,7 @@ export default function ModelsPage() {
           setLmstudioUrl(url);
           setLmstudioUrlSaved(true);
           setTimeout(() => setLmstudioUrlSaved(false), 2000);
+          fetchProviders();
         }
       } catch {}
       setSavingLmstudioUrl(false);
@@ -193,6 +262,7 @@ export default function ModelsPage() {
           setLmstudioKey(key);
           setLmstudioSaved(true);
           setTimeout(() => setLmstudioSaved(false), 2000);
+          fetchProviders();
         }
       } catch {}
       setSavingLmstudioKey(false);
@@ -234,13 +304,14 @@ export default function ModelsPage() {
     fetchLmstudioUrl();
     fetchLmstudioKey();
     fetchLmstudioModel();
+    fetchRelayConfig();
     // Load keys from localStorage
     const stored: Record<string, string> = {};
     ["deepseek", "claude", "openai", "lmstudio"].forEach((p) => {
       stored[p] = localStorage.getItem(`apikey_${p}`) || "";
     });
     setKeys(stored);
-  }, [fetchProviders, fetchDefaults, fetchLmstudioUrl, fetchLmstudioKey, fetchLmstudioModel]);
+  }, [fetchProviders, fetchDefaults, fetchLmstudioUrl, fetchLmstudioKey, fetchLmstudioModel, fetchRelayConfig]);
 
   const switchProvider = async (id: string) => {
     setSwitching(id);
@@ -277,6 +348,11 @@ export default function ModelsPage() {
       if (res.ok) {
         const data: TestResult = await res.json();
         setTestResults((prev) => ({ ...prev, [id]: data }));
+        // LM Studio 测试成功时自动回填检测到的模型名
+        if (id === "lmstudio" && data.model) {
+          setLmstudioModelDraft(data.model);
+          saveLmstudioModel(data.model);
+        }
       } else {
         setTestResults((prev) => ({
           ...prev,
@@ -321,10 +397,11 @@ export default function ModelsPage() {
 
   const saveDefaults = async () => {
     setSavingDefaults(true);
+    setDefaultsError("");
     localStorage.setItem("default_model", defaultModel);
     localStorage.setItem("default_reasoning", defaultReasoning);
     try {
-      await fetch(`${API_BASE}/config/model`, {
+      const res = await fetch(`${API_BASE}/config/model`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -332,7 +409,16 @@ export default function ModelsPage() {
           reasoning: defaultReasoning,
         }),
       });
-    } catch {}
+      if (res.ok) {
+        setDefaultsSaved(true);
+        setTimeout(() => setDefaultsSaved(false), 2000);
+      } else {
+        const err = await res.text();
+        setDefaultsError(`保存失败: ${err.slice(0, 100)}`);
+      }
+    } catch (e) {
+      setDefaultsError(`网络错误: ${e instanceof Error ? e.message : "未知错误"}`);
+    }
     setSavingDefaults(false);
   };
 
@@ -647,6 +733,117 @@ export default function ModelsPage() {
         </div>
       )}
 
+      {/* ── 中转站 (Agent Proxy) ── */}
+      <div className="rounded-lg border bg-card p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold flex items-center gap-2">
+              <Server className="h-4 w-4" />
+              中转站配置
+            </h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              统一管理所有 AI 调用——设置 Agent Proxy 地址后，DeepSeek/Claude/OpenAI 全部走中转站
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={testRelay}
+              disabled={testingRelay}
+            >
+              {testingRelay ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+              ) : (
+                <Wifi className="h-3.5 w-3.5 mr-1" />
+              )}
+              测试连接
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs font-medium block mb-1.5">
+              Base URL
+            </label>
+            <div className="flex gap-2 items-center">
+              <Input
+                type="text"
+                placeholder="http://123.156.230.251:3000/v1"
+                value={relayUrlDraft}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setRelayUrlDraft(val);
+                  saveRelay(val, relayKeyDraft);
+                }}
+                className="text-sm"
+              />
+              {savingRelay && (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />
+              )}
+              {relaySaved && !savingRelay && (
+                <span className="text-[10px] text-emerald-600 shrink-0">已保存</span>
+              )}
+            </div>
+            <p className="text-[10px] text-muted-foreground mt-1">
+              对应环境变量 AI_RELAY_URL
+            </p>
+          </div>
+          <div>
+            <label className="text-xs font-medium block mb-1.5">
+              API Key
+            </label>
+            <Input
+              type="password"
+              placeholder="在 Agent Proxy 后台创建"
+              value={relayKeyDraft}
+              onChange={(e) => {
+                const val = e.target.value;
+                setRelayKeyDraft(val);
+                saveRelay(relayUrlDraft, val);
+              }}
+              className="text-sm"
+            />
+            <p className="text-[10px] text-muted-foreground mt-1">
+              对应环境变量 AGENT_PROXY_KEY
+            </p>
+          </div>
+        </div>
+
+        {/* 测试结果 */}
+        {relayTestResult && (
+          <div
+            className={`text-xs rounded-md p-3 space-y-1 ${
+              relayTestResult.ok
+                ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                : "bg-destructive/10 text-destructive"
+            }`}
+          >
+            <div className="font-medium">
+              {relayTestResult.ok ? "连接成功" : "连接失败"}
+              {relayTestResult.latency_ms != null && (
+                <span className="ml-2 font-normal opacity-70">{relayTestResult.latency_ms}ms</span>
+              )}
+            </div>
+            {relayTestResult.models_count != null && (
+              <div>
+                可用模型：{relayTestResult.models_count} 个
+                {relayTestResult.models && relayTestResult.models.length > 0 && (
+                  <span className="opacity-70">
+                    {" "}（{relayTestResult.models.slice(0, 8).join("、")}
+                    {relayTestResult.models.length > 8 ? "…" : ""}）
+                  </span>
+                )}
+              </div>
+            )}
+            {relayTestResult.chat_ok !== undefined && (
+              <div>Chat API：{relayTestResult.chat_ok ? "正常" : "异常"}</div>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* ── 默认模型配置 ── */}
       <div className="rounded-lg border bg-card p-4 space-y-4">
         <h3 className="text-sm font-semibold">默认模型配置</h3>
@@ -672,6 +869,11 @@ export default function ModelsPage() {
                     {m.label}
                   </SelectItem>
                 ))}
+                {lmstudioModel && (
+                  <SelectItem key="lmstudio" value={lmstudioModel}>
+                    LM Studio ({lmstudioModel}) - 本地模型
+                  </SelectItem>
+                )}
               </SelectContent>
             </Select>
           </div>
@@ -709,6 +911,12 @@ export default function ModelsPage() {
           ) : null}
           保存默认配置
         </Button>
+        {defaultsSaved && (
+          <p className="text-[10px] text-emerald-600 text-center">已保存到服务端</p>
+        )}
+        {defaultsError && (
+          <p className="text-[10px] text-red-500 text-center">{defaultsError}</p>
+        )}
       </div>
     </div>
   );

@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::{map_api_error, ApiError};
 use crate::state::AppState;
 
+const DEFAULT_MODEL_FILE: &str = "data/default-model.json";
+
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/model", post(set_default_model).get(get_default_model))
@@ -19,19 +21,40 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/lmstudio-key", post(set_lmstudio_key).get(get_lmstudio_key))
         .route("/lmstudio-model", post(set_lmstudio_model).get(get_lmstudio_model))
         .route("/balance", get(check_balance))
+        .route("/relay", post(set_relay).get(get_relay))
+        .route("/relay/test", post(test_relay))
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelConfig {
     pub model: String,
     pub reasoning: String,
 }
 
-lazy_static::lazy_static! {
-    static ref DEFAULT_MODEL_CONFIG: RwLock<ModelConfig> = RwLock::new(ModelConfig {
+fn load_model_config() -> ModelConfig {
+    if let Ok(content) = std::fs::read_to_string(DEFAULT_MODEL_FILE) {
+        if let Ok(config) = serde_json::from_str::<ModelConfig>(&content) {
+            return config;
+        }
+    }
+    ModelConfig {
         model: std::env::var("AIONUI_DEFAULT_MODEL").unwrap_or_else(|_| "deepseek-v4-pro".to_string()),
         reasoning: std::env::var("AIONUI_DEFAULT_REASONING").unwrap_or_else(|_| "think".to_string()),
-    });
+    }
+}
+
+fn save_model_config(config: &ModelConfig) {
+    if let Ok(json) = serde_json::to_string_pretty(config) {
+        // ensure parent directory exists
+        if let Some(parent) = std::path::Path::new(DEFAULT_MODEL_FILE).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(DEFAULT_MODEL_FILE, json);
+    }
+}
+
+lazy_static::lazy_static! {
+    static ref DEFAULT_MODEL_CONFIG: RwLock<ModelConfig> = RwLock::new(load_model_config());
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,6 +88,7 @@ async fn set_default_model(
     let mut config = DEFAULT_MODEL_CONFIG.write().unwrap();
     config.model = body.model;
     config.reasoning = body.reasoning;
+    save_model_config(&config);
     Ok(Json(ModelResponse {
         model: config.model.clone(),
         reasoning: config.reasoning.clone(),
@@ -143,7 +167,7 @@ async fn set_lmstudio_url(
 
 #[derive(Debug, Serialize)]
 struct LmStudioKeyResponse {
-    key: Option<String>,
+    has_key: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -155,7 +179,7 @@ async fn get_lmstudio_key(
     State(state): State<Arc<AppState>>,
 ) -> Json<LmStudioKeyResponse> {
     let key = state.engine.gateway().lmstudio_api_key();
-    Json(LmStudioKeyResponse { key })
+    Json(LmStudioKeyResponse { has_key: key.is_some() })
 }
 
 async fn set_lmstudio_key(
@@ -163,8 +187,9 @@ async fn set_lmstudio_key(
     Json(body): Json<SetLmStudioKeyRequest>,
 ) -> Json<LmStudioKeyResponse> {
     let key = body.key.filter(|k| !k.is_empty());
-    state.engine.gateway().set_lmstudio_api_key(key.clone());
-    Json(LmStudioKeyResponse { key })
+    state.engine.gateway().set_lmstudio_api_key(key);
+    let has_key = state.engine.gateway().lmstudio_api_key().is_some();
+    Json(LmStudioKeyResponse { has_key })
 }
 
 #[derive(Debug, Serialize)]
@@ -247,6 +272,8 @@ struct TestProviderResponse {
     ok: bool,
     message: String,
     latency_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
 }
 
 async fn test_provider(
@@ -258,7 +285,7 @@ async fn test_provider(
         "openai" => foundation::Provider::OpenAI,
         "deepseek" => foundation::Provider::DeepSeek,
         "lmstudio" => foundation::Provider::LMStudio,
-        _ => return Json(TestProviderResponse { ok: false, message: "未知 provider".into(), latency_ms: None }),
+        _ => return Json(TestProviderResponse { ok: false, message: "未知 provider".into(), latency_ms: None, model: None }),
     };
 
     // 测试 LM Studio 时，临时设置 API key（如果有提供）
@@ -273,6 +300,13 @@ async fn test_provider(
         None
     };
 
+    // LM Studio：主动探测当前加载的模型名
+    let detected_model: Option<String> = if provider == foundation::Provider::LMStudio {
+        state.engine.gateway().fetch_lmstudio_loaded_model().await
+    } else {
+        None
+    };
+
     let gateway = state.engine.gateway();
     let prompt = foundation::Prompt {
         messages: vec![foundation::PromptMessage {
@@ -283,7 +317,7 @@ async fn test_provider(
     };
     let config = foundation::CallConfig {
         temperature: 0.0,
-        max_tokens: 64,
+        max_tokens: 1024,
         stream: false,
         model: None,
         tools: None,
@@ -326,11 +360,13 @@ async fn test_provider(
                     ok: !content.is_empty(),
                     message: if content.is_empty() { "连接成功但未接收到内容".into() } else { content },
                     latency_ms: Some(latency),
+                    model: detected_model.clone(),
                 }),
                 Err(_) => Json(TestProviderResponse {
                     ok: false,
                     message: "连接超时（20秒）".into(),
                     latency_ms: Some(latency),
+                    model: detected_model.clone(),
                 }),
             }
         }
@@ -338,6 +374,168 @@ async fn test_provider(
             ok: false,
             message: format!("调用失败: {}", e),
             latency_ms: None,
+            model: detected_model,
         }),
     }
+}
+
+// ── 中转站 (Agent Proxy) 配置 ──
+
+const RELAY_CONFIG_FILE: &str = "data/relay.json";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RelayConfig {
+    url: String,
+    api_key: String,
+}
+
+fn load_relay_config() -> RelayConfig {
+    if let Ok(content) = std::fs::read_to_string(RELAY_CONFIG_FILE) {
+        if let Ok(config) = serde_json::from_str::<RelayConfig>(&content) {
+            return config;
+        }
+    }
+    RelayConfig {
+        url: std::env::var("AI_RELAY_URL").unwrap_or_default(),
+        api_key: std::env::var("AGENT_PROXY_KEY").unwrap_or_default(),
+    }
+}
+
+fn save_relay_config(config: &RelayConfig) {
+    if let Ok(json) = serde_json::to_string_pretty(config) {
+        if let Some(parent) = std::path::Path::new(RELAY_CONFIG_FILE).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(RELAY_CONFIG_FILE, json);
+    }
+}
+
+lazy_static::lazy_static! {
+    static ref RELAY_CONFIG: RwLock<RelayConfig> = RwLock::new(load_relay_config());
+}
+
+#[derive(Debug, Deserialize)]
+struct SetRelayRequest {
+    url: String,
+    api_key: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RelayStatus {
+    url: String,
+    has_key: bool,
+    configured: bool,
+    block_prod_edit: bool,
+}
+
+async fn get_relay() -> Json<RelayStatus> {
+    let cfg = RELAY_CONFIG.read().unwrap();
+    let block = std::env::var("AI_RELAY_URL").ok().filter(|v| !v.is_empty()).is_some();
+    Json(RelayStatus {
+        url: cfg.url.clone(),
+        has_key: !cfg.api_key.is_empty(),
+        configured: !cfg.url.is_empty() && !cfg.api_key.is_empty(),
+        block_prod_edit: block,
+    })
+}
+
+async fn set_relay(
+    Json(body): Json<SetRelayRequest>,
+) -> Result<Json<RelayStatus>, (axum::http::StatusCode, Json<ApiError>)> {
+    // 如果生产环境已通过 env var 设置，禁止前端覆盖
+    if std::env::var("AI_RELAY_URL").ok().filter(|v| !v.is_empty()).is_some() {
+        let cfg = RELAY_CONFIG.read().unwrap();
+        return Ok(Json(RelayStatus {
+            url: cfg.url.clone(),
+            has_key: !cfg.api_key.is_empty(),
+            configured: !cfg.url.is_empty() && !cfg.api_key.is_empty(),
+            block_prod_edit: true,
+        }));
+    }
+
+    let config = RelayConfig {
+        url: body.url.trim().to_string(),
+        api_key: body.api_key.trim().to_string(),
+    };
+    if !config.url.is_empty() {
+        std::env::set_var("AI_RELAY_URL", &config.url);
+    }
+    if !config.api_key.is_empty() {
+        std::env::set_var("AGENT_PROXY_KEY", &config.api_key);
+    }
+
+    let url = config.url.clone();
+    let has_key = !config.api_key.is_empty();
+    let configured = !config.url.is_empty() && !config.api_key.is_empty();
+
+    save_relay_config(&config);
+    *RELAY_CONFIG.write().unwrap() = config;
+
+    Ok(Json(RelayStatus {
+        url,
+        has_key,
+        configured,
+        block_prod_edit: false,
+    }))
+}
+
+async fn test_relay(
+    Json(body): Json<SetRelayRequest>,
+) -> Json<serde_json::Value> {
+    let url = body.url.trim().trim_end_matches('/').to_string();
+    let api_key = body.api_key.trim().to_string();
+    let models_url = format!("{}/models", url);
+    let chat_url = format!("{}/chat/completions", url);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap();
+
+    let start = std::time::Instant::now();
+
+    // Test 1: GET /models
+    let models_result = client
+        .get(&models_url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await;
+
+    // Test 2: POST /chat/completions with a minimal prompt
+    let chat_result = client
+        .post(&chat_url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 5
+        }))
+        .send()
+        .await;
+
+    let latency = start.elapsed().as_millis() as u64;
+
+    let mut models = vec![];
+    if let Ok(resp) = models_result {
+        if resp.status().is_success() {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
+                    models = data.iter()
+                        .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(String::from))
+                        .collect();
+                }
+            }
+        }
+    }
+
+    let chat_ok = chat_result.map(|r| r.status().is_success()).unwrap_or(false);
+
+    Json(serde_json::json!({
+        "ok": chat_ok || !models.is_empty(),
+        "models_count": models.len(),
+        "models": models.iter().take(10).collect::<Vec<_>>(),
+        "chat_ok": chat_ok,
+        "latency_ms": latency,
+    }))
 }
