@@ -1,0 +1,21 @@
+# ── 域名通过环境变量 {$DOMAIN} 注入 ──
+
+auth.{$DOMAIN} {
+    reverse_proxy tinyauth:3000
+}
+
+app.{$DOMAIN} {
+    forward_auth tinyauth:3000 {
+        uri /api/auth/caddy
+        copy_headers X-Forwarded-User X-Forwarded-Email
+    }
+    reverse_proxy web:3000
+}
+
+api.{$DOMAIN} {
+    forward_auth tinyauth:3000 {
+        uri /api/auth/caddy
+        copy_headers X-Forwarded-User X-Forwarded-Email
+    }
+    reverse_proxy api:3096
+}

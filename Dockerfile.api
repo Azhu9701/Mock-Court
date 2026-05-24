@@ -1,0 +1,27 @@
+# Stage 1: Build
+FROM rust:1.85-alpine AS builder
+
+RUN apk add --no-cache musl-dev openssl-dev pkgconfig
+
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY rust/ rust/
+
+RUN cargo build --package api --release && \
+    cp target/release/api /app/api
+
+# Stage 2: Runtime
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates libgcc
+
+WORKDIR /app
+COPY --from=builder /app/api /app/api
+COPY config/ /app/config/
+COPY data/souls/ /app/data/souls/
+
+RUN mkdir -p /app/data/archive
+
+EXPOSE 3096
+
+CMD ["/app/api"]

@@ -1,0 +1,58 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - DOMAIN=${DOMAIN}
+    networks:
+      - banner
+
+  tinyauth:
+    image: ghcr.io/steveiliop56/tinyauth:v3
+    restart: unless-stopped
+    environment:
+      - SECRET=${TINYAUTH_SECRET}
+      - APP_URL=https://auth.${DOMAIN}
+      - USERS=${TINYAUTH_ADMIN_USER}:${TINYAUTH_ADMIN_PASSWORD_HASH}
+      - GITHUB_CLIENT_ID=${TINYAUTH_GITHUB_CLIENT_ID:-}
+      - GITHUB_CLIENT_SECRET=${TINYAUTH_GITHUB_CLIENT_SECRET:-}
+      - GOOGLE_CLIENT_ID=${TINYAUTH_GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${TINYAUTH_GOOGLE_CLIENT_SECRET:-}
+    networks:
+      - banner
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    volumes:
+      - api_data:/app/data
+    networks:
+      - banner
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    networks:
+      - banner
+
+volumes:
+  caddy_data:
+  caddy_config:
+  api_data:
+
+networks:
+  banner:
+    driver: bridge

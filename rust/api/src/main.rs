@@ -1,3 +1,5 @@
+mod auth;
+mod bing;
 mod collector;
 mod error;
 mod middleware;
@@ -63,6 +65,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Loading configuration...");
     let config = foundation::Config::load()?;
 
+    // Validate SearXNG URL to prevent SSRF
+    {
+        let searxng_url = &config.searxng_url;
+        if let Ok(parsed) = url::Url::parse(searxng_url) {
+            let host = parsed.host_str().unwrap_or("");
+            let is_loopback = host == "localhost" || host == "127.0.0.1" || host == "::1";
+            let is_private = host.starts_with("192.168.") || host.starts_with("10.") || host.starts_with("172.16.");
+            if !is_loopback && !is_private {
+                tracing::warn!("SearXNG URL {} is not a local/private address — potential SSRF risk", host);
+            }
+        }
+    }
+
     let rate_limiter = load_rate_limiter();
 
     // 启动限流器过期 bucket 清理定时任务
@@ -104,10 +119,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     tracing::info!("Registering built-in tools...");
-    engine.tool_registry_mut().register(std::sync::Arc::new(WebSearchTool::new(config.searxng_url.clone())));
+    engine.tool_registry_mut().register(std::sync::Arc::new(WebSearchTool::new(
+        config.searxng_url.clone(),
+        config.search_engine.clone(),
+    )));
     let engine = Arc::new(engine);
 
-    let collector = Arc::new(SoulCollector::new(data_dir.to_path_buf(), config.searxng_url.clone()));
+    let collector = Arc::new(SoulCollector::new(
+        data_dir.to_path_buf(),
+        config.searxng_url.clone(),
+        config.search_engine.clone(),
+    ));
+
+    let api_token = config.api_token.clone();
+    let cors_origins = config.cors_origins.clone();
 
     let state = Arc::new(AppState {
         registry,
@@ -118,9 +143,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         auto_create_tasks: Arc::new(dashmap::DashMap::new()),
         interrogation_gates: Arc::new(dashmap::DashMap::new()),
         preferred_provider: Arc::new(std::sync::RwLock::new(None)),
+        api_token: api_token.clone(),
     });
 
-    let app = build_router(state, rate_limiter);
+    let app = build_router(state, rate_limiter, cors_origins);
+
+    if api_token.is_some() {
+        tracing::info!("API authentication: enabled");
+    } else {
+        tracing::warn!("API authentication: disabled (no api_token configured)");
+    }
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3096").await?;
     tracing::info!("API server listening on http://0.0.0.0:3096");
@@ -162,8 +194,9 @@ fn load_rate_limiter() -> Arc<RateLimiter> {
     Arc::new(RateLimiter::new(rps, burst))
 }
 
-fn build_router(state: Arc<AppState>, rate_limiter: Arc<RateLimiter>) -> axum::Router {
+fn build_router(state: Arc<AppState>, rate_limiter: Arc<RateLimiter>, cors_origins: Vec<String>) -> axum::Router {
     let api_router = routes::api_router();
+    let api_token = state.api_token.clone();
 
     let app = axum::Router::new()
         .nest("/api/v1", api_router)
@@ -177,5 +210,5 @@ fn build_router(state: Arc<AppState>, rate_limiter: Arc<RateLimiter>) -> axum::R
         )
         .with_state(state);
 
-    crate::middleware::apply_middleware(app, rate_limiter)
+    crate::middleware::apply_middleware(app, rate_limiter, api_token, cors_origins)
 }
