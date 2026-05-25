@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams, notFound } from "next/navigation";
 import Link from "next/link";
 import {
@@ -10,6 +10,7 @@ import {
   fetchSessionReview,
   triggerDistill,
   extractRecommendedSouls,
+  deleteMessagesFromSeq,
   type Annotation,
   type SessionDetail,
   type SessionDigest,
@@ -21,6 +22,8 @@ import {
   ChevronDown,
   ChevronUp,
   CheckCircle,
+  Trash2,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import SessionActions from "@/components/session-actions";
@@ -60,7 +63,7 @@ export default function SessionDetailPage() {
   const [reviewLoading, setReviewLoading] = useState(true);
 
   // Trigger follow-up from soul recommendation card (question + named soul)
-  const [followUpTrigger, setFollowUpTrigger] = useState<{ question: string; soul: string } | null>(null);
+  const [followUpTrigger, setFollowUpTrigger] = useState<{ question: string; soul?: string } | null>(null);
 
   // Extract soul names from loaded detail for @mention suggestions
   const sessionSoulNames = useMemo(() => {
@@ -80,10 +83,29 @@ export default function SessionDetailPage() {
       .finally(() => setReviewLoading(false));
   }, [id]);
 
+  // Track whether auto-distill has been attempted for this session
+  const autoDistilledRef = useRef(false);
+
   // Fetch digest on mount
   useEffect(() => {
     fetchSessionDigest(id).then(setDigest).catch(() => setDigestError(true));
   }, [id]);
+
+  // Auto-distill: if session is completed but has no observations, trigger distill
+  useEffect(() => {
+    if (!digest || autoDistilledRef.current) return;
+    if ((digest.status === 'completed' || digest.status === 'active') && digest.observations.length === 0) {
+      autoDistilledRef.current = true;
+      setDistilling(true);
+      triggerDistill(id).finally(() => {
+        // Poll for digest after a short delay
+        setTimeout(() => {
+          fetchSessionDigest(id).then(setDigest).catch(() => {});
+          setDistilling(false);
+        }, 3000);
+      });
+    }
+  }, [digest, id]);
 
   // Fetch annotations on mount
   useEffect(() => {
@@ -287,7 +309,7 @@ export default function SessionDetailPage() {
       </div>
 
       {/* Layer 2: full conversation, lazily loaded */}
-      {expanded && (detail ? <FullConversation detail={detail} onSummonSoul={(name, subtask) => setFollowUpTrigger({ question: subtask || "", soul: name })} /> : <Skeleton className="h-96" />)}
+      {expanded && (detail ? <FullConversation detail={detail} sessionId={id} onReload={() => fetchSessionDetail(id, true).then(setDetail)} onSummonSoul={(name, subtask) => setFollowUpTrigger({ question: subtask || "", soul: name })} onRefresh={(question) => setFollowUpTrigger({ question })} /> : <Skeleton className="h-96" />)}
 
       {isFork && (
         <div className="rounded-xl border border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-950/20 p-4 space-y-1">
@@ -327,12 +349,36 @@ export default function SessionDetailPage() {
 
 function FullConversation({
   detail,
+  sessionId,
+  onReload,
   onSummonSoul,
+  onRefresh,
 }: {
   detail: SessionDetail;
+  sessionId: string;
+  onReload?: () => void;
   onSummonSoul?: (name: string, subtask?: string) => void;
+  onRefresh?: (question: string) => void;
 }) {
   const { messages } = detail;
+  const [deleting, setDeleting] = useState<number | null>(null);
+  const [refreshing, setRefreshing] = useState<number | null>(null);
+
+  const handleDelete = async (seq: number) => {
+    setDeleting(seq);
+    // 只删除该消息的回复，保留消息本身和更早的内容
+    await deleteMessagesFromSeq(sessionId, seq + 1);
+    setDeleting(null);
+    onReload?.();
+  };
+
+  const handleRefresh = async (seq: number, content: string) => {
+    setRefreshing(seq);
+    await deleteMessagesFromSeq(sessionId, seq + 1);
+    setRefreshing(null);
+    // 直接触发追问，不重载页面（追问的回复会通过 WebSocket 流式返回）
+    onRefresh?.(content);
+  };
   const {
     sorted, userMsgs, soulMsgs, synthMsgs, sysMsgs,
     soulResponses, initUserMsgs, initSynths, followPairs,
@@ -402,11 +448,31 @@ function FullConversation({
               </span>
             </div>
             <div className="relative">
-              <div className="rounded-xl p-4 bg-primary text-primary-foreground">
+              <div className="rounded-xl p-4 bg-primary/5 border border-primary/10">
                 <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
               </div>
-              <div className="absolute -left-2 top-1/2 -translate-y-1/2 translate-x-[-100%] opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="absolute -left-2 top-1/2 -translate-y-1/2 translate-x-[-100%] opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 -space-x-px">
                 <MessageForkButton sessionId={detail.session.id} messageSeq={msg.seq} />
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7 text-muted-foreground hover:text-blue-500"
+                  onClick={() => handleRefresh(msg.seq, msg.content)}
+                  disabled={refreshing === msg.seq}
+                  title="重新生成回复"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                  onClick={() => handleDelete(msg.seq)}
+                  disabled={deleting === msg.seq}
+                  title="删除此条及之后的所有消息"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
               </div>
             </div>
           </div>
@@ -465,7 +531,29 @@ function FullConversation({
                       <p className="text-sm leading-relaxed whitespace-pre-wrap">{question.content}</p>
                     </div>
                     <div className="absolute -left-2 top-1/2 -translate-y-1/2 translate-x-[-100%] opacity-0 group-hover:opacity-100 transition-opacity">
-                      <MessageForkButton sessionId={detail.session.id} messageSeq={question.seq} />
+                      <div className="flex items-center gap-0.5">
+                        <MessageForkButton sessionId={detail.session.id} messageSeq={question.seq} />
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 text-muted-foreground hover:text-blue-500"
+                          onClick={() => handleRefresh(question.seq, question.content)}
+                          disabled={refreshing === question.seq}
+                          title="重新生成追问回复"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                          onClick={() => handleDelete(question.seq)}
+                          disabled={deleting === question.seq}
+                          title="删除此条及之后的所有消息"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 </div>

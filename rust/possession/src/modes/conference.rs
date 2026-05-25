@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ai_gateway::model_router::{ModelRouter, RoutingRole};
 use ai_gateway::prompt::PromptBuilder;
 use ai_gateway::GatewayRegistry;
 use foundation::{
@@ -48,7 +47,7 @@ pub async fn run(
     tool_registry: &ToolRegistry,
 ) -> Result<Vec<SoulOutput>> {
     let limited: Vec<String> = souls.iter().take(MAX_PARALLEL_SOULS).cloned().collect();
-    let providers = gateway.list_providers();
+    let _providers = gateway.list_providers();
     let prompt_builder = PromptBuilder::new();
     let task_arc = std::sync::Arc::new(task.to_string());
 
@@ -74,15 +73,10 @@ pub async fn run(
 
         match registry.get_soul(soul_name) {
             Ok(profile) => {
-                // 使用模型路由器选择合适的配置
-                let soul_decision = ModelRouter::route(&providers, RoutingRole::Soul);
-                let (use_cache, mut config) = if let Some(decision) = &soul_decision {
-                    (decision.use_cache_hint, ModelRouter::create_call_config(decision))
-                } else {
-                    (false, CallConfig::default())
-                };
-                let provider = soul_decision.as_ref().map(|d| d.provider.clone()).unwrap_or_else(|| stream::pick_provider_info(gateway).provider);
-                let tier = soul_decision.as_ref().map(|d| d.tier.clone()).unwrap_or_else(|| stream::pick_provider_info(gateway).tier);
+                // 使用用户配置的 provider，不再硬编码 DeepSeek 优先
+                let provider = gateway.pick_provider().unwrap_or(foundation::Provider::DeepSeek);
+                let mut config = CallConfig::default().with_reasoning_effort(ReasoningEffort::Think);
+                let tier = foundation::ModelTier::for_provider(&provider, config.model.as_deref().unwrap_or("unknown"));
 
                 let tool_names = crate::tools::parse_soul_tools(&profile.tools);
                 if !tool_names.is_empty() {
@@ -93,19 +87,8 @@ pub async fn run(
                 }
 
                 let prompt = if let Some(card) = task_cards.get(soul_name) {
-                    // 有差异化子任务——使用专属 task card
                     prompt_builder.build_summon_with_task_card(
                         &profile, &task_arc, card,
-                        presets.judgment.as_deref(),
-                        presets.worry.as_deref(),
-                        presets.unknown.as_deref(),
-                        tier,
-                        presets.search_results.as_deref(),
-                        presets.interrogation_context.as_deref(),
-                    )
-                } else if use_cache {
-                    prompt_builder.build_summon_cached(
-                        &profile, &task_arc,
                         presets.judgment.as_deref(),
                         presets.worry.as_deref(),
                         presets.unknown.as_deref(),
@@ -179,15 +162,17 @@ pub async fn run(
     let session_id_clone = s_id.clone();
     let system_tx_clone = system_tx.clone();
     let limited_for_monitor = limited.clone();
-    let _collision_handle = tokio::spawn(async move {
+    let mut set = JoinSet::new();
+
+    set.spawn(async move {
         detect_collisions_async(
             detector, chunk_rx, ws_clone, session_id_clone,
             system_tx_clone, intervention_gate, intervention_txs,
             selected_topology, limited_for_monitor,
         ).await;
+        SoulOutput::error("collision_detector".into(), "task completed".into())
     });
 
-    let mut set = JoinSet::new();
     for (soul_name, req) in requests {
         let s_id = session_id.to_string();
         let ws_c = ws.clone();
@@ -210,30 +195,54 @@ pub async fn run(
         });
     }
 
+    let expected_soul_count = limited.len();
     let collect = async {
-        let mut acc = Vec::with_capacity(limited.len());
+        let mut acc = Vec::with_capacity(expected_soul_count);
         while let Some(r) = set.join_next().await {
             match r {
-                Ok(output) => acc.push(output),
-                Err(e) => acc.push(SoulOutput::error("unknown".into(), e.to_string())),
+                Ok(output) => {
+                    if output.soul_name != "collision_detector" {
+                        acc.push(output);
+                    }
+                    if acc.len() >= expected_soul_count {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    acc.push(SoulOutput::error("unknown".into(), e.to_string()));
+                }
             }
         }
         acc
     };
 
     let outputs = match tokio::time::timeout(Duration::from_secs(SOUL_TIMEOUT_SECS), collect).await {
-        Ok(acc) => acc,
-        Err(_) => {
+        Ok(acc) => {
             set.abort_all();
-            tracing::warn!("Conference timed out after {}s", SOUL_TIMEOUT_SECS);
+            acc
+        }
+        Err(_) => {
+            tracing::warn!("Conference timed out after {}s, collecting completed results", SOUL_TIMEOUT_SECS);
+            let mut acc = Vec::new();
+            loop {
+                match tokio::time::timeout(Duration::from_millis(50), set.join_next()).await {
+                    Ok(Some(Ok(output))) => {
+                        if output.soul_name != "collision_detector" {
+                            acc.push(output);
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            set.abort_all();
             let _ = system_tx.send(WsEvent {
                 event_type: WsEventType::SystemMessage,
-                payload: format!("⚠️ 合议超时（{}秒），{} 个魂的回应可能不完整", SOUL_TIMEOUT_SECS, limited.len()),
+                payload: format!("⚠️ 合议超时（{}秒），已保留 {}/{} 个魂的回应", SOUL_TIMEOUT_SECS, acc.len(), limited.len()),
                 reasoning_content: None,
                 soul_name: None,
                 seq: 0,
             });
-            vec![]
+            acc
         }
     };
 
@@ -276,14 +285,9 @@ pub async fn run(
         };
 
         // 为综合官选择合适的配置
-        let synthesis_decision = ModelRouter::route(&providers, RoutingRole::Synthesizer);
-        let (synthesis_provider, synthesis_config) = if let Some(decision) = &synthesis_decision {
-            (decision.provider.clone(), ModelRouter::create_call_config(decision))
-        } else {
-            (stream::pick_provider_info(gateway).provider, CallConfig::default().with_reasoning_effort(ReasoningEffort::ThinkMax))
-        };
-        let card_decision = ModelRouter::route(&providers, RoutingRole::KnowledgeCard);
-        let card_provider = card_decision.as_ref().map(|d| d.provider.clone()).unwrap_or_else(|| synthesis_provider.clone());
+        let synthesis_provider = gateway.pick_provider().unwrap_or(foundation::Provider::DeepSeek);
+        let synthesis_config = CallConfig::default().with_reasoning_effort(ReasoningEffort::ThinkMax);
+        let card_provider = synthesis_provider.clone();
 
         let synthesis_prompt = if collision_summary.is_empty() {
             prompt_builder.build_synthesis_prompt(task, &synthesis_outputs)
@@ -357,11 +361,7 @@ pub async fn run(
                         ..Default::default()
                     }],
                 };
-                let mut card_config = CallConfig { temperature: 0.3, max_tokens: 256, stream: false, ..Default::default() };
-                if let Some(decision) = &card_decision {
-                    card_config = ModelRouter::create_call_config(decision);
-                    card_config.stream = false;
-                }
+                let card_config = CallConfig { temperature: 0.3, max_tokens: 256, stream: false, ..Default::default() };
                 let card_req = LLMRequest { provider: card_provider, prompt: card_prompt, config: card_config };
 
                 // ── Knowledge card + Annotation pass: parallel LLM calls ──
@@ -535,10 +535,12 @@ async fn run_soul_with_tools(
     let mut history: Vec<foundation::PromptMessage> = prompt.messages.clone();
     let name = soul_name.to_string();
     let mut _intervention_count = 0usize;
+    let mut used_providers: Vec<foundation::Provider> = vec![provider.clone()];
+    let mut current_provider = provider.clone();
 
     for _round in 0..max_rounds {
         let req = foundation::LLMRequest {
-            provider: provider.clone(),
+            provider: current_provider.clone(),
             prompt: foundation::Prompt { messages: history.clone() },
             config: config.clone(),
         };
@@ -546,29 +548,74 @@ async fn run_soul_with_tools(
         let rx = match gw.call(&req) {
             Ok(rx) => rx,
             Err(e) => {
+                let error_msg = e.to_string();
+                gw.mark_provider_unhealthy(&current_provider, error_msg.clone());
+
+                if let Some(next_provider) = gw.try_next_provider(&current_provider) {
+                    if !used_providers.contains(&next_provider) {
+                        tracing::warn!(
+                            "Soul '{}' provider {:?} failed, trying fallback {:?}: {}",
+                            name, current_provider, next_provider, error_msg
+                        );
+                        used_providers.push(next_provider);
+                        current_provider = next_provider;
+                        continue;
+                    }
+                }
+
+                ws.broadcast_soul(
+                    session_id,
+                    &name,
+                    &WsEvent {
+                        event_type: WsEventType::SoulError,
+                        payload: error_msg.clone(),
+                        reasoning_content: None,
+                        soul_name: Some(name.clone()),
+                        seq: 0,
+                    },
+                );
                 let _ = chunk_tx.send(SoulStreamMessage::Error {
                     soul_name: name.clone(),
-                    error: e.to_string(),
+                    error: error_msg.clone(),
                 });
-                return SoulOutput::error(name, e.to_string());
+                return SoulOutput::error(name, error_msg);
             }
         };
 
-        let outcome = stream_single_soul_with_detection(
-            rx, session_id, &name, ws, chunk_tx.clone(), &mut intervention_rx,
+        let outcome = stream_single_soul_with_detection_with_provider(
+            rx,
+            session_id,
+            &name,
+            ws,
+            chunk_tx.clone(),
+            &mut intervention_rx,
+            &current_provider,
+            gw,
+            &used_providers,
         ).await;
 
         match outcome {
             StreamOutcome::Completed(output) => {
                 if output.error.is_some() {
+                    if let Some(next_provider) = gw.try_next_provider(&current_provider) {
+                        if !used_providers.contains(&next_provider) {
+                            tracing::warn!(
+                                "Soul '{}' provider {:?} stream failed, trying fallback {:?}",
+                                name, current_provider, next_provider
+                            );
+                            used_providers.push(next_provider);
+                            current_provider = next_provider;
+                            continue;
+                        }
+                    }
                     return output;
                 }
 
                 if output.tool_calls.is_empty() {
+                    gw.mark_provider_healthy(&current_provider);
                     return output;
                 }
 
-                // 处理工具调用
                 for tc in &output.tool_calls {
                     let payload = crate::ToolCallPayload {
                         tool_call_id: tc.id.clone(),
@@ -618,7 +665,19 @@ async fn run_soul_with_tools(
                             });
                         }
                         Err(e) => {
-                            return SoulOutput::error(name, format!("Tool {} failed: {}", tc.function.name, e));
+                            let error_msg = format!("Tool {} failed: {}", tc.function.name, e);
+                            ws.broadcast_soul(
+                                session_id,
+                                &name,
+                                &WsEvent {
+                                    event_type: WsEventType::SoulError,
+                                    payload: error_msg.clone(),
+                                    reasoning_content: None,
+                                    soul_name: Some(name.clone()),
+                                    seq: 0,
+                                },
+                            );
+                            return SoulOutput::error(name, error_msg);
                         }
                     }
                 }
@@ -626,11 +685,23 @@ async fn run_soul_with_tools(
         }
     }
 
+    let error_msg = format!("Tool call loop exceeded {} rounds", max_rounds);
+    ws.broadcast_soul(
+        session_id,
+        &name,
+        &WsEvent {
+            event_type: WsEventType::SoulError,
+            payload: error_msg.clone(),
+            reasoning_content: None,
+            soul_name: Some(name.clone()),
+            seq: 0,
+        },
+    );
     SoulOutput {
         soul_name: name,
         content: String::new(),
         usage: foundation::UsageStats::default(),
-        error: Some(format!("Tool call loop exceeded {} rounds", max_rounds)),
+        error: Some(error_msg),
         tool_calls: Vec::new(),
     }
 }
@@ -664,14 +735,16 @@ enum StreamOutcome {
     Completed(SoulOutput),
 }
 
-/// 流式输出单个魂，同时发送给交叉检测器，并监听实时干预信号
-async fn stream_single_soul_with_detection(
+async fn stream_single_soul_with_detection_with_provider(
     mut rx: mpsc::Receiver<foundation::Result<foundation::Chunk>>,
     session_id: &str,
     soul_name: &str,
     ws: &WsSessionManager,
     chunk_tx: broadcast::Sender<SoulStreamMessage>,
     intervention_rx: &mut mpsc::Receiver<InterventionDecision>,
+    current_provider: &foundation::Provider,
+    gw: &GatewayRegistry,
+    used_providers: &[foundation::Provider],
 ) -> StreamOutcome {
     let mut content = String::new();
     let mut usage = foundation::UsageStats::default();
@@ -679,22 +752,22 @@ async fn stream_single_soul_with_detection(
     let name = soul_name.to_string();
     let mut tool_calls: Vec<foundation::ToolCall> = Vec::new();
     let mut truncated = false;
+    let mut has_any_content = false;
 
     loop {
         tokio::select! {
-            // 偏向 LLM token 流（保证推理不被干预饿死）
             biased;
 
             result = rx.recv() => {
                 match result {
                     Some(Ok(chunk)) => {
+                        has_any_content = true;
                         if let Some(u) = chunk.usage {
                             usage = u;
                         }
                         if !chunk.tool_calls.is_empty() {
                             tool_calls.extend(chunk.tool_calls);
                         }
-                        // 诊断日志：记录每个 chunk 的关键信息
                         tracing::debug!(
                             "Soul '{}' chunk #{}: content_len={} reasoning_len={} finish_reason={:?}",
                             name, seq, chunk.content.len(),
@@ -738,19 +811,50 @@ async fn stream_single_soul_with_detection(
                                 seq += 1;
                             }
                         }
-                        // 检测 max_tokens 截断
                         if chunk.finish_reason.as_deref() == Some("length") {
                             truncated = true;
                             tracing::warn!("Soul '{}' output truncated by max_tokens limit", name);
                         }
                     }
                     Some(Err(e)) => {
+                        let error_msg = e.to_string();
+                        gw.mark_provider_unhealthy(current_provider, error_msg.clone());
+
+                        if has_any_content {
+                            ws.broadcast_soul(
+                                session_id,
+                                &name,
+                                &WsEvent {
+                                    event_type: WsEventType::SoulError,
+                                    payload: error_msg.clone(),
+                                    reasoning_content: None,
+                                    soul_name: Some(name.clone()),
+                                    seq,
+                                },
+                            );
+                            let _ = chunk_tx.send(SoulStreamMessage::Error {
+                                soul_name: name.clone(),
+                                error: error_msg.clone(),
+                            });
+                            let output = SoulOutput::error(name, error_msg);
+                            return StreamOutcome::Completed(output);
+                        }
+
+                        if let Some(next_provider) = gw.try_next_provider(current_provider) {
+                            if !used_providers.contains(&next_provider) {
+                                tracing::warn!(
+                                    "Soul '{}' provider {:?} failed before any content, will retry with {:?}: {}",
+                                    name, current_provider, next_provider, error_msg
+                                );
+                            }
+                        }
+
                         ws.broadcast_soul(
                             session_id,
                             &name,
                             &WsEvent {
                                 event_type: WsEventType::SoulError,
-                                payload: e.to_string(),
+                                payload: error_msg.clone(),
                                 reasoning_content: None,
                                 soul_name: Some(name.clone()),
                                 seq,
@@ -758,13 +862,12 @@ async fn stream_single_soul_with_detection(
                         );
                         let _ = chunk_tx.send(SoulStreamMessage::Error {
                             soul_name: name.clone(),
-                            error: e.to_string(),
+                            error: error_msg.clone(),
                         });
-                        let output = SoulOutput::error(name, e.to_string());
+                        let output = SoulOutput::error(name, error_msg);
                         return StreamOutcome::Completed(output);
                     }
                     None => {
-                        // LLM 流正常结束
                         break;
                     }
                 }
@@ -773,7 +876,6 @@ async fn stream_single_soul_with_detection(
             intervention = intervention_rx.recv() => {
                 match intervention {
                     Some(decision) => {
-                        // Marginalia mode: don't interrupt, just log.
                         tracing::info!(
                             "Soul '{}' received intervention {:?} mid-stream — suppressed (marginalia mode)",
                             name, decision

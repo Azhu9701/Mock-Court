@@ -179,8 +179,8 @@ export function SoulRecommendationCard({
         }
       });
       abortRef.current.set(name, abort);
-    } catch (e: any) {
-      const msg = e?.message || String(e) || "收魂炼化失败";
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : (typeof e === "string" ? e : "收魂炼化失败");
       updateTask(name, { loading: false, error: msg });
       console.error(`[soul-recommendation] autoCreateSoul(${name}) failed:`, e);
     }

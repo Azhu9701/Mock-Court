@@ -1,9 +1,95 @@
 use ai_gateway::GatewayRegistry;
-use foundation::{Chunk, LLMRequest, Prompt, PromptMessage, ProviderInfo, Result, UsageStats};
+use foundation::{Chunk, LLMRequest, Prompt, PromptMessage, Provider, ProviderInfo, Result, UsageStats};
 use tokio::sync::mpsc;
 
 use crate::{SoulOutput, ToolCallPayload, ToolResultPayload, WsEvent, WsEventType, WsSessionManager};
 use crate::tools::ToolRegistry;
+
+pub async fn stream_single_soul_with_provider(
+    rx: mpsc::Receiver<Result<Chunk>>,
+    session_id: &str,
+    soul_name: &str,
+    ws: &WsSessionManager,
+    gateway: &GatewayRegistry,
+    provider: &Provider,
+) -> SoulOutput {
+    let mut content = String::new();
+    let mut usage = UsageStats::default();
+    let mut seq: u32 = 0;
+    let name = soul_name.to_string();
+    let mut tool_calls: Vec<foundation::ToolCall> = Vec::new();
+    let mut truncated = false;
+
+    let mut rx = rx;
+
+    while let Some(result) = rx.recv().await {
+        match result {
+            Ok(chunk) => {
+                if let Some(u) = chunk.usage {
+                    usage = u;
+                }
+                if !chunk.tool_calls.is_empty() {
+                    tool_calls.extend(chunk.tool_calls);
+                }
+                if !chunk.content.is_empty() {
+                    content.push_str(&chunk.content);
+                }
+                if !chunk.content.is_empty() || chunk.reasoning_content.is_some() {
+                    ws.broadcast_soul(
+                        session_id,
+                        &name,
+                        &WsEvent {
+                            event_type: WsEventType::SoulChunk,
+                            payload: chunk.content,
+                            reasoning_content: chunk.reasoning_content,
+                            soul_name: Some(name.clone()),
+                            seq,
+                        },
+                    );
+                    seq += 1;
+                }
+                if chunk.finish_reason.as_deref() == Some("length") {
+                    truncated = true;
+                    tracing::warn!("Soul '{}' output truncated by max_tokens limit", name);
+                }
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                gateway.mark_provider_unhealthy(provider, error_msg.clone());
+                ws.broadcast_soul(
+                    session_id,
+                    &name,
+                    &WsEvent {
+                        event_type: WsEventType::SoulError,
+                        payload: error_msg.clone(),
+                        reasoning_content: None,
+                        soul_name: Some(name.clone()),
+                        seq,
+                    },
+                );
+                return SoulOutput::error(name, error_msg);
+            }
+        }
+    }
+
+    ws.broadcast_soul(
+        session_id,
+        &name,
+        &WsEvent {
+            event_type: WsEventType::SoulDone,
+            payload: String::new(),
+            reasoning_content: None,
+            soul_name: Some(name.clone()),
+            seq,
+        },
+    );
+
+    if truncated {
+        content.push_str("\n\n> ⚠️ [系统提示] 输出因长度限制被截断。如需完整分析，可尝试简化任务或分拆问题。");
+    }
+
+    SoulOutput { soul_name: name, content, usage, error: None, tool_calls }
+}
 
 /// Stream LLM chunks to WebSocket, aggregating content and usage stats.
 pub async fn stream_single_soul(
@@ -175,23 +261,64 @@ pub async fn run_tool_loop(
     let mut history: Vec<PromptMessage> = initial_prompt.messages.clone();
     let max_rounds = crate::tools::max_tool_rounds();
     let name = soul_name.to_string();
+    let mut used_providers: Vec<foundation::Provider> = vec![provider.clone()];
+    let mut current_provider = provider;
 
     for _round in 0..max_rounds {
         let prompt = Prompt { messages: history.clone() };
         let req = LLMRequest {
-            provider: provider.clone(),
+            provider: current_provider.clone(),
             prompt,
             config: config.clone(),
         };
 
         let rx = match gateway.call(&req) {
             Ok(rx) => rx,
-            Err(e) => return SoulOutput::error(name, e.to_string()),
+            Err(e) => {
+                let error_msg = e.to_string();
+                gateway.mark_provider_unhealthy(&current_provider, error_msg.clone());
+
+                if let Some(next_provider) = gateway.try_next_provider(&current_provider) {
+                    if !used_providers.contains(&next_provider) {
+                        tracing::warn!(
+                            "Soul '{}' provider {:?} failed, trying fallback {:?}: {}",
+                            name, current_provider, next_provider, error_msg
+                        );
+                        used_providers.push(next_provider);
+                        current_provider = next_provider;
+                        continue;
+                    }
+                }
+
+                ws.broadcast_soul(
+                    session_id,
+                    &name,
+                    &WsEvent {
+                        event_type: WsEventType::SoulError,
+                        payload: error_msg.clone(),
+                        reasoning_content: None,
+                        soul_name: Some(name.clone()),
+                        seq: 0,
+                    },
+                );
+                return SoulOutput::error(name, error_msg);
+            }
         };
 
-        let output = stream_single_soul(rx, session_id, soul_name, ws).await;
+        let output = stream_single_soul_with_provider(rx, session_id, soul_name, ws, gateway, &current_provider).await;
 
         if output.error.is_some() {
+            if let Some(next_provider) = gateway.try_next_provider(&current_provider) {
+                if !used_providers.contains(&next_provider) {
+                    tracing::warn!(
+                        "Soul '{}' provider {:?} stream failed, trying fallback {:?}",
+                        name, current_provider, next_provider
+                    );
+                    used_providers.push(next_provider);
+                    current_provider = next_provider;
+                    continue;
+                }
+            }
             return output;
         }
 
@@ -248,17 +375,41 @@ pub async fn run_tool_loop(
                     });
                 }
                 Err(e) => {
-                    return SoulOutput::error(name, format!("Tool {} failed: {}", tc.function.name, e));
+                    let error_msg = format!("Tool {} failed: {}", tc.function.name, e);
+                    ws.broadcast_soul(
+                        session_id,
+                        &name,
+                        &WsEvent {
+                            event_type: WsEventType::SoulError,
+                            payload: error_msg.clone(),
+                            reasoning_content: None,
+                            soul_name: Some(name.clone()),
+                            seq: 0,
+                        },
+                    );
+                    return SoulOutput::error(name, error_msg);
                 }
             }
         }
     }
 
+    let error_msg = format!("Tool call loop exceeded {} rounds", max_rounds);
+    ws.broadcast_soul(
+        session_id,
+        &name,
+        &WsEvent {
+            event_type: WsEventType::SoulError,
+            payload: error_msg.clone(),
+            reasoning_content: None,
+            soul_name: Some(name.clone()),
+            seq: 0,
+        },
+    );
     SoulOutput {
         soul_name: name,
         content: String::new(),
         usage: UsageStats::default(),
-        error: Some(format!("Tool call loop exceeded {} rounds", max_rounds)),
+        error: Some(error_msg),
         tool_calls: Vec::new(),
     }
 }

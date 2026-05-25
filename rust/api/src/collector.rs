@@ -5,10 +5,23 @@ use tarzi::search::{SearchEngine as TarziEngine, SearchEngineType};
 use tarzi::config::Config as TarziConfig;
 use web2llm::{Web2llm, Web2llmConfig, FetchMode};
 
+fn truncate_safe(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let boundary = s.char_indices()
+        .take_while(|(i, _)| *i < max_bytes)
+        .last()
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(max_bytes);
+    &s[..boundary]
+}
+
 /// 收魂流水线：搜索 → 抓取 → 保存 Markdown
 pub struct SoulCollector {
     data_dir: PathBuf,
     searxng_url: String,
+    search_engine: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -42,8 +55,8 @@ fn safe_truncate(s: &str, max_len: usize) -> &str {
 }
 
 impl SoulCollector {
-    pub fn new(data_dir: PathBuf, searxng_url: String) -> Self {
-        SoulCollector { data_dir, searxng_url }
+    pub fn new(data_dir: PathBuf, searxng_url: String, search_engine: String) -> Self {
+        SoulCollector { data_dir, searxng_url, search_engine }
     }
 
     /// 搜索 + 逐条抓取 → 保存为 raw/{魂名}/搜索素材.md
@@ -66,7 +79,7 @@ impl SoulCollector {
         // Use plain HTTP for engines that work without browser rendering
         let use_plain = matches!(engine_type, SearchEngineType::Bing | SearchEngineType::Google | SearchEngineType::DuckDuckGo);
         if !use_plain && engine_type == SearchEngineType::Baidu {
-            return Err("百度搜索需要 chromedriver，当前环境暂不支持。请使用 bing/google/duckduckgo".into());
+            return Err("百度搜索需要 chromedriver，当前环境暂不支持。请使用 bing".into());
         }
 
         let mut config = TarziConfig::new();
@@ -163,7 +176,7 @@ impl SoulCollector {
         let engine_name = format!("{:?}", engine_type);
         let use_plain = matches!(engine_type, SearchEngineType::Bing | SearchEngineType::Google | SearchEngineType::DuckDuckGo);
         if !use_plain && engine_type == SearchEngineType::Baidu {
-            return Err("百度搜索需要 chromedriver，当前环境暂不支持。请使用 bing/google/duckduckgo".into());
+            return Err("百度搜索需要 chromedriver，当前环境暂不支持。请使用 bing".into());
         }
 
         let mut config = TarziConfig::new();
@@ -220,13 +233,17 @@ impl SoulCollector {
         Ok(md)
     }
 
-    /// 通过 SearXNG 搜索议题背景，然后抓取网页全文。
-    /// 用于在附体前为魂提供议题的背景信息。
+    /// 搜索议题背景，然后抓取网页全文。
+    /// 默认用 Bing，配置 search_engine=searxng 时回退到 SearXNG。
     pub async fn search_topic_searxng(
         &self,
         query: &str,
         limit: usize,
     ) -> Result<String, String> {
+        if self.search_engine != "searxng" {
+            return self.search_topic(query, Some("bing"), limit).await;
+        }
+
         let search_url = format!(
             "{}/search?format=json&q={}&language=zh&pageno=1",
             self.searxng_url.trim_end_matches('/'),
@@ -245,7 +262,7 @@ impl SoulCollector {
         let body = resp.text().await.map_err(|e| format!("SearXNG 响应读取失败: {e}"))?;
 
         if !status.is_success() {
-            return Err(format!("SearXNG 返回错误 ({}): {}", status.as_u16(), &body[..body.len().min(200)]));
+            return Err(format!("SearXNG 返回错误 ({}): {}", status.as_u16(), truncate_safe(&body, 200)));
         }
 
         let search_data: SearxngSearchResponse = serde_json::from_str(&body)
@@ -301,13 +318,18 @@ impl SoulCollector {
         Ok(md)
     }
 
-    /// 轻量版搜索：只取 SearXNG 的 title + snippet + URL，不抓网页。
+    /// 轻量版搜索：只取 title + snippet + URL，不抓网页。
+    /// 默认用 Bing，配置 search_engine=searxng 时回退到 SearXNG。
     /// 适用于追问场景，~1-2 秒完成。
     pub async fn search_topic_quick(
         &self,
         query: &str,
         limit: usize,
     ) -> Result<String, String> {
+        if self.search_engine != "searxng" {
+            return crate::bing::search_quick(query, limit).await;
+        }
+
         let search_url = format!(
             "{}/search?format=json&q={}&language=zh&pageno=1",
             self.searxng_url.trim_end_matches('/'),
@@ -326,7 +348,7 @@ impl SoulCollector {
         let body = resp.text().await.map_err(|e| format!("SearXNG response read failed: {e}"))?;
 
         if !status.is_success() {
-            return Err(format!("SearXNG error ({}): {}", status.as_u16(), &body[..body.len().min(200)]));
+            return Err(format!("SearXNG error ({}): {}", status.as_u16(), truncate_safe(&body, 200)));
         }
 
         let search_data: SearxngSearchResponse = serde_json::from_str(&body)

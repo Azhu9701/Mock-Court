@@ -1,0 +1,24 @@
+# ── 本地开发 · Caddyfile ──
+# 不走 HTTPS，全部 HTTP localhost
+
+:8080 {
+    # Tinyauth 登录页
+    handle /auth/* {
+        reverse_proxy tinyauth:3000
+    }
+
+    # API
+    handle /api/* {
+        reverse_proxy api:3096
+    }
+
+    # WebSocket
+    handle /ws/* {
+        reverse_proxy api:3096
+    }
+
+    # 前端
+    handle {
+        reverse_proxy web:3000
+    }
+}

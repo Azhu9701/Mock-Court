@@ -16,6 +16,9 @@ pub struct Config {
     pub server_port: u16,
     pub nextjs_port: u16,
     pub searxng_url: String,
+    pub search_engine: String,
+    pub api_token: Option<String>,
+    pub cors_origins: Vec<String>,
 }
 
 impl Config {
@@ -47,6 +50,13 @@ impl Config {
             server_port: cfg.get_int("server_port").map(|p| p as u16).unwrap_or(3001),
             nextjs_port: cfg.get_int("nextjs_port").map(|p| p as u16).unwrap_or(3000),
             searxng_url: cfg.get_string("searxng_url").unwrap_or_else(|_| "http://127.0.0.1:8080".into()),
+            search_engine: cfg.get_string("search_engine").unwrap_or_else(|_| "bing".into()),
+            api_token: cfg.get_string("api_token").ok()
+                .or_else(|| std::env::var("WANMINFAN_API_TOKEN").ok())
+                .filter(|t| !t.is_empty()),
+            cors_origins: cfg.get_string("cors_origins")
+                .map(|s| s.split(',').map(|o| o.trim().to_string()).collect())
+                .unwrap_or_else(|_| vec!["http://localhost:3000".into()]),
         })
     }
 }

@@ -8,6 +8,14 @@ export type PossessionMode =
   | "learn"
   | "practice_opening";
 
+const ALL_MODES: ReadonlySet<string> = new Set([
+  "single", "conference", "debate", "relay", "learn", "practice_opening",
+]);
+
+function isPossessionMode(s: string): s is PossessionMode {
+  return ALL_MODES.has(s);
+}
+
 export interface ModeConfig {
   key: PossessionMode;
   label: string;
@@ -114,11 +122,11 @@ export const MODE_COLORS_HEX: Record<PossessionMode, string> = {
 };
 
 export function modeLabel(mode: string): string {
-  return MODE_LABELS[mode as PossessionMode] || mode;
+  return isPossessionMode(mode) ? MODE_LABELS[mode] : mode;
 }
 
 export function modeColorBg(mode: string): string {
-  return MODE_COLORS_BG[mode as PossessionMode] || "bg-gray-400";
+  return isPossessionMode(mode) ? MODE_COLORS_BG[mode] : "bg-gray-400";
 }
 
 export const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {

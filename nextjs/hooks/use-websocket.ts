@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { SESSIONS_UPDATED_EVENT } from "@/components/sidebar-sessions";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3096/api/v1";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 
 export interface ProcessStep {
   event: string;
@@ -157,7 +157,8 @@ export function useWebSocket(sessionId: string) {
       wsRef.current.onclose = null;
       wsRef.current.close();
     }
-    const wsHost = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3096").replace("http://", "ws://").replace("/api/v1", "");
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
+    const wsHost = apiBase.replace("http://", "ws://").replace("https://", "wss://").replace("/api/v1", "");
     const url = `${wsHost}/ws/possess/${sessionId}/main`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
@@ -460,6 +461,20 @@ export function useWebSocket(sessionId: string) {
   useEffect(() => {
     if (status === "done" && !hasContent) {
       recoverFromApi();
+    }
+  }, [status, hasContent, recoverFromApi]);
+
+  // Immediate recovery when WebSocket connects but no stream events (completed session)
+  useEffect(() => {
+    if (status === "streaming" && !hasContent) {
+      const timer = setTimeout(() => {
+        if (!mountedRef.current) return;
+        const stillNoContent = Object.keys(bufferRef.current).length === 0 && synthesisRef.current.length === 0;
+        if (stillNoContent) {
+          recoverFromApi();
+        }
+      }, 1500);
+      return () => clearTimeout(timer);
     }
   }, [status, hasContent, recoverFromApi]);
 

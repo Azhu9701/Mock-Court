@@ -19,14 +19,14 @@ export default function SessionActions({ sessionId, title }: { sessionId: string
   const onRename = async () => {
     if (!newTitle.trim()) return;
     try { await renameSession(sessionId, newTitle.trim()); triggerSessionsUpdate(); setEditing(false); router.refresh(); }
-    catch (e: any) { setError(e.message); }
+    catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)); }
   };
 
   const onExport = async () => {
     setExporting(true);
     setError("");
     try { await exportSessionMarkdown(sessionId, title); }
-    catch (e: any) { setError(e.message); }
+    catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setExporting(false); }
   };
 

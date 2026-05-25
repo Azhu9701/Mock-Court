@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 
 use crate::stream;
 use crate::tools::ToolRegistry;
-use crate::{SoulOutput, UserPresets, WsEvent, WsSessionManager};
+use crate::{SoulOutput, UserPresets, WsEvent, WsEventType, WsSessionManager};
 
 pub async fn run(
     store: &dyn Storage,
@@ -21,6 +21,7 @@ pub async fn run(
     _tool_registry: &ToolRegistry,
 ) -> Result<Vec<SoulOutput>> {
     let info = stream::pick_provider_info(gateway);
+    let provider = info.provider;
     let prompt_builder = PromptBuilder::new();
     let mut outputs = Vec::new();
     let mut prev_content: Option<String> = None;
@@ -32,9 +33,27 @@ pub async fn run(
         };
 
         let prompt = prompt_builder.build_relay_prompt(&profile, prev_content.as_deref(), task);
-        let rx = gateway.call(&LLMRequest { provider: info.provider.clone(), prompt, config: CallConfig::default() })?;
-
-        let output = stream::stream_single_soul(rx, session_id, soul_name, ws).await;
+        let output = match gateway.call(&LLMRequest { provider, prompt, config: CallConfig::default() }) {
+            Ok(rx) => {
+                stream::stream_single_soul_with_provider(rx, session_id, soul_name, ws, gateway, &provider).await
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                gateway.mark_provider_unhealthy(&provider, error_msg.clone());
+                ws.broadcast_soul(
+                    session_id,
+                    soul_name,
+                    &WsEvent {
+                        event_type: WsEventType::SoulError,
+                        payload: error_msg.clone(),
+                        reasoning_content: None,
+                        soul_name: Some(soul_name.to_string()),
+                        seq: 0,
+                    },
+                );
+                SoulOutput::error(soul_name.to_string(), error_msg)
+            }
+        };
 
         crate::emit_soul_cost(system_tx, soul_name, &output.usage, Some(&info.model));
 

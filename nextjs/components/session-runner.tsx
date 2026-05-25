@@ -254,7 +254,11 @@ export function SessionRunner({ sessionId, mode, matchedSouls, taskTitle, onDone
       )}
 
       <div className="flex-1 overflow-y-auto">
-        {status === "connecting" && !hasMessages && <ConnectingView />}
+        {status === "connecting" && !hasMessages && (matchedSouls && matchedSouls.length > 0 ? (
+          <WaitingSoulsView matchedSouls={matchedSouls} processSteps={processSteps} messages={messages} />
+        ) : (
+          <ConnectingView />
+        ))}
         {status === "streaming" && !hasMessages && (
           <WaitingSoulsView matchedSouls={matchedSouls} processSteps={processSteps} messages={messages} />
         )}

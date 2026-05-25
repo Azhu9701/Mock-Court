@@ -7,13 +7,21 @@ import { Textarea } from "@/components/ui/textarea";
 import { SessionRunner } from "@/components/session-runner";
 import { 
   Brain, Loader2, Sparkles, ShieldCheck, Zap, Play, ChevronDown, ChevronUp,
-  CheckCircle2, AlertCircle, ArrowRightCircle, Globe, Search, Copy, Check
+  CheckCircle2, AlertCircle, Globe, Search, Copy, Check,
+  MessageCircle, Wand2
 } from "lucide-react";
 import {
   analyzeTask, startPossession, searchWeb, startInterrogation, submitInterrogation,
   type SearxngResultItem, type InterrogationQuestion, type InterrogationVerdictResponse,
 } from "@/lib/api";
-import { MODE_LABELS_LONG } from "@/config/possession-modes";
+import { 
+  MODE_LABELS_LONG, 
+  type PossessionMode,
+  MODES,
+  MODE_COLORS_BG,
+  MODE_COLORS_TEXT,
+  iconMap
+} from "@/config/possession-modes";
 import { triggerSessionsUpdate } from "@/components/sidebar-sessions";
 import { AttachmentUpload } from "@/components/attachment-upload";
 import { SoulCarousel } from "@/components/soul-carousel";
@@ -72,7 +80,8 @@ export function PossessionEntry() {
   const [log, setLog] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [sessionId, setSessionId] = useState("");
-  const [mode, setMode] = useState("conference");
+  const [mode, setMode] = useState<PossessionMode>("conference");
+  const [isManualMode, setIsManualMode] = useState(false);
   const [matchedSouls, setMatchedSouls] = useState<MatchedSoul[]>([]);
   const [review, setReview] = useState<ReviewResult | null>(null);
   const [showDetail, setShowDetail] = useState(true);
@@ -90,6 +99,10 @@ export function PossessionEntry() {
   const [logFilter, setLogFilter] = useState<LogFilter>("全部");
   const [logsCollapsed, setLogsCollapsed] = useState(true);
   const [copiedLogs, setCopiedLogs] = useState(false);
+  const [streamingContent, setStreamingContent] = useState<string>("");
+  const [currentStreamSource, setCurrentStreamSource] = useState<string>("");
+  const [isStreaming, setIsStreaming] = useState(false);
+  const isStreamingRef = useRef(false);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
@@ -123,6 +136,9 @@ export function PossessionEntry() {
     });
   }, []);
 
+  const skipInterrogationRef = useRef(false);
+  const interrogationContextRef = useRef("");
+
   /** 审查官审讯：提交使用者对反问的逐条回答 → 获得裁决 */
   const onInterrogationSubmit = async () => {
     if (igSubmitting) return;
@@ -155,29 +171,10 @@ export function PossessionEntry() {
           .map((q, i) => `Q${i + 1}: ${q.text}\nA${i + 1}: ${igAnswers[i]?.trim() || "（未答）"}`)
           .join("\n\n");
         interrogationContextRef.current = qaText ? `审查官入场审讯了使用者的提问动机和行动承诺。以下为审讯记录：\n\n${qaText}` : "";
-        setPhase("classifying");
         setIgQuestions([]);
         setIgReason("");
-        // 继续 onStart 被截断的逻辑 —— trigger it from the classifying phase's flow
-        // The classifying effect will kick in via the phase change above;
-        // but we were in the middle of onStart before the interrogation break,
-        // so we need to re-trigger the original flow. Easiest: set a flag.
-        // Actually the simplest is to re-enter onStart with the interpolated phase machine:
-        // But onStart sets phase to "interrogation" again — we need a bypass flag for "passed" state.
-        // Better: pass a `bypassInterrogation` flag or use the refined_task.
-        //
-        // Simplest path: if verdict.refined_task is set, task is already updated.
-        // The "input" phase expects canStart. The flow from "classifying" onwards is the same as before.
-        // We need to jump to the original flow that onStart was executing when interrupted.
-        //
-        // The cleanest solution: re-call a function that performs the "after-interrogation" flow.
-        // We'll extract that to a shared function, but for now:
-        //   re-enter the original onStart with a flag to skip interrogation.
-        //   But onStart always calls startInterrogation...
-        // Better: add a `skipInterrogation` ref to skip the interrogation block
         setPhase("classifying");
         skipInterrogationRef.current = true;
-        // re-trigger onStart:
         onStart();
       } else {
         // 驳回 → 显示原因 + 更新反问列表
@@ -189,15 +186,12 @@ export function PossessionEntry() {
           addLog(`🗣️ 审查官追加 ${verdict.questions.length} 个反问`);
         }
       }
-    } catch (e: any) {
-      setError(e.message || "审讯失败");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "审讯失败");
     } finally {
       setIgSubmitting(false);
     }
   };
-
-  const skipInterrogationRef = useRef(false);
-  const interrogationContextRef = useRef("");
 
   const handleSearch = useCallback(async () => {
     if (!searchQuery.trim()) return;
@@ -251,6 +245,10 @@ export function PossessionEntry() {
     setMatchedSouls([]);
     setReview(null);
     setSessionDone(false);
+    setStreamingContent("");
+    setCurrentStreamSource("");
+    setIsStreaming(false);
+    isStreamingRef.current = false;
 
     // ── 审查官入场审讯 ──
     if (skipInterrogationRef.current) {
@@ -274,10 +272,10 @@ export function PossessionEntry() {
         addLog(`🗣️ 审查官提出 ${igResp.questions.length} 个反问 —— 请逐一回应后继续`);
         return; // 暂停，等用户填写反问
       }
-    } catch (e: any) {
-      addLog(`❌ 审查官审讯失败: ${e.message || e}——请稍后重试`);
+    } catch (e: unknown) {
+      addLog(`❌ 审查官审讯失败: ${e instanceof Error ? e.message : String(e)}——请稍后重试`);
       setPhase("input");
-      setError(`审查官审讯出错: ${e.message || e}`);
+      setError(`审查官审讯出错: ${e instanceof Error ? e.message : String(e)}`);
       return;
     }
 
@@ -327,7 +325,9 @@ export function PossessionEntry() {
         if (event.phase === "matched" && event.souls && event.souls.length > 0) {
           setPhase("reviewing");
           setMatchedSouls(event.souls);
-          setMode(event.mode || "conference");
+          if (!isManualMode) {
+            setMode((event.mode || "conference") as PossessionMode);
+          }
           addLog(`✅ 匹配完成: ${event.souls.length} 个魂`);
           addLog(`推荐模式: ${getModeLabel(event.mode || "conference")}`);
           setProgressLine(`已匹配 ${event.souls.length} 个魂：${event.souls.map((s) => s.name).join("、")}`);
@@ -338,6 +338,9 @@ export function PossessionEntry() {
         }
         if (event.phase === "review_done" && event.review) {
           setReview(event.review);
+          if (event.task_cards && Object.keys(event.task_cards).length > 0) {
+            setTaskCards(event.task_cards);
+          }
           addLog(`🔍 审查完成 | 裁决: ${getVerdictLabel(event.review.verdict)}`);
           (event.review.checks || []).forEach((c: string) => addLog(`   - ${c}`));
           if (event.review.notes) addLog(`📝 备注: ${event.review.notes}`);
@@ -346,6 +349,24 @@ export function PossessionEntry() {
           setPhase("adjusting");
           addLog("🔄 审查未通过 → 重新调整魂组合...");
           setProgressLine("审查未通过，正在调整魂组合…");
+        }
+        if (event.phase === "analysis_content") {
+          if (!isStreamingRef.current) {
+            isStreamingRef.current = true;
+            setIsStreaming(true);
+            setCurrentStreamSource(event.source || "");
+            setStreamingContent("");
+            addLog(`📝 ${event.source} 正在生成内容...`);
+          }
+          if (event.is_done) {
+            isStreamingRef.current = false;
+            setIsStreaming(false);
+            addLog(`📝 ${event.source} 生成完成`);
+            setStreamingContent("");
+            setCurrentStreamSource("");
+          } else if (event.content) {
+            setStreamingContent((prev) => prev + event.content);
+          }
         }
       });
 
@@ -371,8 +392,8 @@ export function PossessionEntry() {
           addLog("🎉 实践开口附体会话已启动");
           setProgressLine("实践开口进行中…");
           triggerSessionsUpdate();
-        } catch (e: any) {
-          const errorMsg = e.message || e.toString() || "启动失败";
+        } catch (e: unknown) {
+          const errorMsg = e instanceof Error ? e.message : String(e);
           setError(errorMsg);
           addLog(`❌ 错误: ${errorMsg}`);
           setPhase("input");
@@ -389,7 +410,11 @@ export function PossessionEntry() {
         return;
       }
 
-      const finalMode = data.recommended_mode || "conference";
+      const recommendedMode = data.recommended_mode || "conference";
+      const finalMode: PossessionMode = isManualMode ? mode : (recommendedMode as PossessionMode);
+      if (isManualMode) {
+        addLog(`🎯 手动模式：使用选定的 ${getModeLabel(finalMode)}，跳过模式推荐`);
+      }
       setMode(finalMode);
       setPhase("starting");
       addLog("🚀 启动附体会话...");
@@ -412,14 +437,15 @@ export function PossessionEntry() {
       addLog("🎉 附体会话已启动");
       setProgressLine("附体会话已启动，魂正在思考…");
       triggerSessionsUpdate();
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error("=== 发生错误:", e);
       abortRef.current?.abort();
-      if (e?.name === "AbortError" || isCancelled) {
+      const isAbort = e instanceof Error && e.name === "AbortError";
+      if (isAbort || isCancelled) {
         setPhase("input");
         return;
       }
-      const errorMsg = e.message || e.toString() || "分析失败";
+      const errorMsg = e instanceof Error ? e.message : String(e || "分析失败");
       setError(errorMsg);
       addLog(`❌ 错误: ${errorMsg}`);
       setPhase("input");
@@ -459,11 +485,8 @@ export function PossessionEntry() {
 
   const filteredLogs = log.filter((l) => {
     if (logFilter === "全部") return true;
-    const type = classifyLogType(l);
-    if (logFilter === "关键") return type === "key";
-    if (logFilter === "魂匹配") return type === "soul";
-    if (logFilter === "审查") return type === "review";
-    return true;
+    const typeMap: Record<string, string> = { "关键": "key", "魂匹配": "soul", "审查": "review" };
+    return classifyLogType(l) === typeMap[logFilter];
   });
 
   const currentPhaseIndex = PHASES.findIndex((p) => p.key === phase);
@@ -658,6 +681,77 @@ export function PossessionEntry() {
                 </div>
               )}
 
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Wand2 className="h-4 w-4 text-primary" />
+                    <span className="text-sm font-medium">选择模式</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsManualMode(!isManualMode)}
+                    className={cn(
+                      "text-xs px-2 py-1 rounded-md transition-colors",
+                      isManualMode 
+                        ? "bg-primary/10 text-primary" 
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    {isManualMode ? "手动选择" : "自动匹配"}
+                  </button>
+                </div>
+
+                {isManualMode && (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {MODES.map((m) => {
+                      const Icon = iconMap[m.icon];
+                      const isSelected = mode === m.key;
+                      return (
+                        <button
+                          key={m.key}
+                          type="button"
+                          onClick={() => setMode(m.key)}
+                          className={cn(
+                            "group rounded-lg border p-3 text-left transition-all",
+                            isSelected 
+                              ? "border-primary bg-primary/5 shadow-sm" 
+                              : "hover:border-primary/30 hover:bg-muted/30"
+                          )}
+                        >
+                          <div className="flex items-center gap-2 mb-1">
+                            <div className={cn(
+                              "flex items-center justify-center w-8 h-8 rounded-md",
+                              isSelected 
+                                ? `${MODE_COLORS_BG[m.key]} text-white` 
+                                : "bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary"
+                            )}>
+                              {Icon && <Icon className="h-4 w-4" />}
+                            </div>
+                            <span className={cn(
+                              "text-sm font-medium",
+                              isSelected ? MODE_COLORS_TEXT[m.key] : ""
+                            )}>
+                              {m.label}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground line-clamp-2">
+                            {m.description}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {!isManualMode && (
+                  <div className="rounded-lg border border-dashed bg-muted/20 p-3 text-center">
+                    <p className="text-xs text-muted-foreground">
+                      系统将自动分析任务，匹配最合适的模式与思想家
+                    </p>
+                  </div>
+                )}
+              </div>
+
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
                   <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -680,8 +774,17 @@ export function PossessionEntry() {
                     size="lg" 
                     data-testid="start-possession-btn"
                   >
-                    <Brain className="mr-2 h-5 w-5" />
-                    我想问
+                    {isManualMode ? (
+                      <>
+                        <MessageCircle className="mr-2 h-5 w-5" />
+                        进入 {MODES.find(m => m.key === mode)?.label}
+                      </>
+                    ) : (
+                      <>
+                        <Brain className="mr-2 h-5 w-5" />
+                        我想问
+                      </>
+                    )}
                   </Button>
                 </div>
               </div>
@@ -842,6 +945,56 @@ export function PossessionEntry() {
                   </div>
                 )}
 
+                {review && (
+                  <div className="mt-4 space-y-3">
+                    <div className="flex items-center gap-2 text-sm">
+                      <ShieldCheck className="h-4 w-4 text-purple-500" />
+                      <span className="font-medium text-purple-600 dark:text-purple-400">
+                        {review.reviewer} 的审查
+                      </span>
+                      <span className={cn(
+                        "text-xs px-2 py-0.5 rounded-full",
+                        review.verdict === "pass" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400" :
+                        review.verdict === "conditional" ? "bg-amber-100 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400" :
+                        "bg-red-100 text-red-700 dark:bg-red-950/30 dark:text-red-400"
+                      )}>
+                        {getVerdictLabel(review.verdict)}
+                      </span>
+                    </div>
+                    {review.checks && review.checks.length > 0 && (
+                      <div className="text-xs text-muted-foreground space-y-1 pl-6">
+                        {review.checks.map((c: string, i: number) => (
+                          <div key={i}>• {c}</div>
+                        ))}
+                      </div>
+                    )}
+                    {review.notes && (
+                      <div className="text-xs text-muted-foreground pl-6">
+                        📝 {review.notes}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {Object.keys(taskCards).length > 0 && (
+                  <div className="mt-4 space-y-2">
+                    <div className="flex items-center gap-2 text-sm">
+                      <Brain className="h-4 w-4 text-emerald-500" />
+                      <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                        专属子问题
+                      </span>
+                    </div>
+                    <div className="space-y-2 pl-6">
+                      {Object.entries(taskCards).map(([soul, question]) => (
+                        <div key={soul} className="text-xs bg-muted/30 rounded-md p-2">
+                          <span className="font-medium text-foreground">{soul}：</span>
+                          <span className="text-muted-foreground">{question}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <Button
                   variant="ghost"
                   size="sm"
@@ -901,6 +1054,20 @@ export function PossessionEntry() {
                       <div className="text-primary font-medium flex items-center gap-2 pb-2 mb-2 border-b border-primary/10">
                         <Loader2 className="h-3 w-3 animate-spin shrink-0" />
                         <span>{progressLine}</span>
+                      </div>
+                    )}
+                    {isStreaming && streamingContent && (
+                      <div className="mt-2 mb-2 p-2 rounded-md border border-purple-200 dark:border-purple-800 bg-purple-50/50 dark:bg-purple-950/20">
+                        <div className="flex items-center gap-2 mb-1">
+                          <Loader2 className="h-3 w-3 animate-spin text-purple-500" />
+                          <span className="text-purple-600 dark:text-purple-400 font-medium text-[10px]">
+                            {currentStreamSource} 正在生成...
+                          </span>
+                        </div>
+                        <div className="text-muted-foreground whitespace-pre-wrap leading-relaxed text-[11px]">
+                          {streamingContent}
+                          <span className="animate-pulse">▌</span>
+                        </div>
                       </div>
                     )}
                     {filteredLogs.map((l, i) => {

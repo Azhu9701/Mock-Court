@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use axum::http::{header, StatusCode};
 use archive::SessionDetail;
@@ -24,6 +24,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/:id/rename", put(rename_session))
         .route("/:id/fork", put(fork_session))
         .route("/:id/export/markdown", get(export_session_markdown))
+        .route("/:id/messages/:seq", delete(delete_messages_from_seq))
         .route("/reviews/profile", get(get_user_profile))
         .route("/:id/review", get(get_session_review).post(save_review))
 }
@@ -83,7 +84,7 @@ struct BatchDeleteRequest { ids: Vec<String> }
 
 async fn batch_delete_sessions(
     State(state): State<Arc<AppState>>, Json(body): Json<BatchDeleteRequest>,
-) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<ApiError>)> {
+) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), (axum::http::StatusCode, Json<ApiError>)> {
     let mut deleted = 0u32;
     let mut errors: Vec<String> = Vec::new();
     for id in &body.ids {
@@ -92,7 +93,8 @@ async fn batch_delete_sessions(
             Err(e) => errors.push(format!("{}: {}", id, e)),
         }
     }
-    Ok(Json(serde_json::json!({ "deleted": deleted, "errors": errors })))
+    let status = if errors.is_empty() { axum::http::StatusCode::OK } else { axum::http::StatusCode::MULTI_STATUS };
+    Ok((status, Json(serde_json::json!({ "deleted": deleted, "errors": errors }))))
 }
 
 #[derive(Debug, Deserialize)]
@@ -394,6 +396,15 @@ async fn trigger_distill(
     );
 
     Ok(Json(serde_json::json!({ "ok": true, "message": "Distill started" })))
+}
+
+async fn delete_messages_from_seq(
+    State(state): State<Arc<AppState>>,
+    Path((session_id, seq)): Path<(String, i64)>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let deleted = state.archive.store().delete_messages_from_seq(&session_id, seq).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({ "deleted": deleted })))
 }
 
 fn top_phrases<'a>(texts: impl Iterator<Item = &'a str>, limit: usize) -> Vec<(&'a str, u32)> {

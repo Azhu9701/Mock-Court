@@ -23,8 +23,7 @@ import {
 } from "lucide-react";
 import { DEEPSEEK_MODELS_NO_DEFAULT, REASONING_OPTIONS } from "@/config/models";
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:3096/api/v1";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 
 interface ProviderStatus {
   id: string;
@@ -115,8 +114,8 @@ export default function ModelsPage() {
   }, []);
 
   // ── 中转站 (Agent Proxy) ──
-  const [relayUrl, setRelayUrl] = useState("http://123.156.230.251:3000/v1");
-  const [relayUrlDraft, setRelayUrlDraft] = useState("http://123.156.230.251:3000/v1");
+  const [relayUrl, setRelayUrl] = useState("");
+  const [relayUrlDraft, setRelayUrlDraft] = useState("");
   const [relayKey, setRelayKey] = useState("");
   const [relayKeyDraft, setRelayKeyDraft] = useState("");
   const [savingRelay, setSavingRelay] = useState(false);
@@ -133,8 +132,8 @@ export default function ModelsPage() {
       const res = await fetch(`${API_BASE}/config/relay`);
       if (res.ok) {
         const data = await res.json();
-        setRelayUrl(data.url || "http://123.156.230.251:3000/v1");
-        setRelayUrlDraft(data.url || "http://123.156.230.251:3000/v1");
+        setRelayUrl(data.url || "");
+        setRelayUrlDraft(data.url || "");
         setRelayKey(data.has_key ? "••••••••" : "");
         setRelayKeyDraft("");
       }
@@ -770,7 +769,7 @@ export default function ModelsPage() {
             <div className="flex gap-2 items-center">
               <Input
                 type="text"
-                placeholder="http://123.156.230.251:3000/v1"
+                placeholder="https://your-relay-server/v1"
                 value={relayUrlDraft}
                 onChange={(e) => {
                   const val = e.target.value;

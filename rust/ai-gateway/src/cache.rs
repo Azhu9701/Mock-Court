@@ -18,13 +18,12 @@ impl LlMCache {
 
     fn hash_key(provider: &str, model: &str, system_prompt: &str, user_prompt: &str) -> String {
         let mut hasher = Sha256::new();
-        hasher.update(provider.as_bytes());
-        hasher.update(b"|");
-        hasher.update(model.as_bytes());
-        hasher.update(b"|");
-        hasher.update(system_prompt.as_bytes());
-        hasher.update(b"|");
-        hasher.update(user_prompt.as_bytes());
+        // Length-prefixed encoding to prevent delimiter collisions
+        for part in [provider, model, system_prompt, user_prompt] {
+            let len = (part.len() as u64).to_le_bytes();
+            hasher.update(len);
+            hasher.update(part.as_bytes());
+        }
         hex::encode(hasher.finalize())
     }
 

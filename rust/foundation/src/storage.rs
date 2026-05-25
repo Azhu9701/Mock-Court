@@ -25,6 +25,7 @@ pub trait Storage: Send + Sync {
     // Messages (SQLite)
     async fn append_message(&self, msg: &Message) -> Result<()>;
     async fn get_messages(&self, session_id: &str) -> Result<Vec<Message>>;
+    async fn delete_messages_from_seq(&self, session_id: &str, seq: i64) -> Result<u32>;
 
     // Call Records (SQLite + YAML)
     async fn record_call(&self, record: &CallRecord) -> Result<()>;

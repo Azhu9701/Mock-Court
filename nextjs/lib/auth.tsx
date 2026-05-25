@@ -2,8 +2,7 @@
 
 import { useState, useEffect, createContext, useContext } from "react";
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:3096/api/v1";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 
 interface AuthState {
   authenticated: boolean;
@@ -25,7 +24,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   });
 
   useEffect(() => {
-    fetch(`${API_BASE}/auth/me`)
+    fetch(`${API_BASE}/auth/me`, { credentials: 'include' })
       .then((res) => res.json())
       .then((data) => {
         setAuth({

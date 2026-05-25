@@ -9,3 +9,5 @@ harmonyos/
 dist/
 .env
 *.log
+**/node_modules/
+**/.next/

@@ -120,7 +120,7 @@ pub struct Period {
 
 pub struct ArchiveSystem {
     store: Arc<dyn Storage>,
-    export_statuses: RwLock<HashMap<String, ExportStatus>>,
+    export_statuses: Arc<RwLock<HashMap<String, ExportStatus>>>,
     summon_stats_cache: RwLock<Option<(SummonStats, Instant)>>,
     stats_ttl: Duration,
 }
@@ -129,7 +129,7 @@ impl ArchiveSystem {
     pub fn new(store: Arc<dyn Storage>) -> Self {
         ArchiveSystem {
             store,
-            export_statuses: RwLock::new(HashMap::new()),
+            export_statuses: Arc::new(RwLock::new(HashMap::new())),
             summon_stats_cache: RwLock::new(None),
             stats_ttl: Duration::from_secs(300),
         }
@@ -228,34 +228,21 @@ impl ArchiveSystem {
             let mut statuses = self.export_statuses.write().map_err(|e| {
                 FoundationError::InvalidState(e.to_string())
             })?;
-            statuses.insert(task_id.clone(), ExportStatus::Pending);
-        }
-
-        let store = self.store.clone();
-        let statuses_map = Arc::new(RwLock::new(HashMap::new()));
-        {
-            let mut sm = statuses_map.write().map_err(|e| {
-                FoundationError::InvalidState(e.to_string())
-            })?;
-            sm.insert(task_id.clone(), ExportStatus::Pending);
-        }
-        {
-            let mut statuses = self.export_statuses.write().map_err(|e| {
-                FoundationError::InvalidState(e.to_string())
-            })?;
             statuses.insert(task_id.clone(), ExportStatus::Running);
         }
 
+        let store = self.store.clone();
+        let export_statuses = self.export_statuses.clone();
         let tid = task_id.clone();
         tokio::spawn(async move {
             let result = build_export(&*store).await;
-            let mut sm = statuses_map.write().unwrap();
+            let mut statuses = export_statuses.write().unwrap();
             match result {
                 Ok((_bundle, path)) => {
-                    sm.insert(tid.clone(), ExportStatus::Complete(path));
+                    statuses.insert(tid.clone(), ExportStatus::Complete(path));
                 }
                 Err(e) => {
-                    sm.insert(tid.clone(), ExportStatus::Failed(e.to_string()));
+                    statuses.insert(tid.clone(), ExportStatus::Failed(e.to_string()));
                 }
             }
         });

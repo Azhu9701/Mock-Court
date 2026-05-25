@@ -61,6 +61,10 @@ impl WsSessionManager {
                 }
             }
         }
+        // Also send to system channel: the frontend's main WebSocket
+        // connection subscribes to the system channel and needs these
+        // events for streaming display. Soul-specific channel subscriptions
+        // are only used for per-soul UI panels.
         self.broadcast_system(session_id, event);
     }
 

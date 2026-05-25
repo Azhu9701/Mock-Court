@@ -1,7 +1,10 @@
 # Stage 1: Build
-FROM rust:1.85-alpine AS builder
+FROM rust:1-alpine AS builder
 
-RUN apk add --no-cache musl-dev openssl-dev pkgconfig
+RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static pkgconfig
+
+# 国内镜像加速
+RUN mkdir -p /root/.cargo && printf '[source.crates-io]\nreplace-with = "ustc"\n\n[source.ustc]\nregistry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"\n' > /root/.cargo/config.toml
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./

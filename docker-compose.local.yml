@@ -1,0 +1,79 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "8088:8080"
+    volumes:
+      - ./deploy/Caddyfile.local:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - banner
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --protocol http2 --url http://caddy:8080
+    depends_on:
+      - caddy
+    networks:
+      - banner
+
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8088/
+      - SEARXNG_SECRET=local-dev-searxng-secret-that-is-long-enough
+    volumes:
+      - ./deploy/searxng-settings.yml:/etc/searxng/settings.yml:ro
+    networks:
+      - banner
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - api_data:/app/data
+    environment:
+      - WANMINFAN_SERVER_PORT=3096
+      - LMSTUDIO_BASE_URL=${LMSTUDIO_HOST:-http://host.docker.internal:1234}
+      - LMSTUDIO_MODEL=${LMSTUDIO_MODEL:-qwen/qwen3.6-27b}
+      - AI_RELAY_URL=${AI_RELAY_URL:-}
+      - OPENAI_API_KEY=${AGENT_PROXY_KEY:-}
+      - OPENAI_MODEL=gpt-4o
+      - DEEPSEEK_API_KEY=${AGENT_PROXY_KEY:-}
+      - DEEPSEEK_MODEL=deepseek-v4-pro
+      - CLAUDE_API_KEY=${AGENT_PROXY_KEY:-}
+      - CLAUDE_MODEL=claude-opus-4-7
+      - WANMINFAN_SEARXNG_URL=http://searxng:8080
+    networks:
+      - banner
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        # NEXT_PUBLIC_* 是构建时变量，必须在 build.args 中传递
+        - NEXT_PUBLIC_API_URL=/api/v1
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    networks:
+      - banner
+
+volumes:
+  caddy_data:
+  caddy_config:
+  api_data:
+  searxng_data:
+
+networks:
+  banner:
+    driver: bridge

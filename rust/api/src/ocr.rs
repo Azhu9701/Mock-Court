@@ -2,6 +2,10 @@ use std::io::Write;
 use std::process::Command;
 
 pub fn ocr_image(data: &[u8], lang: &str) -> Result<String, String> {
+    // Only allow safe characters in lang to prevent command injection
+    if !lang.chars().all(|c| c.is_ascii_alphabetic() || c == '_' || c == '+') {
+        return Err(format!("invalid lang parameter: {}", lang));
+    }
     let mut tmp = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
     tmp.write_all(data).map_err(|e| e.to_string())?;
     let path = tmp.path().to_str().ok_or("invalid temp path")?;

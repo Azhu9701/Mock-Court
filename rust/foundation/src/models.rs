@@ -642,7 +642,7 @@ impl Default for CallConfig {
     fn default() -> Self {
         CallConfig { 
             temperature: 0.7, 
-            max_tokens: 16384, 
+            max_tokens: 32768,
             stream: true, 
             model: None,
             reasoning_effort: None,

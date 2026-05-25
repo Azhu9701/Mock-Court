@@ -1,9 +1,33 @@
 "use client";
 
 import { useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Sparkles, ShieldCheck, ChevronUp, ChevronDown, ArrowRightCircle } from "lucide-react";
 import { MODE_LABELS_LONG } from "@/config/possession-modes";
+
+/** 过滤 AI thinking / reasoning 内容 */
+function stripThinking(text: string): string {
+  if (!text) return "";
+  // 匹配 "Here's a thinking process:..." 到下一个明显分界或结尾
+  return text
+    .replace(/Here's a thinking process:[\s\S]*?(?=\n\n[A-Z]|\n#[^#]|$)/gi, "")
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+    .replace(/Thinking:[\s\S]*?(?=\n\n[A-Z]|$)/gi, "")
+    .trim();
+}
+
+/** Markdown 渲染容器，复用 prose 样式 */
+function Md({ children }: { children: string }) {
+  const cleaned = stripThinking(children);
+  if (!cleaned) return null;
+  return (
+    <span className="prose prose-slate prose-sm max-w-none [&_p]:my-1 [&_strong]:font-semibold [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5]">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleaned}</ReactMarkdown>
+    </span>
+  );
+}
 
 export interface MatchedSoulInfo {
   name: string;
@@ -79,7 +103,9 @@ export function SessionContextHeader({ task, mode, matchedSouls, review }: Sessi
                     <span className="text-xs bg-muted px-2 py-0.5 rounded">{s.field}</span>
                     <span className="text-xs text-muted-foreground font-mono">{s.ismism_code}</span>
                   </div>
-                  <p className="text-muted-foreground mt-2 text-sm leading-relaxed">{s.rationale}</p>
+                  <div className="text-muted-foreground mt-2 text-sm leading-relaxed">
+                    <Md>{s.rationale}</Md>
+                  </div>
                 </div>
               ))}
             </div>

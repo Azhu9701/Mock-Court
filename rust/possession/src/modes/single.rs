@@ -52,12 +52,48 @@ pub async fn run(
             config = config.with_tools(definitions);
             stream::run_tool_loop(gateway, info.provider, &prompt, &config, session_id, soul_name, ws, tool_registry).await
         } else {
-            let rx = gateway.call(&LLMRequest { provider: info.provider, prompt, config })?;
-            stream::stream_single_soul(rx, session_id, soul_name, ws).await
+            let provider = info.provider;
+            match gateway.call(&LLMRequest { provider, prompt, config }) {
+                Ok(rx) => stream::stream_single_soul_with_provider(rx, session_id, soul_name, ws, gateway, &provider).await,
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    gateway.mark_provider_unhealthy(&provider, error_msg.clone());
+                    ws.broadcast_soul(
+                        session_id,
+                        soul_name,
+                        &WsEvent {
+                            event_type: WsEventType::SoulError,
+                            payload: error_msg.clone(),
+                            reasoning_content: None,
+                            soul_name: Some(soul_name.to_string()),
+                            seq: 0,
+                        },
+                    );
+                    SoulOutput::error(soul_name.to_string(), error_msg)
+                }
+            }
         }
     } else {
-        let rx = gateway.call(&LLMRequest { provider: info.provider, prompt, config })?;
-        stream::stream_single_soul(rx, session_id, soul_name, ws).await
+        let provider = info.provider;
+        match gateway.call(&LLMRequest { provider, prompt, config }) {
+            Ok(rx) => stream::stream_single_soul_with_provider(rx, session_id, soul_name, ws, gateway, &provider).await,
+            Err(e) => {
+                let error_msg = e.to_string();
+                gateway.mark_provider_unhealthy(&provider, error_msg.clone());
+                ws.broadcast_soul(
+                    session_id,
+                    soul_name,
+                    &WsEvent {
+                        event_type: WsEventType::SoulError,
+                        payload: error_msg.clone(),
+                        reasoning_content: None,
+                        soul_name: Some(soul_name.to_string()),
+                        seq: 0,
+                    },
+                );
+                SoulOutput::error(soul_name.to_string(), error_msg)
+            }
+        }
     };
 
     let audit = SelfAudit::audit(&profile, task, &output.content);

@@ -326,36 +326,43 @@ impl SoulProcess {
             let state = self.get_state().await;
 
             tokio::select! {
-                Some(event) = rx.recv() => {
-                    match event {
-                        SoulProcessEvent::Task { task, presets } => {
-                            if state == SoulProcessState::Sleeping {
-                                tracing::info!("Waking up soul {} to process task", soul_name);
+                maybe_event = rx.recv() => {
+                    match maybe_event {
+                        Some(event) => match event {
+                            SoulProcessEvent::Task { task, presets } => {
+                                if state == SoulProcessState::Sleeping {
+                                    tracing::info!("Waking up soul {} to process task", soul_name);
+                                    *self.state.write().await = SoulProcessState::Active;
+                                }
+
+                                self.process_task(
+                                    task,
+                                    presets.unwrap_or(UserPresets {
+                                        judgment: None,
+                                        worry: None,
+                                        unknown: None,
+                                    }),
+                                    &gateway,
+                                    &output_tx,
+                                    &mut intervention_rx,
+                                ).await;
+                            }
+                            SoulProcessEvent::Sleep => {
+                                tracing::info!("Putting soul {} to sleep", soul_name);
+                                *self.state.write().await = SoulProcessState::Sleeping;
+                            }
+                            SoulProcessEvent::Wake => {
+                                tracing::info!("Waking up soul {}", soul_name);
                                 *self.state.write().await = SoulProcessState::Active;
                             }
-
-                            self.process_task(
-                                task,
-                                presets.unwrap_or(UserPresets {
-                                    judgment: None,
-                                    worry: None,
-                                    unknown: None,
-                                }),
-                                &gateway,
-                                &output_tx,
-                                &mut intervention_rx,
-                            ).await;
+                            SoulProcessEvent::Stop => {
+                                tracing::info!("Stopping soul process: {}", soul_name);
+                                *self.state.write().await = SoulProcessState::Stopped;
+                                break;
+                            }
                         }
-                        SoulProcessEvent::Sleep => {
-                            tracing::info!("Putting soul {} to sleep", soul_name);
-                            *self.state.write().await = SoulProcessState::Sleeping;
-                        }
-                        SoulProcessEvent::Wake => {
-                            tracing::info!("Waking up soul {}", soul_name);
-                            *self.state.write().await = SoulProcessState::Active;
-                        }
-                        SoulProcessEvent::Stop => {
-                            tracing::info!("Stopping soul process: {}", soul_name);
+                        None => {
+                            tracing::warn!("Soul process event channel closed for {}", soul_name);
                             *self.state.write().await = SoulProcessState::Stopped;
                             break;
                         }

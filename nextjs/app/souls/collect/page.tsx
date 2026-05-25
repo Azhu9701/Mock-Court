@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ArrowLeft, Search, Loader2, Sparkles, Wand2 } from "lucide-react";
+import { API_BASE } from "@/lib/api";
 
 export default function CollectPage() {
   const router = useRouter();
@@ -20,7 +21,7 @@ export default function CollectPage() {
     if (!name.trim()) return;
     setLoading(true);
     try {
-      const r = await fetch("http://127.0.0.1:3096/api/v1/souls/collect", {
+      const r = await fetch(`${API_BASE}/souls/collect`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),

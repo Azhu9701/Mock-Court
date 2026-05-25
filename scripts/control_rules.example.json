@@ -1,0 +1,32 @@
+[
+  {
+    "id": "avoid_exec_danger",
+    "type": "hard_block",
+    "pattern": "(os\\.system|subprocess\\.(call|Popen|run)|eval\\(|exec\\()",
+    "weight": 0
+  },
+  {
+    "id": "avoid_rm_rf",
+    "type": "hard_block",
+    "pattern": "rm\\s+-rf\\s+/",
+    "weight": 0
+  },
+  {
+    "id": "prefer_typed_python",
+    "type": "keyword",
+    "keywords": ["type hint", "类型标注", "Optional", "List[", "Dict["],
+    "weight": 0.4
+  },
+  {
+    "id": "prefer_error_handling",
+    "type": "regex",
+    "pattern": "(try\\s*:|except\\s+|raise\\s+\\w+Error|with\\s+.*:)",
+    "weight": 0.3
+  },
+  {
+    "id": "avoid_todo_stub",
+    "type": "regex",
+    "pattern": "(pass\\s*$|#\\s*TODO|raise\\s+NotImplementedError)",
+    "weight": -0.5
+  }
+]

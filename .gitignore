@@ -24,6 +24,7 @@ node_modules/
 # Sensitive data
 **/apikeys.json
 **/call_records.yaml
+data/lmstudio.json
 data/db/
 rust/data/db/
 *.db
@@ -68,4 +69,16 @@ data/souls-internal/
 
 # Runtime artifacts
 data/archive/
+data/exports/
+data/default-model.json
+rust/data/archive/
+rust/data/souls/
 scripts/__pycache__/
+
+# Build artifacts
+dist/
+*.zip
+
+# CodeGraph index
+.codegraph/
+graphify-out/

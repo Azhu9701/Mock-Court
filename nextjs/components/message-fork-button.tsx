@@ -31,8 +31,8 @@ export function MessageForkButton({
   return (
     <Button
       variant="ghost"
-      size="sm"
-      className="h-7 px-2 text-xs gap-1"
+      size="icon"
+      className="h-7 w-7"
       onClick={onFork}
       disabled={forking}
       title="从这条消息重新出发"
@@ -42,7 +42,6 @@ export function MessageForkButton({
       ) : (
         <GitFork className="h-3.5 w-3.5" />
       )}
-      分叉
     </Button>
   );
 }

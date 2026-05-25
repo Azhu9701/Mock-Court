@@ -8,6 +8,7 @@ mod lmstudio;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
 
@@ -21,6 +22,43 @@ use crate::claude::ClaudeClient;
 use crate::deepseek::DeepSeekClient;
 use crate::lmstudio::LmStudioNativeClient;
 use crate::openai::OpenAIClient;
+
+const HEALTH_CHECK_TTL: Duration = Duration::from_secs(30);
+
+#[derive(Clone)]
+struct HealthState {
+    healthy: bool,
+    checked_at: Instant,
+    last_error: Option<String>,
+}
+
+impl Default for HealthState {
+    fn default() -> Self {
+        Self {
+            healthy: true,
+            checked_at: Instant::now(),
+            last_error: None,
+        }
+    }
+}
+
+impl HealthState {
+    fn is_fresh(&self) -> bool {
+        self.checked_at.elapsed() < HEALTH_CHECK_TTL
+    }
+
+    fn mark_healthy(&mut self) {
+        self.healthy = true;
+        self.checked_at = Instant::now();
+        self.last_error = None;
+    }
+
+    fn mark_unhealthy(&mut self, error: String) {
+        self.healthy = false;
+        self.checked_at = Instant::now();
+        self.last_error = Some(error);
+    }
+}
 
 /// Read API key from env or data/apikeys.json fallback
 pub fn load_api_key(env_var: &str, file_key: &str) -> Option<String> {
@@ -49,7 +87,7 @@ pub fn load_api_key(env_var: &str, file_key: &str) -> Option<String> {
 }
 
 /// 如果设置了 AI_RELAY_URL，所有 provider 统一走中转站
-/// e.g. AI_RELAY_URL=http://123.156.230.251:3000/v1
+/// e.g. AI_RELAY_URL=https://your-relay-server/v1
 pub fn relay_base_url(default: &str) -> String {
     std::env::var("AI_RELAY_URL").unwrap_or_else(|_| default.to_string())
 }
@@ -74,6 +112,7 @@ pub struct GatewayRegistry {
     lmstudio_base_url: Arc<RwLock<String>>,
     lmstudio_api_key: Arc<RwLock<Option<String>>>,
     lmstudio_model: Arc<RwLock<String>>,
+    health_states: Arc<RwLock<HashMap<Provider, HealthState>>>,
 }
 
 impl GatewayRegistry {
@@ -149,20 +188,34 @@ impl GatewayRegistry {
         // LM Studio 始终注册——可用性由 pick_provider 动态检查 gateway.is_available()
         providers.insert(Provider::LMStudio, Arc::new(lmstudio));
 
-        GatewayRegistry { providers, all_info, cache: Arc::new(RwLock::new(None)), preferred_provider: Arc::new(RwLock::new(None)), lmstudio_base_url, lmstudio_api_key, lmstudio_model }
+        let mut health_states: HashMap<Provider, HealthState> = HashMap::new();
+        for p in [Provider::LMStudio, Provider::DeepSeek, Provider::Claude, Provider::OpenAI] {
+            health_states.insert(p, HealthState::default());
+        }
+
+        GatewayRegistry {
+            providers,
+            all_info,
+            cache: Arc::new(RwLock::new(None)),
+            preferred_provider: Arc::new(RwLock::new(None)),
+            lmstudio_base_url,
+            lmstudio_api_key,
+            lmstudio_model,
+            health_states: Arc::new(RwLock::new(health_states)),
+        }
     }
 
     pub fn list_providers(&self) -> Vec<ProviderInfo> {
         let mut info = self.all_info.clone();
-        // 动态更新 LM Studio 的模型名和可用性
-        if let Some(lmstudio) = info.iter_mut().find(|i| i.provider == Provider::LMStudio) {
-            let model = self.lmstudio_model.read().clone();
-            if !model.is_empty() {
-                lmstudio.model = model;
+        for item in info.iter_mut() {
+            if item.provider == Provider::LMStudio {
+                let model = self.lmstudio_model.read().clone();
+                if !model.is_empty() {
+                    item.model = model;
+                }
             }
-            // 动态刷新可用性——模型名可能在运行时通过前端配置
-            if let Some(gw) = self.providers.get(&Provider::LMStudio) {
-                lmstudio.available = gw.is_available();
+            if let Some(gw) = self.providers.get(&item.provider) {
+                item.available = self.is_healthy_with_check(&item.provider, gw);
             }
         }
         info
@@ -180,6 +233,11 @@ impl GatewayRegistry {
     pub fn set_lmstudio_base_url(&self, url: String) {
         let mut u = self.lmstudio_base_url.write();
         *u = url;
+        if let Some(gw) = self.providers.get(&Provider::LMStudio) {
+            if let Some(lmstudio) = (**gw).as_any().downcast_ref::<crate::lmstudio::LmStudioNativeClient>() {
+                lmstudio.invalidate_model_cache();
+            }
+        }
     }
 
     pub fn lmstudio_api_key(&self) -> Option<String> {
@@ -189,6 +247,11 @@ impl GatewayRegistry {
     pub fn set_lmstudio_api_key(&self, key: Option<String>) {
         let mut k = self.lmstudio_api_key.write();
         *k = key;
+        if let Some(gw) = self.providers.get(&Provider::LMStudio) {
+            if let Some(lmstudio) = (**gw).as_any().downcast_ref::<crate::lmstudio::LmStudioNativeClient>() {
+                lmstudio.invalidate_model_cache();
+            }
+        }
     }
 
     pub fn lmstudio_model(&self) -> String {
@@ -198,6 +261,11 @@ impl GatewayRegistry {
     pub fn set_lmstudio_model(&self, model: String) {
         let mut m = self.lmstudio_model.write();
         *m = model;
+        if let Some(gw) = self.providers.get(&Provider::LMStudio) {
+            if let Some(lmstudio) = (**gw).as_any().downcast_ref::<crate::lmstudio::LmStudioNativeClient>() {
+                lmstudio.invalidate_model_cache();
+            }
+        }
     }
 
     /// 主动查询 LM Studio 当前加载的模型名，返回模型 ID
@@ -211,26 +279,104 @@ impl GatewayRegistry {
         LmStudioNativeClient::fetch_loaded_model(&client, &base_url, &api_key).await
     }
 
+    fn get_health_state(&self, provider: &Provider) -> HealthState {
+        self.health_states
+            .read()
+            .get(provider)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn mark_provider_healthy(&self, provider: &Provider) {
+        let mut states = self.health_states.write();
+        if let Some(state) = states.get_mut(provider) {
+            state.mark_healthy();
+        }
+    }
+
+    pub fn mark_provider_unhealthy(&self, provider: &Provider, error: String) {
+        let mut states = self.health_states.write();
+        if let Some(state) = states.get_mut(provider) {
+            state.mark_unhealthy(error.clone());
+        }
+        tracing::warn!("Provider {:?} marked unhealthy: {}", provider, error);
+    }
+
+    fn is_healthy_with_check(&self, provider: &Provider, gw: &Arc<dyn Gateway>) -> bool {
+        if !gw.is_available() {
+            return false;
+        }
+        let health = self.get_health_state(provider);
+        if health.is_fresh() {
+            return health.healthy;
+        }
+        true
+    }
+
     pub fn pick_provider(&self) -> Option<Provider> {
         let pref = self.preferred_provider.read().clone();
-        // 有偏好时先检查偏好 provider 是否已注册且可用
         if let Some(ref p) = pref {
             if let Some(gw) = self.providers.get(p) {
-                if gw.is_available() {
+                if self.is_healthy_with_check(p, gw) {
                     return Some(*p);
                 }
             }
         }
-        // 按固定优先级选择，动态检查 gateway.is_available()
-        // LM Studio 优先（本地免费算力），没配置模型名时 is_available() 返回 false 自动跳过
         for p in [Provider::LMStudio, Provider::DeepSeek, Provider::Claude, Provider::OpenAI] {
             if let Some(gw) = self.providers.get(&p) {
-                if gw.is_available() {
+                if self.is_healthy_with_check(&p, gw) {
                     return Some(p);
                 }
             }
         }
         None
+    }
+
+    pub fn list_available_providers(&self) -> Vec<Provider> {
+        let mut available = Vec::new();
+        let pref = self.preferred_provider.read().clone();
+        if let Some(ref p) = pref {
+            if let Some(gw) = self.providers.get(p) {
+                if self.is_healthy_with_check(p, gw) {
+                    available.push(*p);
+                }
+            }
+        }
+        for p in [Provider::LMStudio, Provider::DeepSeek, Provider::Claude, Provider::OpenAI] {
+            if available.contains(&p) {
+                continue;
+            }
+            if let Some(gw) = self.providers.get(&p) {
+                if self.is_healthy_with_check(&p, gw) {
+                    available.push(p);
+                }
+            }
+        }
+        available
+    }
+
+    pub fn try_next_provider(&self, current: &Provider) -> Option<Provider> {
+        let all = [Provider::LMStudio, Provider::DeepSeek, Provider::Claude, Provider::OpenAI];
+        let current_idx = all.iter().position(|p| p == current);
+        if let Some(idx) = current_idx {
+            for i in (idx + 1)..all.len() {
+                let p = all[i];
+                if let Some(gw) = self.providers.get(&p) {
+                    if self.is_healthy_with_check(&p, gw) {
+                        return Some(p);
+                    }
+                }
+            }
+            for i in 0..idx {
+                let p = all[i];
+                if let Some(gw) = self.providers.get(&p) {
+                    if self.is_healthy_with_check(&p, gw) {
+                        return Some(p);
+                    }
+                }
+            }
+        }
+        self.pick_provider()
     }
 
     /// Pick provider info respecting preferred_provider, falling back to first available.

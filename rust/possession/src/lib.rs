@@ -98,7 +98,9 @@ pub async fn finalize_output_with_notes(
     };
 
     if !content.is_empty() {
-        let _ = store.archive_soul_output(session_id, &output.soul_name, &content).await;
+        if let Err(e) = store.archive_soul_output(session_id, &output.soul_name, &content).await {
+            tracing::error!("Failed to archive soul output for {}: {}", output.soul_name, e);
+        }
     }
 
     let msg = foundation::Message {
@@ -110,7 +112,9 @@ pub async fn finalize_output_with_notes(
         seq: 0,
         created_at: chrono::Utc::now(),
     };
-    let _ = store.append_message(&msg).await;
+    if let Err(e) = store.append_message(&msg).await {
+        tracing::error!("Failed to append message for {}: {}", output.soul_name, e);
+    }
 
     let eff = if output.error.is_some() {
         foundation::Effectiveness::Invalid
@@ -136,7 +140,9 @@ pub async fn finalize_output_with_notes(
         user_feedback: None,
         usage: output.usage.clone(),
     };
-    let _ = store.record_call(&record).await;
+    if let Err(e) = store.record_call(&record).await {
+        tracing::error!("Failed to record call for {}: {}", output.soul_name, e);
+    }
 
     Ok(())
 }

@@ -14,7 +14,7 @@ import {
   Database, Search, HardDrive, Trash, Server, Terminal,
   RefreshCw, Download, Loader2, AlertTriangle, CheckCircle2,
 } from "lucide-react";
-import { rebuildFts, fetchSouls } from "@/lib/api";
+import { API_BASE, rebuildFts, fetchSouls } from "@/lib/api";
 import type { SoulListEntry } from "@/lib/api";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -65,7 +65,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const checkHealth = async () => {
     setHealthChecking(true);
     try {
-      const res = await fetch("http://127.0.0.1:3096/api/v1/health", { signal: AbortSignal.timeout(5000) });
+      const res = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(5000) });
       setHealthStatus(res.ok);
     } catch {
       setHealthStatus(false);
@@ -98,7 +98,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const handleExportArchive = async () => {
     setExporting(true);
     try {
-      const res = await fetch("http://127.0.0.1:3096/api/v1/archive/export", { method: "POST" });
+      const res = await fetch(`${API_BASE}/archive/export`, { method: "POST" });
       if (!res.ok) throw new Error(res.statusText);
       const data = await res.json();
       alert(`归档导出已启动\n任务 ID：${data.task_id}\n请等待后台处理完成后在数据目录查看`);
@@ -117,13 +117,13 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     setClearMsg(null);
     try {
       const endpoint = type === "sessions" ? "sessions" : type === "souls" ? "souls" : "archive";
-      const allRes = await fetch(`http://127.0.0.1:3096/api/v1/${endpoint}`);
+      const allRes = await fetch(`${API_BASE}/${endpoint}`);
       if (!allRes.ok) throw new Error(allRes.statusText);
       const items: { id?: string; name?: string }[] = await allRes.json();
       for (const item of items) {
         const id = item.id || item.name;
         if (id) {
-          await fetch(`http://127.0.0.1:3096/api/v1/${endpoint}/${encodeURIComponent(id)}`, { method: "DELETE" });
+          await fetch(`${API_BASE}/${endpoint}/${encodeURIComponent(id)}`, { method: "DELETE" });
         }
       }
       setClearMsg({ ok: true, text: `${labels[type]}已清除（${items.length} 条）` });
@@ -341,7 +341,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground flex items-center gap-1.5">
                   <Terminal className="h-3.5 w-3.5" />
-                  后端服务 (127.0.0.1:3096)
+                  后端服务 ({API_BASE.replace("/api/v1", "").replace("http://", "").replace("https://", "")})
                 </span>
                 <div className="flex items-center gap-2">
                   {healthChecking ? (
@@ -382,7 +382,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                   WebSocket (附体)
                 </span>
                 <span className="text-muted-foreground">
-                  ws://127.0.0.1:3096
+                  {API_BASE.replace("http://", "ws://").replace("https://", "wss://").replace("/api/v1", "")}
                 </span>
               </div>
             </div>

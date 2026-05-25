@@ -1,4 +1,6 @@
-export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3096/api/v1";
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
+
+const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN || "";
 
 interface ApiError extends Error {
   status?: number;
@@ -29,6 +31,11 @@ async function apiRequest<T>(
   const url = `${API_BASE}${endpoint}`;
   const opName = operation || endpoint;
 
+  const headers = new Headers(fetchOptions.headers);
+  if (API_TOKEN && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${API_TOKEN}`);
+  }
+
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -42,7 +49,7 @@ async function apiRequest<T>(
     }
 
     try {
-      const res = await fetch(url, { ...fetchOptions, signal: controller.signal });
+      const res = await fetch(url, { ...fetchOptions, headers, signal: controller.signal });
 
       if (!res.ok) {
         let errorDetail = res.statusText;
@@ -63,7 +70,7 @@ async function apiRequest<T>(
       }
 
       return res.json();
-    } catch (err: any) {
+    } catch (err: unknown) {
       lastError = err;
       clearTimeout(timer);
 
@@ -476,6 +483,13 @@ export async function renameSession(id: string, title: string): Promise<void> {
   });
 }
 
+export async function deleteMessagesFromSeq(sessionId: string, seq: number): Promise<{ deleted: number }> {
+  return apiRequest<{ deleted: number }>(`/sessions/${sessionId}/messages/${seq}`, {
+    method: 'DELETE',
+    operation: 'deleteMessagesFromSeq',
+  });
+}
+
 // ── Fork ──
 
 export interface ForkResponse {
@@ -507,12 +521,16 @@ export interface AnalyzeResponse {
 }
 
 export interface AnalyzeStreamEvent {
-  phase: "classifying" | "matching" | "matched" | "reviewing" | "review_done" | "adjusting" | "practice_opening" | "done";
+  phase: "classifying" | "matching" | "matched" | "reviewing" | "review_done" | "adjusting" | "practice_opening" | "analysis_content" | "done";
   entry_type?: string;
   souls?: { name: string; field: string; ismism_code: string; rationale: string }[];
   mode?: string;
   reviewer?: string;
   review?: { verdict: string; checks: string[]; notes: string; reviewer: string };
+  task_cards?: Record<string, string>;
+  source?: string;
+  is_done?: boolean;
+  content?: string;
   response?: AnalyzeResponse;
 }
 
@@ -545,9 +563,9 @@ export async function analyzeTask(
 
     // 保存中间状态以便在未收到 done 事件时构造响应
     let intermediateEntryType = "conventional";
-    let intermediateSouls: any[] = [];
+    let intermediateSouls: AnalyzeResponse["matched_souls"] = [];
     let intermediateMode = "single";
-    let intermediateReview: any = null;
+    let intermediateReview: AnalyzeResponse["review"] | null = null;
 
     while (true) {
         const { done, value } = await reader.read();
@@ -630,23 +648,8 @@ export async function startPossession(params: {
 
 export async function exportSessionMarkdown(id: string, title: string): Promise<void> {
   const url = `${API_BASE}/sessions/${id}/export/markdown`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    const error = new Error(`Export failed: ${res.statusText}`) as ApiError;
-    error.status = res.status;
-    error.url = url;
-    error.operation = 'exportSessionMarkdown';
-    throw error;
-  }
-  const blob = await res.blob();
-  const downloadUrl = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = downloadUrl;
-  a.download = `${title}.md`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(downloadUrl);
+  // window.open 触发浏览器原生下载行为，允许用户选择保存位置
+  window.open(url, '_blank');
 }
 
 // ── Knowledge ──

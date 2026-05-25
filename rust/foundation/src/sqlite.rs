@@ -261,8 +261,8 @@ impl SqliteDb {
                         title: row.get(1)?,
                         mode: PossessionMode::from_str(&row.get::<_, String>(2)?).unwrap_or(PossessionMode::Single),
                         status: str_to_status(&row.get::<_, String>(3)?),
-                        created_at: DateTime::parse_from_rfc3339(&created_at).unwrap().with_timezone(&Utc),
-                        updated_at: DateTime::parse_from_rfc3339(&updated_at).unwrap().with_timezone(&Utc),
+                        created_at: DateTime::parse_from_rfc3339(&created_at).unwrap_or_default().with_timezone(&Utc),
+                        updated_at: DateTime::parse_from_rfc3339(&updated_at).unwrap_or_default().with_timezone(&Utc),
                         digest_summary,
                         digest_at,
                     })
@@ -302,10 +302,12 @@ impl SqliteDb {
             sql.push_str(" GROUP BY s.id ORDER BY s.created_at DESC");
 
             if let Some(limit) = filter.limit {
-                sql.push_str(&format!(" LIMIT {}", limit));
+                sql.push_str(&format!(" LIMIT ?{}", param_values.len() + 1));
+                param_values.push(Box::new(limit as i64));
             }
             if let Some(offset) = filter.offset {
-                sql.push_str(&format!(" OFFSET {}", offset));
+                sql.push_str(&format!(" OFFSET ?{}", param_values.len() + 1));
+                param_values.push(Box::new(offset as i64));
             }
 
             let params_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
@@ -320,7 +322,7 @@ impl SqliteDb {
                     title: row.get(1)?,
                     mode: PossessionMode::from_str(&row.get::<_, String>(2)?).unwrap_or(PossessionMode::Single),
                     status: str_to_status(&row.get::<_, String>(3)?),
-                    created_at: DateTime::parse_from_rfc3339(&created_at).unwrap().with_timezone(&Utc),
+                    created_at: DateTime::parse_from_rfc3339(&created_at).unwrap_or_default().with_timezone(&Utc),
                     message_count: row.get(5)?,
                     soul_count: row.get::<_, i64>(6)? as u32,
                     total_tokens: row.get::<_, i64>(7)? as u32,
@@ -426,7 +428,7 @@ impl SqliteDb {
                     soul_name: row.get(3)?,
                     content: row.get(4)?,
                     seq: row.get(5)?,
-                    created_at: DateTime::parse_from_rfc3339(&created_at).unwrap().with_timezone(&Utc),
+                    created_at: DateTime::parse_from_rfc3339(&created_at).unwrap_or_default().with_timezone(&Utc),
                 })
             })?;
 
@@ -435,6 +437,16 @@ impl SqliteDb {
                 results.push(row?);
             }
             Ok(results)
+        })
+    }
+
+    pub fn delete_messages_from_seq(&self, session_id: &str, seq: i64) -> Result<u32> {
+        self.with_conn(|conn| {
+            let deleted = conn.execute(
+                "DELETE FROM messages WHERE session_id = ?1 AND seq >= ?2",
+                params![session_id, seq],
+            )?;
+            Ok(deleted as u32)
         })
     }
 
@@ -482,7 +494,8 @@ impl SqliteDb {
             sql.push_str(" ORDER BY created_at DESC");
 
             if let Some(limit) = filter.limit {
-                sql.push_str(&format!(" LIMIT {}", limit));
+                sql.push_str(&format!(" LIMIT ?{}", param_values.len() + 1));
+                param_values.push(Box::new(limit as i64));
             }
 
             let params_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
@@ -497,7 +510,7 @@ impl SqliteDb {
                     task_summary: row.get(4)?,
                     effectiveness: str_to_effectiveness(&row.get::<_, String>(5)?),
                     notes: row.get(6)?,
-                    created_at: DateTime::parse_from_rfc3339(&created_at).unwrap().with_timezone(&Utc),
+                    created_at: DateTime::parse_from_rfc3339(&created_at).unwrap_or_default().with_timezone(&Utc),
                     self_negation: None,
                     empty_chair: None,
                     user_feedback: None,
@@ -519,9 +532,11 @@ impl SqliteDb {
 
     pub fn delete_session(&self, id: &str) -> Result<()> {
         self.with_conn(|conn| {
-            conn.execute("DELETE FROM messages WHERE session_id = ?1", params![id])?;
-            conn.execute("DELETE FROM call_records WHERE session_id = ?1", params![id])?;
-            conn.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
+            let tx = conn.unchecked_transaction()?;
+            tx.execute("DELETE FROM messages WHERE session_id = ?1", params![id])?;
+            tx.execute("DELETE FROM call_records WHERE session_id = ?1", params![id])?;
+            tx.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
+            tx.commit()?;
             Ok(())
         })
     }
@@ -826,10 +841,12 @@ impl SqliteDb {
             sql.push_str(" ORDER BY created_at DESC");
 
             if let Some(limit) = filter.limit {
-                sql.push_str(&format!(" LIMIT {}", limit));
+                sql.push_str(&format!(" LIMIT ?{}", param_values.len() + 1));
+                param_values.push(Box::new(limit as i64));
             }
             if let Some(offset) = filter.offset {
-                sql.push_str(&format!(" OFFSET {}", offset));
+                sql.push_str(&format!(" OFFSET ?{}", param_values.len() + 1));
+                param_values.push(Box::new(offset as i64));
             }
 
             let params_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
@@ -844,7 +861,7 @@ impl SqliteDb {
                     new_value: row.get(5)?,
                     reviewer: row.get(6)?,
                     reviewed_at: row.get::<_, Option<String>>(7)?.and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
-                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?).unwrap().with_timezone(&Utc),
+                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?).unwrap_or_default().with_timezone(&Utc),
                 })
             })?;
 
@@ -915,10 +932,12 @@ impl SqliteDb {
             sql.push_str(" ORDER BY detected_at DESC");
 
             if let Some(limit) = filter.limit {
-                sql.push_str(&format!(" LIMIT {}", limit));
+                sql.push_str(&format!(" LIMIT ?{}", param_values.len() + 1));
+                param_values.push(Box::new(limit as i64));
             }
             if let Some(offset) = filter.offset {
-                sql.push_str(&format!(" OFFSET {}", offset));
+                sql.push_str(&format!(" OFFSET ?{}", param_values.len() + 1));
+                param_values.push(Box::new(offset as i64));
             }
 
             let params_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
@@ -929,7 +948,7 @@ impl SqliteDb {
                     soul_name: row.get(1)?,
                     dimension: row.get(2)?,
                     description: row.get(3)?,
-                    detected_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?).unwrap().with_timezone(&Utc),
+                    detected_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?).unwrap_or_default().with_timezone(&Utc),
                     resolved_at: row.get::<_, Option<String>>(5)?.and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
                     resolved_by: row.get(6)?,
                     resolution: row.get(7)?,
@@ -984,21 +1003,23 @@ impl SqliteDb {
 
     pub fn get_knowledge_cards(&self, filter: &KnowledgeCardFilter) -> Result<Vec<KnowledgeCard>> {
         self.with_conn(|conn| {
-            let mut sql = String::from("SELECT id, title, content, source_soul, source_session, tags, created_at, updated_at FROM knowledge_cards WHERE 1=1");
+            let mut sql = String::from("SELECT c.id, c.title, c.content, c.source_soul, c.source_session, c.tags, c.created_at, c.updated_at FROM knowledge_cards c WHERE 1=1");
             let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
 
             if let Some(ref soul_name) = filter.soul_name {
-                sql.push_str(&format!(" AND source_soul = ?{}", param_values.len() + 1));
+                sql.push_str(&format!(" AND c.source_soul = ?{}", param_values.len() + 1));
                 param_values.push(Box::new(soul_name.clone()));
             }
 
-            sql.push_str(" ORDER BY created_at DESC");
+            sql.push_str(" ORDER BY c.created_at DESC");
 
             if let Some(limit) = filter.limit {
-                sql.push_str(&format!(" LIMIT {}", limit));
+                sql.push_str(&format!(" LIMIT ?{}", param_values.len() + 1));
+                param_values.push(Box::new(limit as i64));
             }
             if let Some(offset) = filter.offset {
-                sql.push_str(&format!(" OFFSET {}", offset));
+                sql.push_str(&format!(" OFFSET ?{}", param_values.len() + 1));
+                param_values.push(Box::new(offset as i64));
             }
 
             let params_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
@@ -1013,8 +1034,8 @@ impl SqliteDb {
                     source_soul: row.get(3)?,
                     source_session: row.get(4)?,
                     tags,
-                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?).unwrap().with_timezone(&Utc),
-                    updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?).unwrap().with_timezone(&Utc),
+                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?).unwrap_or_default().with_timezone(&Utc),
+                    updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?).unwrap_or_default().with_timezone(&Utc),
                 })
             })?;
 
@@ -1043,7 +1064,9 @@ impl SqliteDb {
             }
 
             sql.push_str(" ORDER BY s.created_at DESC");
-            sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
+            sql.push_str(&format!(" LIMIT ?{} OFFSET ?{}", param_values.len() + 1, param_values.len() + 2));
+            param_values.push(Box::new(limit as i64));
+            param_values.push(Box::new(offset as i64));
 
             let params_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
             let mut stmt = conn.prepare(&sql)?;
@@ -1176,7 +1199,7 @@ impl SqliteDb {
                     proposed_changes: row.get(5)?,
                     status: str_to_proposal_status(&row.get::<_, String>(6)?),
                     created_by: row.get(7)?,
-                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?).unwrap().with_timezone(&Utc),
+                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?).unwrap_or_default().with_timezone(&Utc),
                     reviewed_at: row.get::<_, Option<String>>(9)?.and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
                     reviewer: row.get(10)?,
                     review_notes: row.get(11)?,
@@ -1247,7 +1270,7 @@ impl SqliteDb {
                     read_tokens: row.get::<_, i64>(7)? as u32,
                     work_tokens: row.get::<_, i64>(8)? as u32,
                     confidence: row.get::<_, f64>(9)? as f32,
-                    created_at: DateTime::parse_from_rfc3339(&created_at).unwrap().with_timezone(&Utc),
+                    created_at: DateTime::parse_from_rfc3339(&created_at).unwrap_or_default().with_timezone(&Utc),
                 })
             })?;
             let mut results = vec![];
@@ -1280,7 +1303,7 @@ impl SqliteDb {
                     read_tokens: row.get::<_, i64>(7)? as u32,
                     work_tokens: row.get::<_, i64>(8)? as u32,
                     confidence: row.get::<_, f64>(9)? as f32,
-                    created_at: DateTime::parse_from_rfc3339(&created_at).unwrap().with_timezone(&Utc),
+                    created_at: DateTime::parse_from_rfc3339(&created_at).unwrap_or_default().with_timezone(&Utc),
                 })
             })?;
             let mut results = vec![];

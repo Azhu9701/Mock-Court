@@ -64,6 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("Loading configuration...");
     let config = foundation::Config::load()?;
+    let server_port = config.server_port;
 
     // Validate SearXNG URL to prevent SSRF
     {
@@ -154,8 +155,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("API authentication: disabled (no api_token configured)");
     }
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3096").await?;
-    tracing::info!("API server listening on http://0.0.0.0:3096");
+    let bind_addr = format!("0.0.0.0:{}", server_port);
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+    tracing::info!("API server listening on http://{}", bind_addr);
 
     let engine_for_shutdown = engine.clone();
     let (tx, rx) = tokio::sync::oneshot::channel();

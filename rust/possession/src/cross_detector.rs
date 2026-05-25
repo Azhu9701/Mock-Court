@@ -307,47 +307,56 @@ impl CrossDetector {
 
     /// 执行交叉检测（含冗余抑制）
     pub fn detect_collisions(&self) -> Vec<CollisionEvent> {
-        let Ok(buffers) = self.buffers.lock() else { return Vec::new(); };
+        let soul_contexts: Vec<(String, String)> = {
+            let Ok(buffers) = self.buffers.lock() else { return Vec::new(); };
+            buffers
+                .iter()
+                .map(|(name, buffer)| (name.clone(), buffer.get_context()))
+                .collect()
+        };
+
+        {
+            let Ok(mut processed) = self.processed_pairs.lock() else { return Vec::new(); };
+            processed.clear();
+        }
+
         let mut new_collisions = Vec::new();
-        let Ok(mut processed) = self.processed_pairs.lock() else { return Vec::new(); };
+        let mut processed_pairs: HashSet<(String, String)> = HashSet::new();
 
-        let soul_names: Vec<String> = buffers.keys().cloned().collect();
+        for i in 0..soul_contexts.len() {
+            for j in (i + 1)..soul_contexts.len() {
+                let (soul_a, context_a) = &soul_contexts[i];
+                let (soul_b, context_b) = &soul_contexts[j];
 
-        // 检查每一对魂之间的潜在碰撞
-        for i in 0..soul_names.len() {
-            for j in (i + 1)..soul_names.len() {
-                let soul_a = &soul_names[i];
-                let soul_b = &soul_names[j];
+                let pair_ab = (soul_a.clone(), soul_b.clone());
+                let pair_ba = (soul_b.clone(), soul_a.clone());
 
-                // 检查是否已处理过这对魂
-                let pair = (soul_a.clone(), soul_b.clone());
-                if processed.contains(&pair) {
+                if processed_pairs.contains(&pair_ab) {
                     continue;
                 }
 
-                // 获取两个魂的上下文
-                if let (Some(buffer_a), Some(buffer_b)) = (buffers.get(soul_a), buffers.get(soul_b)) {
-                    let context_a = buffer_a.get_context();
-                    let context_b = buffer_b.get_context();
+                if let Some(collision) = self.detect_between(soul_a, soul_b, context_a, context_b) {
+                    new_collisions.push(collision.clone());
+                    processed_pairs.insert(pair_ab.clone());
+                }
 
-                    // 双向检测
-                    if let Some(collision) = self.detect_between(soul_a, soul_b, &context_a, &context_b) {
-                        new_collisions.push(collision.clone());
-                        if let Ok(mut c) = self.collisions.lock() { c.push(collision); }
-                        processed.insert(pair.clone());
-                    }
-
-                    if let Some(collision) = self.detect_between(soul_b, soul_a, &context_b, &context_a) {
-                        new_collisions.push(collision.clone());
-                        if let Ok(mut c) = self.collisions.lock() { c.push(collision); }
-                        processed.insert((soul_b.clone(), soul_a.clone()));
-                    }
+                if let Some(collision) = self.detect_between(soul_b, soul_a, context_b, context_a) {
+                    new_collisions.push(collision.clone());
+                    processed_pairs.insert(pair_ba);
                 }
             }
         }
 
-        // 冗余抑制：标记高度重叠的事件
         Self::suppress_redundant_collisions(&mut new_collisions);
+
+        if !new_collisions.is_empty() {
+            if let Ok(mut c) = self.collisions.lock() {
+                c.extend(new_collisions.iter().cloned());
+            }
+            if let Ok(mut p) = self.processed_pairs.lock() {
+                p.extend(processed_pairs);
+            }
+        }
 
         new_collisions
     }

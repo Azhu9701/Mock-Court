@@ -261,8 +261,11 @@ impl InterventionGate {
             thinking_enabled: None,
         };
 
+        // 自动选择可用的 provider，不再硬编码 Claude
+        let provider = gateway.pick_provider().unwrap_or(Provider::Claude);
+
         let req = LLMRequest {
-            provider: Provider::Claude,
+            provider,
             prompt,
             config,
         };

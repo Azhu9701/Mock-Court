@@ -113,26 +113,88 @@ fn pick_provider(state: &AppState) -> Result<Provider, (axum::http::StatusCode, 
     })
 }
 
-/// Extract a JSON object from text that may contain reasoning prose before/after the JSON.
-fn extract_json(text: &str) -> Option<&str> {
-    let start = text.find('{')?;
-    let end = text.rfind('}')?;
-    if end > start {
-        Some(&text[start..=end])
-    } else {
-        None
+/// Find the matching closing bracket starting from a given position, skipping bracket
+/// characters inside JSON strings (honoring `"` and `\` escapes).
+fn find_matching_bracket_from(text: &str, start_pos: usize, open: char, close: char) -> Option<(usize, usize)> {
+    let start = start_pos;
+    let mut depth = 1usize;
+    let mut in_string = false;
+    let mut escape = false;
+
+    for (i, ch) in text[start + 1..].char_indices() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if ch == '\\' {
+            escape = true;
+            continue;
+        }
+        if ch == '"' {
+            in_string = !in_string;
+            continue;
+        }
+        if !in_string {
+            if ch == open {
+                depth += 1;
+            } else if ch == close {
+                depth -= 1;
+                if depth == 0 {
+                    let abs_end = start + 1 + i;
+                    return Some((start, abs_end));
+                }
+            }
+        }
     }
+    None
 }
 
-/// Extract a JSON array from text that may contain non-JSON prose before/after.
-fn extract_json_array(text: &str) -> Option<&str> {
-    let start = text.find('[')?;
-    let end = text.rfind(']')?;
-    if end > start {
-        Some(&text[start..=end])
-    } else {
-        None
+/// Find all matching bracket pairs in the text.
+fn find_all_bracket_pairs(text: &str, open: char, close: char) -> Vec<(usize, usize)> {
+    let mut pairs = Vec::new();
+    let mut pos = 0;
+    let bytes = text.as_bytes();
+
+    while pos < bytes.len() {
+        if let Some(start) = text[pos..].find(open) {
+            let abs_start = pos + start;
+            if let Some(pair) = find_matching_bracket_from(text, abs_start, open, close) {
+                pairs.push(pair);
+                pos = pair.1 + 1;
+            } else {
+                pos = abs_start + 1;
+            }
+        } else {
+            break;
+        }
     }
+    pairs
+}
+
+/// Extract the last valid JSON array from text that may contain reasoning prose or multiple JSON fragments.
+/// Returns the last array that parses successfully as JSON.
+fn extract_json_array(text: &str) -> Option<&str> {
+    let pairs = find_all_bracket_pairs(text, '[', ']');
+    for (start, end) in pairs.iter().rev() {
+        let candidate = &text[*start..=*end];
+        if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Extract the last valid JSON object from text that may contain reasoning prose or multiple JSON fragments.
+/// Returns the last object that parses successfully as JSON.
+fn extract_json(text: &str) -> Option<&str> {
+    let pairs = find_all_bracket_pairs(text, '{', '}');
+    for (start, end) in pairs.iter().rev() {
+        let candidate = &text[*start..=*end];
+        if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// 收集 LLM 流式响应的全部内容，同时记录第一个错误。
@@ -156,6 +218,86 @@ async fn collect_llm_stream(rx: &mut tokio::sync::mpsc::Receiver<Result<foundati
             }
         }
     }
+    (raw, first_err)
+}
+
+/// 收集 LLM 流式响应的全部内容，同时记录第一个错误，并可选地通过 send 流式输出
+async fn collect_llm_stream_with_progress(
+    rx: &mut tokio::sync::mpsc::Receiver<Result<foundation::Chunk, foundation::FoundationError>>,
+    send: Option<impl Fn(String) + Clone + Send + 'static>,
+    stage: &str,
+    source: &str,
+) -> (String, Option<String>) {
+    let mut raw = String::new();
+    let mut first_err: Option<String> = None;
+    let mut chunk_buffer = String::new();
+    let mut buffer_size = 0usize;
+
+    while let Some(r) = rx.recv().await {
+        match r {
+            Ok(c) => {
+                let content = if !c.content.is_empty() {
+                    &c.content
+                } else if let Some(ref rc) = c.reasoning_content {
+                    rc
+                } else {
+                    continue;
+                };
+
+                if !content.is_empty() {
+                    raw.push_str(content);
+
+                    if let Some(ref s) = send {
+                        chunk_buffer.push_str(content);
+                        buffer_size += content.len();
+
+                        if buffer_size >= 20 {
+                            let payload = serde_json::json!({
+                                "phase": "analysis_content",
+                                "stage": stage,
+                                "source": source,
+                                "content": chunk_buffer.clone(),
+                                "is_partial": true
+                            }).to_string();
+                            s(payload);
+                            chunk_buffer.clear();
+                            buffer_size = 0;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                if first_err.is_none() {
+                    first_err = Some(e.to_string());
+                }
+                tracing::warn!("LLM stream chunk error: {}", e);
+            }
+        }
+    }
+
+    if let Some(ref s) = send {
+        if !chunk_buffer.is_empty() {
+            let payload = serde_json::json!({
+                "phase": "analysis_content",
+                "stage": stage,
+                "source": source,
+                "content": chunk_buffer,
+                "is_partial": true
+            }).to_string();
+            s(payload);
+        }
+
+        let payload = serde_json::json!({
+            "phase": "analysis_content",
+            "stage": stage,
+            "source": source,
+            "content": "",
+            "is_partial": false,
+            "is_done": true
+        }).to_string();
+        s(payload);
+    }
+
     (raw, first_err)
 }
 
@@ -196,117 +338,6 @@ async fn llm_call_json(state: &AppState, provider: Provider, system_prompt: Opti
         tracing::warn!("llm_call_json parse failed: {} | raw[..{}]={}", e, safe_idx, &resp[..safe_idx]);
         serde_json::Value::default()
     }))
-}
-
-fn spawn_banner_lord_review(
-    gateway: Arc<ai_gateway::GatewayRegistry>,
-    banner_lord: SoulProfile,
-    task: String,
-    candidate_profiles: Vec<SoulProfile>,
-    judgment: String,
-    worry: String,
-    unknown: String,
-    soul_catalog: String,
-) -> tokio::task::JoinHandle<Result<serde_json::Value, String>> {
-    tokio::spawn(async move {
-        let provider = gateway.pick_provider()
-            .ok_or_else(|| "No LLM provider available".to_string())?;
-
-        let review_system = format!(
-            "{}你是{}，ismism坐标{}。你作为幡主审查官，需要完成两项任务：\n\
-             1. 审查候选魂是否适合这个任务——不适合的要去掉或替换\n\
-             2. 为每个确定使用的魂分派一个**差异化的子问题**——不是所有人分析同一个问题，\
-             而是把你的总任务拆解成每个魂最擅长回答的那一个侧面\n\n\
-             不读取文件——所有上下文已在 prompt 中。",
-            banner_lord.summon_prompt, banner_lord.name, banner_lord.ismism_code
-        );
-
-        let mut candidates_info = String::new();
-        for p in &candidate_profiles {
-            let exclude_str = p.exclude_scenarios.join("、");
-            candidates_info.push_str(&format!(
-                "- **{}** [{}] ismism={} self_declare=\"{}\" exclude_scenarios=\"{}\"\n",
-                p.name, p.field, p.ismism_code,
-                if p.self_declare.is_empty() { "无" } else { &p.self_declare },
-                if p.exclude_scenarios.is_empty() { "无" } else { &exclude_str }
-            ));
-        }
-
-        let review_user = format!(
-            "## 总任务\n{}\n\n## 使用者预设\n判断：{}\n担忧：{}\n未知：{}\n\n## 候选魂\n{}\n\n\
-             ## 全魂库（供补位参考）\n{}\n\n\
-             ## 你的两阶段任务\n\n\
-             ### 第一阶段：审查魂组合\n\
-             逐魂检查：领域覆盖、场域定位、魂间互补、视角缺失。裁决：pass / conditional / reject\n\n\
-             **CRITICAL：如果裁决为 conditional 且需要补位，你必须把补位魂的名字也加入 verified_souls 数组中。\
-             verified_souls 是上场名单的唯一数据源，只写在 missing_perspectives 里的魂不会上场！**\n\n\
-             ### 第二阶段：差异化任务分派\n\
-             为每个确认使用的魂分配一个**只有他能回答好的子问题**。原则：\n\
-             - 利用场域差异——场域1做地基（\"这是什么\"），场域2做边界（\"这看不到什么\"），\
-             场域3做自反（\"这个问法本身有什么问题\"），场域4做实践（\"怎么落地\"）\n\
-             - 每个子问题要具体（\"请回答：X在Y条件下的Z\"），不要\"请分析\"这种空指令\n\n\
-             返回JSON：\
-             {{\"verdict\":\"pass|conditional|reject\",\
-             \"verified_souls\":[\"魂名\"],\
-             \"task_cards\":{{\"魂名\":\"专属子问题\"}},\
-             \"checks\":[\"审查结果\"],\
-             \"notes\":\"审查备注\",\
-             \"missing_perspectives\":[\"缺失视角\"],\
-             \"boundary_risks\":[\"边界风险\"]}}",
-            task,
-            &judgment,
-            &worry,
-            &unknown,
-            candidates_info,
-            &soul_catalog,
-        );
-
-        let messages = vec![
-            PromptMessage {
-                role: "system".into(),
-                content: review_system,
-                reasoning_content: None,
-                tool_call_id: None,
-                tool_calls: None,
-            },
-            PromptMessage {
-                role: "user".into(),
-                content: review_user,
-                reasoning_content: None,
-                tool_call_id: None,
-                tool_calls: None,
-            },
-        ];
-
-        let req = LLMRequest {
-            provider,
-            prompt: Prompt { messages },
-            config: CallConfig {
-                temperature: 0.3,
-                max_tokens: 4096,
-                stream: false,
-                model: None,
-                reasoning_effort: None,
-                structured_output: None,
-                thinking_enabled: None,
-                tools: None,
-                tool_choice: None,
-            },
-        };
-
-        let mut rx = gateway
-            .call(&req)
-            .map_err(|e| format!("LLM call failed: {}", e))?;
-        let mut resp = String::new();
-        while let Some(result) = rx.recv().await {
-            if let Ok(chunk) = result {
-                resp.push_str(&chunk.content);
-            }
-        }
-
-        let json_str = extract_json(&resp).unwrap_or(&resp);
-        Ok(serde_json::from_str(json_str).unwrap_or_default())
-    })
 }
 
 // ── Ismism Inference Engine ──
@@ -909,25 +940,178 @@ async fn analyze_task(
                 .filter_map(|s| state.registry.get_soul(&s.name).ok())
                 .collect();
 
-            let review_handle = spawn_banner_lord_review(
-                state.engine.gateway().clone(),
-                banner_lord,
-                body.task.clone(),
-                candidate_profiles,
-                body.judgment.clone().unwrap_or_default(),
-                body.worry.clone().unwrap_or_default(),
-                body.unknown.clone().unwrap_or_default(),
-                all_souls.iter().map(|s| format!("{} [{}] ismism={}", s.name, s.field, s.ismism_code)).collect::<Vec<_>>().join("\n"),
-            );
+            let provider = state.engine.gateway().pick_provider()
+                .ok_or_else(|| "No LLM provider available".to_string());
 
-            let result = match review_handle.await {
-                Ok(Ok(json)) => json,
-                Ok(Err(e)) => {
-                    tracing::error!("Banner lord review sub-agent failed: {}", e);
-                    serde_json::Value::default()
+            let result = match provider {
+                Ok(provider) => {
+                    let review_system = format!(
+                        "{}你是{}，ismism坐标{}。你作为幡主审查官，需要完成两项任务：\n\
+                         1. 审查候选魂是否适合这个任务——不适合的要去掉或替换\n\
+                         2. 为每个确定使用的魂分派一个**差异化的子问题**——不是所有人分析同一个问题，\
+                         而是把你的总任务拆解成每个魂最擅长回答的那一个侧面\n\n\
+                         不读取文件——所有上下文已在 prompt 中。",
+                        banner_lord.summon_prompt, banner_lord.name, banner_lord.ismism_code
+                    );
+
+                    let mut candidates_info = String::new();
+                    for p in &candidate_profiles {
+                        let exclude_str = p.exclude_scenarios.join("、");
+                        candidates_info.push_str(&format!(
+                            "- **{}** [{}] ismism={} self_declare=\"{}\" exclude_scenarios=\"{}\"\n",
+                            p.name, p.field, p.ismism_code,
+                            if p.self_declare.is_empty() { "无" } else { &p.self_declare },
+                            if p.exclude_scenarios.is_empty() { "无" } else { &exclude_str }
+                        ));
+                    }
+
+                    let review_user = format!(
+                        "## 总任务\n{}\n\n## 使用者预设\n判断：{}\n担忧：{}\n未知：{}\n\n## 候选魂\n{}\n\n\
+                         ## 全魂库（供补位参考）\n{}\n\n\
+                         ## 你的两阶段任务\n\n\
+                         ### 第一阶段：审查魂组合\n\
+                         逐魂检查：领域覆盖、场域定位、魂间互补、视角缺失。裁决：pass / conditional / reject\n\n\
+                         **CRITICAL：如果裁决为 conditional 且需要补位，你必须把补位魂的名字也加入 verified_souls 数组中。\
+                         verified_souls 是上场名单的唯一数据源，只写在 missing_perspectives 里的魂不会上场！**\n\n\
+                         ### 第二阶段：差异化任务分派\n\
+                         为每个确认使用的魂分配一个**只有他能回答好的子问题**。原则：\n\
+                         - 利用场域差异——场域1做地基（\"这是什么\"），场域2做边界（\"这看不到什么\"），\
+                         场域3做自反（\"这个问法本身有什么问题\"），场域4做实践（\"怎么落地\"）\n\
+                         - 每个子问题要具体（\"请回答：X在Y条件下的Z\"），不要\"请分析\"这种空指令\n\n\
+                         返回JSON：\
+                         {{\"verdict\":\"pass|conditional|reject\",\
+                         \"verified_souls\":[\"魂名\"],\
+                         \"task_cards\":{{\"魂名\":\"专属子问题\"}},\
+                         \"checks\":[\"审查结果\"],\
+                         \"notes\":\"审查备注\",\
+                         \"missing_perspectives\":[\"缺失视角\"],\
+                         \"boundary_risks\":[\"边界风险\"]}}",
+                        &body.task,
+                        body.judgment.as_deref().unwrap_or(""),
+                        body.worry.as_deref().unwrap_or(""),
+                        body.unknown.as_deref().unwrap_or(""),
+                        candidates_info,
+                        &all_souls.iter().map(|s| format!("{} [{}] ismism={}", s.name, s.field, s.ismism_code)).collect::<Vec<_>>().join("\n"),
+                    );
+
+                    let messages = vec![
+                        PromptMessage {
+                            role: "system".into(),
+                            content: review_system,
+                            reasoning_content: None,
+                            tool_call_id: None,
+                            tool_calls: None,
+                        },
+                        PromptMessage {
+                            role: "user".into(),
+                            content: review_user,
+                            reasoning_content: None,
+                            tool_call_id: None,
+                            tool_calls: None,
+                        },
+                    ];
+
+                    let req = LLMRequest {
+                        provider,
+                        prompt: Prompt { messages },
+                        config: CallConfig {
+                            temperature: 0.3,
+                            max_tokens: 4096,
+                            stream: false,
+                            model: None,
+                            reasoning_effort: None,
+                            structured_output: None,
+                            thinking_enabled: None,
+                            tools: None,
+                            tool_choice: None,
+                        },
+                    };
+
+                    let mut rx = match state.engine.gateway().call(&req) {
+                        Ok(rx) => rx,
+                        Err(e) => {
+                            let error_msg = format!("LLM call failed: {}", e);
+                            tracing::warn!("{}", error_msg);
+                            send(serde_json::json!({
+                                "phase": "analysis_content",
+                                "stage": "review",
+                                "source": reviewer_name,
+                                "content": error_msg,
+                                "is_partial": false
+                            }).to_string());
+                            send(serde_json::json!({
+                                "phase": "done",
+                                "response": {
+                                    "entry_type": "conventional",
+                                    "matched_souls": all_souls.iter().take(3).map(|s| s.name.clone()).collect::<Vec<_>>(),
+                                    "recommended_mode": "single",
+                                    "review": { "verdict": "pass", "checks": [], "notes": "Review failed", "reviewer": "" },
+                                    "task_cards": {}
+                                }
+                            }).to_string());
+                            return;
+                        }
+                    };
+                    let mut resp = String::new();
+                    let mut chunk_buffer = String::new();
+                    let mut buffer_size = 0usize;
+                    while let Some(result) = rx.recv().await {
+                        match result {
+                            Ok(chunk) => {
+                                let content = if !chunk.content.is_empty() {
+                                    &chunk.content
+                                } else if let Some(ref rc) = chunk.reasoning_content {
+                                    rc
+                                } else {
+                                    continue;
+                                };
+                                if !content.is_empty() {
+                                    resp.push_str(content);
+                                    chunk_buffer.push_str(content);
+                                    buffer_size += content.len();
+                                    if buffer_size >= 20 {
+                                        let payload = serde_json::json!({
+                                            "phase": "analysis_content",
+                                            "stage": "review",
+                                            "source": reviewer_name,
+                                            "content": chunk_buffer.clone(),
+                                            "is_partial": true
+                                        }).to_string();
+                                        send(payload);
+                                        chunk_buffer.clear();
+                                        buffer_size = 0;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("LLM stream chunk error: {}", e);
+                            }
+                        }
+                    }
+                    if !chunk_buffer.is_empty() {
+                        let payload = serde_json::json!({
+                            "phase": "analysis_content",
+                            "stage": "review",
+                            "source": reviewer_name,
+                            "content": chunk_buffer,
+                            "is_partial": true
+                        }).to_string();
+                        send(payload);
+                    }
+                    let payload = serde_json::json!({
+                        "phase": "analysis_content",
+                        "stage": "review",
+                        "source": reviewer_name,
+                        "content": "",
+                        "is_partial": false,
+                        "is_done": true
+                    }).to_string();
+                    send(payload);
+                    let json_str = extract_json(&resp).unwrap_or(&resp);
+                    serde_json::from_str(json_str).unwrap_or_default()
                 }
                 Err(e) => {
-                    tracing::error!("Banner lord review sub-agent panicked: {}", e);
+                    tracing::error!("Banner lord review failed to pick provider: {}", e);
                     serde_json::Value::default()
                 }
             };
@@ -974,7 +1158,8 @@ async fn analyze_task(
                 "checks": checks,
                 "notes": notes,
                 "reviewer": reviewer_name,
-            }
+            },
+            "task_cards": task_cards,
         }).to_string());
 
         // ── Step 3: 一审结束，以审查官推荐阵容为准 ──
@@ -1200,7 +1385,7 @@ fn spawn_follow_up_agent(
             String::new()
         };
 
-        let user_prompt = if history.is_empty() {
+        let _user_prompt = if history.is_empty() {
             format!(
                 "## 新问题\n{}{}{}\n\n根据这个新问题，以你的立场和视角回应。你是{}，ismism坐标{}。{}",
                 question, attachment_section, search_section,
@@ -1244,8 +1429,8 @@ fn spawn_follow_up_agent(
                 .with_role(format!("你是被综合官点名补充视角的魂。你的任务是：{}", question));
             let prompt = pb.build_summon(soul_profile, &ctx, &tier, false);
             let config = CallConfig {
-                temperature: 0.7,
-                max_tokens: 16384,
+                temperature: 0.9,
+                max_tokens: 32768,
                 stream: true,
                 model: None,
                 reasoning_effort: Some(foundation::ReasoningEffort::Think),
@@ -1256,9 +1441,21 @@ fn spawn_follow_up_agent(
             };
             (LLMRequest { provider, prompt, config }, soul_profile.name.clone())
         } else {
+            // 非召唤追问也走 build_soul_identity，享受 FLP 框架
+            let pb = ai_gateway::prompt::PromptBuilder::new();
+            let tier = foundation::ModelTier::Pro;
+            let facts = if history.is_empty() {
+                String::new()
+            } else {
+                format!("## 历史会话\n{}", history.join("\n\n"))
+            };
+            let ctx = ai_gateway::prompt::DynamicContext::new(question.clone())
+                .with_facts_opt(if facts.is_empty() { None } else { Some(facts.as_str()) })
+                .with_era("2026年");
+            let prompt = pb.build_summon(&banner_lord, &ctx, &tier, false);
             let config = CallConfig {
-                temperature: 0.7,
-                max_tokens: 16384,
+                temperature: 0.9,
+                max_tokens: 32768,
                 stream: true,
                 model: None,
                 reasoning_effort: Some(foundation::ReasoningEffort::Think),
@@ -1267,28 +1464,7 @@ fn spawn_follow_up_agent(
                 tools: None,
                 tool_choice: None,
             };
-            (LLMRequest {
-                provider,
-                prompt: Prompt {
-                    messages: vec![
-                        PromptMessage {
-                            role: "system".into(),
-                            content: banner_lord.summon_prompt.clone(),
-                            reasoning_content: None,
-                            tool_call_id: None,
-                            tool_calls: None,
-                        },
-                        PromptMessage {
-                            role: "user".into(),
-                            content: user_prompt,
-                            reasoning_content: None,
-                            tool_call_id: None,
-                            tool_calls: None,
-                        },
-                    ],
-                },
-                config,
-            }, soul_name.clone())
+            (LLMRequest { provider, prompt, config }, soul_name.clone())
         };
 
         match gateway.call(&req) {

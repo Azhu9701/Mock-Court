@@ -2,6 +2,8 @@ use chrono::Utc;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use parking_lot::RwLock;
+
 use crate::error::{FoundationError, Result};
 use crate::models::*;
 
@@ -11,20 +13,25 @@ pub struct FileStore {
     archive_dir: PathBuf,
     registry_path: PathBuf,
     call_records_path: PathBuf,
-    registry_cache: std::sync::RwLock<HashMap<String, RegistryEntry>>,
+    registry_cache: RwLock<HashMap<String, RegistryEntry>>,
 }
 
 impl FileStore {
     pub fn new(souls_dir: PathBuf, archive_dir: PathBuf, registry_path: PathBuf, call_records_path: PathBuf) -> Result<Self> {
         std::fs::create_dir_all(&souls_dir)?;
         std::fs::create_dir_all(&archive_dir)?;
+        // 清理上次崩溃残留的 .tmp 文件
+        Self::cleanup_stale_tmp(&souls_dir);
+        Self::cleanup_stale_tmp(&archive_dir);
+        let _ = std::fs::remove_file(registry_path.with_extension("tmp"));
+        let _ = std::fs::remove_file(call_records_path.with_extension("tmp"));
         let store = FileStore {
             souls_dir,
             souls_internal_dir: None,
             archive_dir,
             registry_path,
             call_records_path,
-            registry_cache: std::sync::RwLock::new(HashMap::new()),
+            registry_cache: RwLock::new(HashMap::new()),
         };
         store.reload_registry()?;
         Ok(store)
@@ -116,29 +123,29 @@ impl FileStore {
     pub fn write_registry_raw(&self, registry: &Registry) -> Result<()> {
         let content = serde_yaml::to_string(registry)?;
         self.atomic_write(&self.registry_path, &content)?;
-        let mut cache = self.registry_cache.write().map_err(|e| FoundationError::InvalidState(e.to_string()))?;
+        let mut cache = self.registry_cache.write();
         *cache = registry.souls.clone();
         Ok(())
     }
 
     pub fn reload_registry(&self) -> Result<()> {
         let registry = self.read_registry_raw()?;
-        let mut cache = self.registry_cache.write().map_err(|e| FoundationError::InvalidState(e.to_string()))?;
+        let mut cache = self.registry_cache.write();
         *cache = registry.souls;
         Ok(())
     }
 
     pub fn get_registry_entry(&self, name: &str) -> Option<RegistryEntry> {
-        self.registry_cache.read().ok()?.get(name).cloned()
+        self.registry_cache.read().get(name).cloned()
     }
 
     pub fn list_registry_entries(&self) -> Result<Vec<(String, RegistryEntry)>> {
-        let cache = self.registry_cache.read().map_err(|e| FoundationError::InvalidState(e.to_string()))?;
+        let cache = self.registry_cache.read();
         Ok(cache.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
     }
 
     pub fn registry_entry_count(&self) -> usize {
-        self.registry_cache.read().map(|c| c.len()).unwrap_or(0)
+        self.registry_cache.read().len()
     }
 
     // Archive operations
@@ -156,7 +163,12 @@ impl FileStore {
     }
 
     pub fn read_archive_path(&self, path: &str) -> Result<String> {
-        Ok(std::fs::read_to_string(path)?)
+        let target = std::path::Path::new(path).canonicalize()?;
+        let archive_root = self.archive_dir.canonicalize().unwrap_or_else(|_| self.archive_dir.clone());
+        if !target.starts_with(&archive_root) {
+            return Err(FoundationError::Validation(format!("path escapes archive dir: {}", path)));
+        }
+        Ok(std::fs::read_to_string(&target)?)
     }
 
     // Call Records YAML
@@ -170,7 +182,10 @@ impl FileStore {
     }
 
     pub fn append_call_record_yaml(&self, record: &CallRecord) -> Result<()> {
-        let mut records = self.read_call_records_yaml().unwrap_or_default();
+        let mut records = self.read_call_records_yaml().unwrap_or_else(|e| {
+            tracing::warn!("Failed to read existing call records, starting fresh: {}", e);
+            vec![]
+        });
         records.push(record.clone());
         let content = serde_yaml::to_string(&records)?;
         self.atomic_write(&self.call_records_path, &content)?;
@@ -184,6 +199,19 @@ impl FileStore {
     // Helpers
     fn soul_path(&self, name: &str) -> PathBuf {
         self.souls_dir.join(format!("{}.md", name))
+    }
+
+    fn cleanup_stale_tmp(dir: &std::path::Path) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    Self::cleanup_stale_tmp(&p);
+                } else if p.extension().map_or(false, |e| e == "tmp") {
+                    let _ = std::fs::remove_file(&p);
+                }
+            }
+        }
     }
 
     fn atomic_write(&self, path: &Path, content: &str) -> Result<()> {

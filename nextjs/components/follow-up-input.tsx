@@ -51,7 +51,7 @@ export default function FollowUpInput({
 }: {
   sessionId: string;
   /** When set, auto-fills the textarea and sends as follow-up with the named soul */
-  trigger?: { question: string; soul: string } | null;
+  trigger?: { question: string; soul?: string } | null;
   /** Souls already in session — shown first in @mention suggestions */
   sessionSouls?: string[];
 }) {
@@ -381,11 +381,11 @@ export default function FollowUpInput({
   }, [followUp, attachments, sending, _send, extractMentionedSoul]);
 
   // Trigger-based summon: called when onSummon sets trigger prop (soul recommendation card)
-  const triggeredRef = useRef<{ question: string; soul: string } | null>(null);
+  const triggeredRef = useRef<{ question: string; soul?: string } | null>(null);
   useEffect(() => {
     if (trigger && (trigger.question !== triggeredRef.current?.question || trigger.soul !== triggeredRef.current?.soul)) {
       triggeredRef.current = trigger;
-      _send(trigger.question, trigger.soul);
+      _send(trigger.question, trigger.soul || undefined);
     }
   }, [trigger, _send]);
 

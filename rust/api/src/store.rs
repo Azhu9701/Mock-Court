@@ -99,6 +99,10 @@ impl Storage for AppStore {
         self.db.get_messages(session_id)
     }
 
+    async fn delete_messages_from_seq(&self, session_id: &str, seq: i64) -> Result<u32> {
+        self.db.delete_messages_from_seq(session_id, seq)
+    }
+
     async fn record_call(&self, record: &CallRecord) -> Result<()> {
         self.db.insert_call_record(record)?;
         self.fs.append_call_record_yaml(record)?;

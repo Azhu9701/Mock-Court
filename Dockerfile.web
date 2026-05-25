@@ -1,24 +1,23 @@
-# Stage 1: Build
-FROM node:22-alpine AS builder
+FROM node:22-alpine
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
 WORKDIR /app
 COPY nextjs/package.json nextjs/pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --no-frozen-lockfile --ignore-scripts && \
+    pnpm rebuild esbuild sharp
 
 COPY nextjs/ ./
-RUN pnpm build
 
-# Stage 2: Runtime
-FROM node:22-alpine
+# turbopack.root: ".." 在 Docker WORKDIR /app 下指向 /，会导致构建问题
+RUN sed -i '/turbopack:/,/root:/d' next.config.ts 2>/dev/null || true
 
-WORKDIR /app
+ARG NEXT_PUBLIC_API_URL=http://localhost:3096/api/v1
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
+RUN npx next build
 
+ENV NODE_ENV=production
 EXPOSE 3000
 
-CMD ["node", "server.js"]
+CMD ["npx", "next", "start", "-p", "3000"]

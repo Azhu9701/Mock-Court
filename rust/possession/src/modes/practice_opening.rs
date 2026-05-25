@@ -27,11 +27,21 @@ pub async fn run(
     let info = stream::pick_provider_info(gateway);
     let prompt_builder = PromptBuilder::new();
 
+    let task_trunc = if task.len() > 100 {
+        let boundary = task.char_indices()
+            .take_while(|(i, _)| *i < 100)
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(100);
+        &task[..boundary]
+    } else {
+        task
+    };
     ws.broadcast_system(
         session_id,
         &WsEvent {
             event_type: WsEventType::SystemMessage,
-            payload: format!("P1 现场数据已收集: {}", &task[..task.len().min(100)]),
+            payload: format!("P1 现场数据已收集: {}", task_trunc),
             reasoning_content: None,
             soul_name: None,
             seq: 0,
@@ -57,6 +67,7 @@ pub async fn run(
     let task_arc = std::sync::Arc::new(task.to_string());
     let gateway_owned = GatewayRegistry::clone(gateway);
     let mut set = JoinSet::new();
+    let provider = info.provider.clone();
 
     for soul_name in &names {
         let profile = match registry.get_soul(soul_name) {
@@ -69,14 +80,30 @@ pub async fn run(
         let ws_c = ws.clone();
         let gw = gateway_owned.clone();
         let sn = soul_name.clone();
-        let provider = info.provider.clone();
+        let p = provider.clone();
 
         set.spawn(async move {
-            let rx = match gw.call(&LLMRequest { provider, prompt, config: CallConfig::default() }) {
-                Ok(rx) => rx,
-                Err(_) => return SoulOutput::error(sn.clone(), "call failed".into()),
-            };
-            stream::stream_single_soul(rx, &s_id, &sn, &ws_c).await
+            match gw.call(&LLMRequest { provider: p.clone(), prompt, config: CallConfig::default() }) {
+                Ok(rx) => {
+                    stream::stream_single_soul_with_provider(rx, &s_id, &sn, &ws_c, &gw, &p).await
+                }
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    gw.mark_provider_unhealthy(&p, error_msg.clone());
+                    ws_c.broadcast_soul(
+                        &s_id,
+                        &sn,
+                        &WsEvent {
+                            event_type: WsEventType::SoulError,
+                            payload: error_msg.clone(),
+                            reasoning_content: None,
+                            soul_name: Some(sn.clone()),
+                            seq: 0,
+                        },
+                    );
+                    SoulOutput::error(sn, error_msg)
+                }
+            }
         });
     }
 

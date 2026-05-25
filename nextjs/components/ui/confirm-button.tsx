@@ -37,8 +37,8 @@ export function ConfirmButton({
     try {
       await onConfirm();
       setConfirming(false);
-    } catch (e: any) {
-      const errorMsg = e?.message || e?.toString() || "操作失败";
+    } catch (e: unknown) {
+      const errorMsg = e instanceof Error ? e.message : String(e);
       setError(errorMsg);
       setConfirming(false);
     } finally {

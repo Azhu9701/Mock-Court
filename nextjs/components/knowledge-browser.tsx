@@ -390,8 +390,9 @@ export function KnowledgeBrowser() {
                   )}
                   <p
                     className="text-sm leading-relaxed"
-                    dangerouslySetInnerHTML={{ __html: r.content_snippet }}
-                  />
+                  >
+                    {r.content_snippet}
+                  </p>
                 </div>
               ))}
             </div>

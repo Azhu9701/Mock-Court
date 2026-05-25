@@ -45,4 +45,5 @@ pub struct AppState {
     pub auto_create_tasks: Arc<DashMap<String, broadcast::Sender<AutoCreateEvent>>>,
     pub interrogation_gates: Arc<DashMap<String, InterrogationGate>>,
     pub preferred_provider: Arc<RwLock<Option<foundation::Provider>>>,
+    pub api_token: Option<String>,
 }

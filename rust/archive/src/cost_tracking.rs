@@ -163,6 +163,8 @@ impl CostTracker {
         store: &dyn Storage,
         start: DateTime<Utc>,
         end: DateTime<Utc>,
+        provider: &str,
+        model: &str,
     ) -> Result<CostReport> {
         let mut total_cost = 0.0;
         let mut total_input_tokens = 0u64;
@@ -170,16 +172,16 @@ impl CostTracker {
         let mut total_cache_savings = 0.0;
         let mut by_mode: HashMap<PossessionMode, ModeCost> = HashMap::new();
         let mut by_soul_map: HashMap<String, SoulCostAccumulator> = HashMap::new();
-        
+
         let records = store.query_call_records(&CallFilter::default()).await?;
-        
+
         let filtered: Vec<_> = records
             .into_iter()
             .filter(|r| r.created_at >= start && r.created_at <= end)
             .collect();
-        
+
         let total_calls = filtered.len();
-        
+
         for record in filtered {
             let input_tokens = record.usage.prompt_tokens;
             let output_tokens = record.usage.completion_tokens;
@@ -187,8 +189,8 @@ impl CostTracker {
                 record.id.clone(),
                 record.soul_name.clone(),
                 record.mode.clone(),
-                "deepseek".to_string(),
-                "deepseek-chat".to_string(),
+                provider.to_string(),
+                model.to_string(),
                 input_tokens,
                 output_tokens,
                 true,
@@ -257,23 +259,50 @@ impl CostTracker {
         &self,
         store: &dyn Storage,
         days: u32,
+        provider: &str,
+        model: &str,
     ) -> Result<Vec<DailyCost>> {
         let mut trends = Vec::new();
         let end = Utc::now();
         let start = end - Duration::days(days as i64);
-        
-        let report = self.generate_report(store, start, end).await?;
-        
-        // 简化实现 - 实际项目中会按天分组
-        let avg_daily = report.total_cost / days as f64;
+
+        let records = store.query_call_records(&CallFilter::default()).await?;
+        let filtered: Vec<_> = records
+            .into_iter()
+            .filter(|r| r.created_at >= start && r.created_at <= end)
+            .collect();
+
+        // Group by date and compute real daily costs
+        use std::collections::BTreeMap;
+        let mut daily: BTreeMap<String, (f64, u64)> = BTreeMap::new();
+        for record in &filtered {
+            let date = record.created_at.format("%Y-%m-%d").to_string();
+            let cost = self.calculate_call_cost(
+                record.id.clone(),
+                record.soul_name.clone(),
+                record.mode.clone(),
+                provider.to_string(),
+                model.to_string(),
+                record.usage.prompt_tokens,
+                record.usage.completion_tokens,
+                true,
+            );
+            let entry = daily.entry(date).or_insert((0.0, 0));
+            entry.0 += cost.total_cost;
+            entry.1 += 1;
+        }
+
+        let avg_daily = if filtered.is_empty() { 0.0 } else {
+            daily.values().map(|(cost, _)| cost).sum::<f64>() / days as f64
+        };
+
         for i in 0..days {
             let date = start + Duration::days(i as i64);
-            trends.push(DailyCost {
-                date,
-                cost: avg_daily * (0.8 + (i % 3) as f64 * 0.2), // 模拟波动
-            });
+            let date_str = date.format("%Y-%m-%d").to_string();
+            let cost = daily.get(&date_str).map(|(c, _)| *c).unwrap_or(avg_daily);
+            trends.push(DailyCost { date, cost });
         }
-        
+
         Ok(trends)
     }
 }

@@ -8,6 +8,7 @@ import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ArrowLeft, Loader2, Sparkles, Check, Save, Wand2 } from "lucide-react";
+import { API_BASE } from "@/lib/api";
 
 export default function RefinePage() {
   const router = useRouter();
@@ -25,7 +26,7 @@ export default function RefinePage() {
     if (!material.trim()) return;
     setLoading(true);
     try {
-      const r = await fetch("http://127.0.0.1:3096/api/v1/souls/refine", {
+      const r = await fetch(`${API_BASE}/souls/refine`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ raw_material: material }),

@@ -44,7 +44,7 @@ else
         ADMIN_HASH=$(htpasswd -nbB "" "$ADMIN_PASS" | cut -d: -f2)
     else
         # Fallback: use python bcrypt (already checked earlier)
-        ADMIN_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'$ADMIN_PASS', bcrypt.gensalt()).decode())" 2>/dev/null || echo "MANUAL_HASH_NEEDED")
+        ADMIN_HASH=$(printf '%s' "$ADMIN_PASS" | python3 -c "import bcrypt, sys; print(bcrypt.hashpw(sys.stdin.read().encode(), bcrypt.gensalt()).decode())" 2>/dev/null || echo "MANUAL_HASH_NEEDED")
     fi
 
     # Generate random secret
@@ -52,8 +52,8 @@ else
 
     echo ""
     echo "--- Agent Proxy 中转站 ---"
-    read -p "中转站 URL [http://123.156.230.251:3000/v1]: " RELAY_URL
-    RELAY_URL=${RELAY_URL:-http://123.156.230.251:3000/v1}
+    read -p "中转站 URL []: " RELAY_URL
+    RELAY_URL=${RELAY_URL:-}
     read -sp "中转站 API Key: " RELAY_KEY
     echo ""
 
