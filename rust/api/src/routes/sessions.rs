@@ -144,10 +144,10 @@ async fn export_session_markdown(
     let filename = sanitize_filename(&detail.session.title);
 
     let mut headers = header::HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "text/markdown; charset=utf-8".parse().unwrap());
+    headers.insert(header::CONTENT_TYPE, "text/markdown; charset=utf-8".parse().expect("静态 ASCII header"));
     headers.insert(
         header::CONTENT_DISPOSITION,
-        format!("attachment; filename=\"{}.md\"", filename).parse().unwrap(),
+        format!("attachment; filename=\"{}.md\"", filename).parse().expect("sanitize_filename 已限制为 ASCII"),
     );
 
     Ok((StatusCode::OK, headers, markdown))
@@ -157,7 +157,10 @@ fn sanitize_filename(title: &str) -> String {
     title.chars()
         .map(|c| match c {
             '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-            _ => c,
+            // HeaderValue 仅接受可见 ASCII (32..=126) + tab。
+            // 标题常含中文/emoji，直接 parse() 会 panic 进程；统一替换为下划线。
+            c if (c.is_ascii_graphic() || c == ' ') && c != '"' => c,
+            _ => '_',
         })
         .collect()
 }

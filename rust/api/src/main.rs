@@ -1,5 +1,6 @@
 mod auth;
 mod bing;
+mod coding_tools;
 mod collector;
 mod error;
 mod middleware;
@@ -95,7 +96,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("Initializing store...");
     let data_dir = &config.data_dir;
-    let store = Arc::new(AppStore::new(data_dir.to_str().unwrap())?);
+    let data_dir_str = data_dir.to_str().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("data_dir 路径包含非 UTF-8 字符: {:?}", data_dir))
+    })?;
+    let store = Arc::new(AppStore::new(data_dir_str)?);
 
     tracing::info!("Loading soul registry...");
     let registry = Arc::new(SoulRegistry::new(store.clone()).await?);
@@ -109,14 +113,79 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(gateway)
     };
 
+    // Load persisted LM Studio config
+    {
+        let lmstudio_config_file = "data/lmstudio.json";
+        if let Ok(content) = std::fs::read_to_string(lmstudio_config_file) {
+            if let Ok(cfg) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(url) = cfg["url"].as_str().filter(|s| !s.is_empty()) {
+                    gateway.set_lmstudio_base_url(url.to_string());
+                    tracing::info!("Restored LM Studio URL from config: {}", url);
+                }
+                if let Some(key) = cfg["api_key"].as_str().filter(|s| !s.is_empty()) {
+                    gateway.set_lmstudio_api_key(Some(key.to_string()));
+                    tracing::info!("Restored LM Studio API key from config");
+                }
+                if let Some(model) = cfg["model"].as_str().filter(|s| !s.is_empty()) {
+                    gateway.set_lmstudio_model(model.to_string());
+                    tracing::info!("Restored LM Studio model from config: {}", model);
+                }
+            }
+        }
+    }
+
+    // Load persisted OpenAI config
+    {
+        let openai_config_file = "data/openai.json";
+        if let Ok(content) = std::fs::read_to_string(openai_config_file) {
+            if let Ok(cfg) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(url) = cfg["url"].as_str().filter(|s| !s.is_empty()) {
+                    gateway.set_openai_base_url(url.to_string());
+                    tracing::info!("Restored OpenAI base URL from config: {}", url);
+                }
+                if let Some(key) = cfg["api_key"].as_str().filter(|s| !s.is_empty()) {
+                    gateway.set_openai_api_key(Some(key.to_string()));
+                    tracing::info!("Restored OpenAI API key from config");
+                }
+                if let Some(model) = cfg["model"].as_str().filter(|s| !s.is_empty()) {
+                    gateway.set_openai_model(model.to_string());
+                    tracing::info!("Restored OpenAI model from config: {}", model);
+                }
+            }
+        }
+    }
+
+    // Load persisted Claude config
+    {
+        let claude_config_file = "data/claude.json";
+        if let Ok(content) = std::fs::read_to_string(claude_config_file) {
+            if let Ok(cfg) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(url) = cfg["url"].as_str().filter(|s| !s.is_empty()) {
+                    gateway.set_claude_base_url(url.to_string());
+                    tracing::info!("Restored Claude base URL from config: {}", url);
+                }
+                if let Some(key) = cfg["api_key"].as_str().filter(|s| !s.is_empty()) {
+                    gateway.set_claude_api_key(Some(key.to_string()));
+                    tracing::info!("Restored Claude API key from config");
+                }
+                if let Some(model) = cfg["model"].as_str().filter(|s| !s.is_empty()) {
+                    gateway.set_claude_model(model.to_string());
+                    tracing::info!("Restored Claude model from config: {}", model);
+                }
+            }
+        }
+    }
+
     tracing::info!("Initializing archive system...");
     let archive = Arc::new(ArchiveSystem::new(store.clone()));
 
     tracing::info!("Initializing possession engine...");
+    let gateway_cache = gateway.get_cache();
     let mut engine = PossessionEngine::new(
         store.clone(),
         registry.clone(),
         gateway,
+        config.domain.clone(),
     );
 
     tracing::info!("Registering built-in tools...");
@@ -124,6 +193,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.searxng_url.clone(),
         config.search_engine.clone(),
     )));
+
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    tracing::info!("Coding tools working directory: {}", working_dir.display());
+    engine.tool_registry_mut().register(std::sync::Arc::new(coding_tools::ReadFileTool::new(working_dir.clone())));
+    engine.tool_registry_mut().register(std::sync::Arc::new(coding_tools::WriteFileTool::new(working_dir.clone())));
+    engine.tool_registry_mut().register(std::sync::Arc::new(coding_tools::EditFileTool::new(working_dir.clone())));
+    engine.tool_registry_mut().register(std::sync::Arc::new(coding_tools::BashCommandTool::new(working_dir.clone())));
+    engine.tool_registry_mut().register(std::sync::Arc::new(coding_tools::GlobSearchTool::new(working_dir.clone())));
+    engine.tool_registry_mut().register(std::sync::Arc::new(coding_tools::GrepSearchTool::new(working_dir.clone())));
+    engine.tool_registry_mut().register(std::sync::Arc::new(coding_tools::ClaudeCodeTool::new(working_dir)));
     let engine = Arc::new(engine);
 
     let collector = Arc::new(SoulCollector::new(
@@ -147,7 +226,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         api_token: api_token.clone(),
     });
 
-    let app = build_router(state, rate_limiter, cors_origins);
+    let app = build_router(state.clone(), rate_limiter, cors_origins);
+
+    // Background cleanup tasks
+    let ws_manager_for_cleanup = engine.ws_manager().clone();
+    let gates_for_cleanup = state.interrogation_gates.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            ws_manager_for_cleanup.cleanup_stale_sessions();
+            // Cleanup interrogation gates older than 1 hour
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            gates_for_cleanup.retain(|_, gate: &mut crate::state::InterrogationGate| {
+                now.saturating_sub(gate.created_at) < 3600
+            });
+        }
+    });
+
+    if let Some(cache) = gateway_cache {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+                let _ = cache.cleanup();
+            }
+        });
+    }
 
     if api_token.is_some() {
         tracing::info!("API authentication: enabled");

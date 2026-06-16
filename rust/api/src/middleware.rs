@@ -132,7 +132,7 @@ async fn rate_limit_middleware(
             .into_response();
         resp.headers_mut().insert(
             axum::http::header::RETRY_AFTER,
-            axum::http::HeaderValue::from_str(&retry.to_string()).unwrap(),
+            axum::http::HeaderValue::from_str(&retry.to_string()).expect("retry 为数字，必为合法 ASCII header"),
         );
         return resp;
     }
