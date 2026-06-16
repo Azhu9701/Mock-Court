@@ -220,13 +220,16 @@ pub struct CrossDetector {
     buffers: Arc<Mutex<HashMap<String, SoulTokenBuffer>>>,
     /// 检测规则
     rules: Vec<KeywordRule>,
-    /// 已检测到的碰撞事件
+    /// 已检测到的碰撞事件（有上限，防止内存无限增长）
     collisions: Arc<Mutex<Vec<CollisionEvent>>>,
     /// 已处理的魂对（防止重复检测）
     processed_pairs: Arc<Mutex<HashSet<(String, String)>>>,
     /// 滑动窗口配置
     pub sliding_config: SlidingWindowConfig,
 }
+
+/// 碰撞事件最大保留数——超出后丢弃最旧的
+const MAX_COLLISIONS: usize = 500;
 
 impl CrossDetector {
     /// 创建新的交叉检测器
@@ -352,6 +355,10 @@ impl CrossDetector {
         if !new_collisions.is_empty() {
             if let Ok(mut c) = self.collisions.lock() {
                 c.extend(new_collisions.iter().cloned());
+                // 防止碰撞事件无限累积导致内存膨胀
+                while c.len() > MAX_COLLISIONS {
+                    c.remove(0);
+                }
             }
             if let Ok(mut p) = self.processed_pairs.lock() {
                 p.extend(processed_pairs);

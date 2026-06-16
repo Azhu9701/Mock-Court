@@ -937,6 +937,9 @@ async fn detect_collisions_async(
     let mut collision_count = 0u32;
     let monitor = topology::TopologyMonitor::new();
     let mut check_interval = tokio::time::interval(Duration::from_secs(30));
+    // 限制并发干预任务数，防止碰撞爆发时大量 LLM 调用同时堆积
+    let mut intervention_tasks = JoinSet::new();
+    const MAX_CONCURRENT_INTERVENTIONS: usize = 8;
 
     loop {
         tokio::select! {
@@ -965,25 +968,33 @@ async fn detect_collisions_async(
                                         let peer_outputs: Vec<String> = vec![from_text];
                                         let gate = intervention_gate.clone();
                                         let tx = tx.clone();
-                                        let _from_soul = collision.from_soul.clone();
-                                        let _contradiction = collision.content.clone();
 
-                                        tokio::spawn(async move {
-                                            let decision = gate.gate(&to_text, &peer_outputs).await;
-                                            match &decision {
-                                                InterventionDecision::InjectQuestion { .. }
-                                                | InterventionDecision::Redirect { .. }
-                                                | InterventionDecision::DeepenRequest { .. } => {
-                                                    tracing::info!(
-                                                        "Intervention triggered: {:?} → soul '{}'",
-                                                        decision,
-                                                        collision.to_soul,
-                                                    );
-                                                    let _ = tx.send(decision).await;
+                                        // 限制并发干预任务——超过上限时跳过，等待已启动的任务完成
+                                        if intervention_tasks.len() < MAX_CONCURRENT_INTERVENTIONS {
+                                            intervention_tasks.spawn(async move {
+                                                let decision = gate.gate(&to_text, &peer_outputs).await;
+                                                match &decision {
+                                                    InterventionDecision::InjectQuestion { .. }
+                                                    | InterventionDecision::Redirect { .. }
+                                                    | InterventionDecision::DeepenRequest { .. } => {
+                                                        tracing::info!(
+                                                            "Intervention triggered: {:?} → soul '{}'",
+                                                            decision,
+                                                            collision.to_soul,
+                                                        );
+                                                        let _ = tx.send(decision).await;
+                                                    }
+                                                    InterventionDecision::NoAction => {}
                                                 }
-                                                InterventionDecision::NoAction => {}
-                                            }
-                                        });
+                                            });
+                                        } else {
+                                            tracing::warn!(
+                                                "Intervention task limit ({}) reached, skipping collision {}→{}",
+                                                MAX_CONCURRENT_INTERVENTIONS,
+                                                collision.from_soul,
+                                                collision.to_soul,
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -1020,6 +1031,9 @@ async fn detect_collisions_async(
                     }).ok();
                 }
             }
+
+            // 定期排空已完成的干预任务，防止 JoinSet 堆积死任务占用内存
+            _ = intervention_tasks.join_next(), if !intervention_tasks.is_empty() => {}
         }
     }
 }
