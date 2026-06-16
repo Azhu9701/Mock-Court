@@ -18,7 +18,7 @@ import {
 import { 
   MODE_LABELS_LONG, 
   type PossessionMode,
-  MODES,
+  filteredModes,
   MODE_COLORS_BG,
   MODE_COLORS_TEXT,
   iconMap
@@ -27,6 +27,7 @@ import { triggerSessionsUpdate } from "@/components/sidebar-sessions";
 import { AttachmentUpload } from "@/components/attachment-upload";
 import { SoulCarousel } from "@/components/soul-carousel";
 import { getSoulAvatarBg } from "@/lib/soul-utils";
+import { useDomain } from "@/contexts/domain-context";
 import { cn } from "@/lib/utils";
 import { SessionContextHeader } from "@/components/session-context-header";
 
@@ -66,6 +67,8 @@ function classifyLogType(line: string): "key" | "soul" | "review" | "other" {
 
 export function PossessionEntry() {
   const searchParams = useSearchParams();
+  const { enabledModes } = useDomain();
+  const modes = filteredModes(enabledModes);
   const initialTaskFromUrl = searchParams?.get("task") || "";
   const initialSoulsFromUrl = (searchParams?.get("souls") || "")
     .split(",")
@@ -750,7 +753,7 @@ export function PossessionEntry() {
 
                 {isManualMode && (
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {MODES.map((m) => {
+                    {modes.map((m) => {
                       const Icon = iconMap[m.icon];
                       const isSelected = mode === m.key;
                       return (
@@ -824,7 +827,7 @@ export function PossessionEntry() {
                     {isManualMode ? (
                       <>
                         <MessageCircle className="mr-2 h-5 w-5" />
-                        进入 {MODES.find(m => m.key === mode)?.label}
+                        进入 {modes.find(m => m.key === mode)?.label}
                       </>
                     ) : (
                       <>

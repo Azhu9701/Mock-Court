@@ -764,6 +764,7 @@ export interface DomainInfo {
   synthesis_verb: string;
   dimensions: string[];
   available: DomainOption[];
+  enabled_modes: string[];
 }
 
 export async function getDomainInfo(): Promise<DomainInfo> {

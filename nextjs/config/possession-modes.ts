@@ -8,14 +8,6 @@ export type PossessionMode =
   | "learn"
   | "practice_opening";
 
-const ALL_MODES: ReadonlySet<string> = new Set([
-  "single", "conference", "debate", "relay", "learn", "practice_opening",
-]);
-
-function isPossessionMode(s: string): s is PossessionMode {
-  return ALL_MODES.has(s);
-}
-
 export interface ModeConfig {
   key: PossessionMode;
   label: string;
@@ -25,7 +17,7 @@ export interface ModeConfig {
   maxSouls: number;
 }
 
-export const MODES: ModeConfig[] = [
+export const ALL_MODES: ModeConfig[] = [
   {
     key: "single",
     label: "单魂附体",
@@ -75,6 +67,22 @@ export const MODES: ModeConfig[] = [
     maxSouls: 10,
   },
 ];
+
+/** 按域名过滤可用模式。enabledModes 为空或 undefined 则不过滤（向后兼容）。 */
+export function filteredModes(enabledModes: string[] | undefined): ModeConfig[] {
+  if (!enabledModes || enabledModes.length === 0) return ALL_MODES;
+  const set = new Set(enabledModes);
+  return ALL_MODES.filter(m => set.has(m.key));
+}
+
+/** @deprecated 直接用 ALL_MODES + filteredModes() */
+export const MODES: ModeConfig[] = ALL_MODES;
+
+const ALL_MODE_KEYS: ReadonlySet<string> = new Set(ALL_MODES.map(m => m.key));
+
+function isPossessionMode(s: string): s is PossessionMode {
+  return ALL_MODE_KEYS.has(s);
+}
 
 export const MODE_LABELS: Record<PossessionMode, string> = {
   single: "单魂",

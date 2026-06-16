@@ -16,9 +16,9 @@ interface DomainContextType {
   agentNoun: string;
   synthesisVerb: string;
   dimensions: string[];
+  enabledModes: string[];
   icon: string;
   ready: boolean;
-  /** 切换领域——调后端 API + 更新本地状态 */
   switchDomain: (profile: string) => Promise<void>;
 }
 
@@ -30,6 +30,7 @@ const DEFAULT_STATE: Omit<DomainContextType, "switchDomain"> = {
   agentNoun: "魂",
   synthesisVerb: "辩证综合",
   dimensions: ["场域", "本体论", "认识论", "目的论"],
+  enabledModes: ["single", "conference", "debate", "relay", "learn", "practice_opening"],
   icon: "🧭",
   ready: false,
 };
@@ -50,12 +51,12 @@ export function DomainProvider({ children }: { children: React.ReactNode }) {
           agentNoun: info.agent_noun,
           synthesisVerb: info.synthesis_verb,
           dimensions: info.dimensions,
+          enabledModes: info.enabled_modes,
           icon: preset?.icon ?? "🌐",
           ready: true,
         });
       })
       .catch(() => {
-        // 后端不可用时用默认值
         if (!cancelled) setState((s) => ({ ...s, ready: true }));
       });
     return () => { cancelled = true; };
@@ -70,6 +71,7 @@ export function DomainProvider({ children }: { children: React.ReactNode }) {
       agentNoun: info.agent_noun,
       synthesisVerb: info.synthesis_verb,
       dimensions: info.dimensions,
+      enabledModes: info.enabled_modes,
       icon: preset?.icon ?? "🌐",
       ready: true,
     });

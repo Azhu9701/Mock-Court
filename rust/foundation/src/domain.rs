@@ -156,6 +156,10 @@ pub struct DomainProfile {
     /// 可覆盖为领域特定的分析指引。
     #[serde(default)]
     pub mission_requirements: String,
+    /// 该领域启用的附体模式列表。
+    /// 内置默认 = 全部 6 种。劳动/法律等领域可精简为 single + conference。
+    #[serde(default = "default_enabled_modes")]
+    pub enabled_modes: Vec<String>,
 }
 
 impl Default for DomainProfile {
@@ -168,6 +172,7 @@ impl Default for DomainProfile {
             trigger_markers: TriggerMarkers::default(),
             depth_protocol: DEFAULT_DEPTH_PROTOCOL.to_string(),
             mission_requirements: DEFAULT_MISSION_REQUIREMENTS.to_string(),
+            enabled_modes: default_enabled_modes(),
         }
     }
 }
@@ -230,6 +235,13 @@ fn default_terms() -> HashMap<String, String> {
     t.insert("banner_lord".into(), "幡主".into());
     t.insert("system_name".into(), "万民幡".into());
     t
+}
+
+fn default_enabled_modes() -> Vec<String> {
+    vec![
+        "single".into(), "conference".into(), "debate".into(),
+        "relay".into(), "learn".into(), "practice_opening".into(),
+    ]
 }
 
 // 内置默认值——与当前硬编码完全一致，确保零行为变化。
