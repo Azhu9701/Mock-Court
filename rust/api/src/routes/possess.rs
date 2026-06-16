@@ -199,7 +199,8 @@ fn extract_json(text: &str) -> Option<&str> {
 
 /// 收集 LLM 流式响应的全部内容，同时记录第一个错误。
 async fn collect_llm_stream(rx: &mut tokio::sync::mpsc::Receiver<Result<foundation::Chunk, foundation::FoundationError>>) -> (String, Option<String>) {
-    let mut raw = String::new();
+    // 预分配：LLM 响应常达数 KB，避免循环中多次 realloc。
+    let mut raw = String::with_capacity(8 * 1024);
     let mut first_err: Option<String> = None;
     while let Some(r) = rx.recv().await {
         match r {
@@ -218,86 +219,6 @@ async fn collect_llm_stream(rx: &mut tokio::sync::mpsc::Receiver<Result<foundati
             }
         }
     }
-    (raw, first_err)
-}
-
-/// 收集 LLM 流式响应的全部内容，同时记录第一个错误，并可选地通过 send 流式输出
-async fn collect_llm_stream_with_progress(
-    rx: &mut tokio::sync::mpsc::Receiver<Result<foundation::Chunk, foundation::FoundationError>>,
-    send: Option<impl Fn(String) + Clone + Send + 'static>,
-    stage: &str,
-    source: &str,
-) -> (String, Option<String>) {
-    let mut raw = String::new();
-    let mut first_err: Option<String> = None;
-    let mut chunk_buffer = String::new();
-    let mut buffer_size = 0usize;
-
-    while let Some(r) = rx.recv().await {
-        match r {
-            Ok(c) => {
-                let content = if !c.content.is_empty() {
-                    &c.content
-                } else if let Some(ref rc) = c.reasoning_content {
-                    rc
-                } else {
-                    continue;
-                };
-
-                if !content.is_empty() {
-                    raw.push_str(content);
-
-                    if let Some(ref s) = send {
-                        chunk_buffer.push_str(content);
-                        buffer_size += content.len();
-
-                        if buffer_size >= 20 {
-                            let payload = serde_json::json!({
-                                "phase": "analysis_content",
-                                "stage": stage,
-                                "source": source,
-                                "content": chunk_buffer.clone(),
-                                "is_partial": true
-                            }).to_string();
-                            s(payload);
-                            chunk_buffer.clear();
-                            buffer_size = 0;
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                if first_err.is_none() {
-                    first_err = Some(e.to_string());
-                }
-                tracing::warn!("LLM stream chunk error: {}", e);
-            }
-        }
-    }
-
-    if let Some(ref s) = send {
-        if !chunk_buffer.is_empty() {
-            let payload = serde_json::json!({
-                "phase": "analysis_content",
-                "stage": stage,
-                "source": source,
-                "content": chunk_buffer,
-                "is_partial": true
-            }).to_string();
-            s(payload);
-        }
-
-        let payload = serde_json::json!({
-            "phase": "analysis_content",
-            "stage": stage,
-            "source": source,
-            "content": "",
-            "is_partial": false,
-            "is_done": true
-        }).to_string();
-        s(payload);
-    }
-
     (raw, first_err)
 }
 
@@ -1070,15 +991,17 @@ async fn analyze_task(
                                     chunk_buffer.push_str(content);
                                     buffer_size += content.len();
                                     if buffer_size >= 20 {
+                                        // take() 直接拿走 String 堆数据 (O(1))，
+                                        // 替代 clone()+clear() 的整块拷贝 (O(n))。
+                                        let content = std::mem::take(&mut chunk_buffer);
                                         let payload = serde_json::json!({
                                             "phase": "analysis_content",
                                             "stage": "review",
                                             "source": reviewer_name,
-                                            "content": chunk_buffer.clone(),
+                                            "content": content,
                                             "is_partial": true
                                         }).to_string();
                                         send(payload);
-                                        chunk_buffer.clear();
                                         buffer_size = 0;
                                     }
                                 }
@@ -1938,6 +1861,10 @@ async fn start_interrogation(
             let gate = InterrogationGate {
                 task: body.task.clone(),
                 questions: questions.clone(),
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
             };
             state.interrogation_gates.insert(gate_id.clone(), gate);
 

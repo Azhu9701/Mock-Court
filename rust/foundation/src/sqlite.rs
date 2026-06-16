@@ -23,8 +23,14 @@ impl SqliteDb {
             conn.execute_batch("PRAGMA busy_timeout = 5000;")?;
             Ok(())
         });
+        // 池大小可配置：默认 5，高并发场景可通过 WANMINFAN_DB_POOL_SIZE 调大。
+        let pool_size = std::env::var("WANMINFAN_DB_POOL_SIZE")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(5);
         let pool = Pool::builder()
-            .max_size(5)
+            .max_size(pool_size)
             .build(manager)
             .map_err(|e| FoundationError::InvalidState(e.to_string()))?;
         let conn = pool.get().map_err(|e| FoundationError::InvalidState(e.to_string()))?;
