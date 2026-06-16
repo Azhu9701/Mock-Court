@@ -1013,38 +1013,6 @@ impl PromptBuilder {
         }
     }
 
-    /// 从实践反馈中蒸馏元知识：most_unexpected + already_known 交叉分析
-    pub fn build_review_distill_prompt(&self, reviews: &[(String, String, String)]) -> Prompt {
-        // (most_unexpected, already_known, self_negation)
-        let system_content = "你从多次合议的实践反馈中蒸馏元知识。\n\n\
-使用者每次合议后会记录：\n\
-- 最没想到的是什么（盲区被打中）\n\
-- 早就知道的是什么（验证已有的直觉）\n\
-- 哪个预设被动摇了（自我否定）\n\n\
-你的工作是：跨越多次合议、跨议题、跨魂组合，找出**反复出现的模式**：\n\
-1. 什么视角在多数议题上会被忽视？\n\
-2. 使用者的什么预设被反复动摇——这暗示ta的什么结构性盲区？\n\
-3. 哪些魂的组合更容易产生\"最没想到\"的效果？\n\n\
-输出 300-500 字的中文分析，用 Markdown 格式。\
-不用虚构——只基于给你的数据说话。没有足够证据就诚实说\"样本不足\"。".to_string();
-
-        let mut user = String::from("## 近期实践反馈记录\n\n");
-        for (i, (unexpected, known, negation)) in reviews.iter().enumerate() {
-            user.push_str(&format!("### 反馈 #{}\n", i + 1));
-            user.push_str(&format!("最没想到：{}\n", unexpected));
-            user.push_str(&format!("早就知道：{}\n", known));
-            user.push_str(&format!("被动摇的预设：{}\n\n", negation));
-        }
-        user.push_str("请产出元知识分析。");
-
-        Prompt {
-            messages: vec![
-                PromptMessage { role: "system".into(), content: system_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
-                PromptMessage { role: "user".into(), content: user, reasoning_content: None, tool_call_id: None, tool_calls: None },
-            ],
-        }
-    }
-
     /// 入场审讯：审查官（默认未明子）读使用者的提问，判断其欲望结构，
     /// 生成 2-4 个反问卡片要求使用者逐条填写。返回 JSON 数组。
     pub fn build_interrogation_prompt(&self, task: &str) -> Prompt {

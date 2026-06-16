@@ -1,8 +1,4 @@
-use std::sync::Arc;
-
-use chrono::Utc;
-use foundation::{BlindSpot, Result, RevisionProposal, SoulProfile, Storage};
-use tracing;
+use foundation::{Result, SoulProfile};
 
 const CONTRADICTION_PATTERNS: &[(&str, &str)] = &[
     ("一方面", "另一方面"),
@@ -62,74 +58,28 @@ impl AuditResult {
     pub fn has_issues(&self) -> bool {
         !self.contradictions.is_empty() || 
         !self.blind_spot_alerts.is_empty() || 
-        !self.contradictions.is_empty() ||
+        !self.premise_shaken.is_empty() ||
         self.revision_needed
     }
 }
 
-pub struct SelfAudit {
-    storage: Arc<dyn Storage>,
-}
+pub struct SelfAudit;
 
 impl SelfAudit {
-    pub fn new(storage: Arc<dyn Storage>) -> Self {
-        SelfAudit { storage }
-    }
-
-    /// 执行完整的审计流程
-    pub async fn audit_and_save(
-        &self,
-        profile: &SoulProfile,
-        task: &str,
-        output: &str,
-        session_id: &str,
-    ) -> Result<AuditResult> {
-        let result = Self::audit(profile, task, output);
-        
-        if result.has_issues() {
-            tracing::info!(
-                "魂 {} 审计发现问题：矛盾 {} 个，盲区 {} 个，前提动摇 {} 个",
-                profile.name,
-                result.contradictions.len(),
-                result.blind_spot_alerts.len(),
-                result.premise_shaken.len()
-            );
-            
-            self.save_audit_results(profile, &result, session_id).await?;
-        }
-        
-        Ok(result)
-    }
-
-    /// 核心审计逻辑（无状态版本，向后兼容）
+    /// 核心审计逻辑（纯文本分析，无副作用）
     pub fn audit(profile: &SoulProfile, task: &str, output: &str) -> AuditResult {
         let mut result = AuditResult::clean();
 
-        // 1. 检查排除场景
         Self::check_excluded_scenarios(profile, task, output, &mut result);
-
-        // 2. 检查矛盾模式
         Self::check_contradictions(profile, output, &mut result);
-
-        // 3. 检查边界声明违反
         Self::check_boundary_violations(profile, output, &mut result);
-
-        // 4. 检查前提动摇标记
         Self::check_premise_shaken(profile, output, &mut result);
-
-        // 5. 检查领域完整性
         Self::check_domain_completeness(profile, task, output, &mut result);
 
-        // 6. 生成修正建议
         let suggestions = Self::generate_suggestions(&result, profile);
         result.suggested_proposals = suggestions;
 
         result
-    }
-
-    /// 带存储的审计（可以保存结果）
-    pub fn audit_with_storage(&self, profile: &SoulProfile, task: &str, output: &str) -> AuditResult {
-        Self::audit(profile, task, output)
     }
 
     fn check_excluded_scenarios(
@@ -271,56 +221,13 @@ impl SelfAudit {
         
         suggestions
     }
-
-    /// 保存审计结果到数据库
-    async fn save_audit_results(
-        &self,
-        profile: &SoulProfile,
-        audit_result: &AuditResult,
-        _session_id: &str,
-    ) -> Result<()> {
-        // 保存盲区记录
-        for alert in &audit_result.blind_spot_alerts {
-            let blind_spot = BlindSpot {
-                id: uuid::Uuid::new_v4().to_string(),
-                soul_name: profile.name.clone(),
-                dimension: "自动检测".to_string(),
-                description: alert.clone(),
-                detected_at: Utc::now(),
-                resolved_at: None,
-                resolved_by: None,
-                resolution: None,
-            };
-            self.storage.insert_blind_spot(&blind_spot).await?;
-        }
-
-        // 保存修正提案建议
-        for suggestion in &audit_result.suggested_proposals {
-            let proposal = RevisionProposal {
-                id: uuid::Uuid::new_v4().to_string(),
-                soul_name: profile.name.clone(),
-                proposal_type: foundation::ProposalType::BlindSpotMitigation,
-                title: suggestion.title.clone(),
-                description: suggestion.description.clone(),
-                proposed_changes: suggestion.suggested_changes.clone(),
-                status: foundation::ProposalStatus::Pending,
-                created_by: "system:audit".to_string(),
-                created_at: Utc::now(),
-                reviewed_at: None,
-                reviewer: None,
-                review_notes: None,
-            };
-            self.storage.insert_revision_proposal(&proposal).await?;
-        }
-
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use foundation::{EffectivenessStats};
+    use chrono::Utc;
+    use foundation::EffectivenessStats;
 
     fn create_test_profile() -> SoulProfile {
         SoulProfile {
@@ -360,16 +267,11 @@ mod tests {
         assert!(!result.revision_needed);
     }
 
-    // 注意：完整审计测试需要 Storage trait 实现，这里只测试核心逻辑
     #[test]
     fn test_audit_logic() {
         let profile = create_test_profile();
-        
-        // 创建一个不带存储的测试（我们只测试纯逻辑部分）
-        // 这里我们直接测试各个检查函数的逻辑
         let mut result = AuditResult::clean();
         
-        // 手动测试排除场景
         for scenario in &profile.exclude_scenarios {
             if "讨论军事策略".contains(scenario) {
                 result.blind_spot_alerts.push(format!(

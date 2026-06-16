@@ -11,7 +11,6 @@ use crate::state::AppState;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/search", get(search))
-        .route("/topic-search", get(topic_search))
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,38 +123,6 @@ async fn search(
         results,
         suggestions: raw.suggestions.unwrap_or_default(),
         unresponsive_engines: raw.unresponsive_engines.unwrap_or_default(),
-    }))
-}
-
-#[derive(Debug, Deserialize)]
-struct TopicSearchQuery {
-    q: String,
-    #[serde(default = "default_engine")]
-    engine: String,
-    #[serde(default = "default_limit")]
-    limit: usize,
-}
-
-fn default_engine() -> String { "bing".into() }
-fn default_limit() -> usize { 5 }
-
-#[derive(Debug, Serialize)]
-struct TopicSearchResponse {
-    query: String,
-    engine: String,
-    markdown: String,
-}
-
-async fn topic_search(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<TopicSearchQuery>,
-) -> Result<Json<TopicSearchResponse>, (axum::http::StatusCode, Json<ApiError>)> {
-    let markdown = state.collector.search_topic(&query.q, Some(&query.engine), query.limit).await
-        .map_err(|e| (axum::http::StatusCode::BAD_GATEWAY, Json(ApiError { error: e })))?;
-    Ok(Json(TopicSearchResponse {
-        query: query.q,
-        engine: query.engine,
-        markdown,
     }))
 }
 
