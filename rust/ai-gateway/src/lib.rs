@@ -60,19 +60,28 @@ impl HealthState {
     }
 }
 
-/// Read API key from env or data/apikeys.json fallback
+/// Read API key from env, then data/apikeys.json, then provider config files (Web UI).
+///
+/// Priority:
+/// 1. Environment variable (e.g. OPENAI_API_KEY)
+/// 2. data/apikeys.json[file_key]
+/// 3. Provider config file saved by Web UI (e.g. data/openai.json → api_key field)
+///
+/// The Web UI saves keys to per-provider files,
+/// so on restart we must read from those files as a fallback.
 pub fn load_api_key(env_var: &str, file_key: &str) -> Option<String> {
     if let Ok(key) = std::env::var(env_var) {
         if !key.is_empty() && !key.starts_with("PROXY_") { return Some(key); }
     }
-    // Try WANMINFAN_DATA_DIR for absolute path resolution
     let data_dir = std::env::var("WANMINFAN_DATA_DIR").unwrap_or_else(|_| "data".into());
-    let paths = [
+
+    // Paths for data/apikeys.json (classic fallback)
+    let apikey_paths = [
         format!("{}/apikeys.json", data_dir),
         "data/apikeys.json".to_string(),
         "../data/apikeys.json".to_string(),
     ];
-    for path in paths.iter() {
+    for path in apikey_paths.iter() {
         if let Ok(content) = std::fs::read_to_string(path) {
             if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&content) {
                 if let Some(key) = map.get(file_key).cloned() {
@@ -83,6 +92,33 @@ pub fn load_api_key(env_var: &str, file_key: &str) -> Option<String> {
             }
         }
     }
+
+    // Web UI 保存的 per-provider config 文件（服务重启后恢复 key）
+    let config_file_paths: &[&str] = match file_key {
+        "openai" => &["data/openai.json", "data/openai_endpoint.json"],
+        "anthropic" => &["data/claude.json"],
+        _ => &[],
+    };
+    for rel_path in config_file_paths {
+        // 优先用绝对路径（基于 data_dir），再回退到相对路径
+        let candidates = [
+            format!("{}/{}", data_dir, rel_path.trim_start_matches("data/")),
+            rel_path.to_string(),
+            format!("../{}", rel_path),
+        ];
+        for path in &candidates {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(key) = json.get("api_key").and_then(|v| v.as_str()) {
+                        if !key.is_empty() {
+                            return Some(key.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     None
 }
 

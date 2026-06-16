@@ -456,6 +456,13 @@ struct RelayConfig {
 fn load_relay_config() -> RelayConfig {
     if let Ok(content) = std::fs::read_to_string(RELAY_CONFIG_FILE) {
         if let Ok(config) = serde_json::from_str::<RelayConfig>(&content) {
+            // 服务重启后恢复 env var，确保 runtime 能读到中转站配置
+            if !config.api_key.is_empty() {
+                std::env::set_var("AGENT_PROXY_KEY", &config.api_key);
+            }
+            if !config.url.is_empty() {
+                std::env::set_var("AI_RELAY_URL", &config.url);
+            }
             return config;
         }
     }
@@ -1005,6 +1012,7 @@ pub struct DomainInfo {
     pub synthesis_verb: String,
     pub dimensions: Vec<String>,
     pub available: Vec<DomainOption>,
+    pub enabled_modes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1046,6 +1054,7 @@ async fn get_domain_info(
         synthesis_verb: domain.terms.get("synthesis_verb").cloned().unwrap_or_else(|| "辩证综合".into()),
         dimensions: domain.coordinate.dimensions.iter().map(|d| d.name.clone()).collect(),
         available,
+        enabled_modes: domain.enabled_modes.clone(),
     }))
 }
 
@@ -1116,5 +1125,6 @@ async fn set_domain(
         synthesis_verb: domain.terms.get("synthesis_verb").cloned().unwrap_or_else(|| "辩证综合".into()),
         dimensions: domain.coordinate.dimensions.iter().map(|d| d.name.clone()).collect(),
         available,
+        enabled_modes: domain.enabled_modes.clone(),
     }))
 }
