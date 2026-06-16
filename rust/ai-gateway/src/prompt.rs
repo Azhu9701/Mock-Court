@@ -2,6 +2,9 @@ use foundation::{ModelTier, Prompt, PromptMessage, SoulProfile};
 
 use crate::model_router::RoutingRole;
 
+/// 保留作为参考文档。综合模板现在由 `DomainProfile::synthesis_system_prompt`
+/// 提供（默认值 = 此常量内容），支持通过 config/domain.yaml 覆盖。
+#[allow(dead_code)]
 const SYNTHESIS_SYSTEM_PROMPT: &str = r#"你是辩证综合官。你是独立子 agent——只做辩证综合，不做评判。不读取文件——所有上下文已在 prompt 中。
 
 ## 你的核心任务
@@ -119,7 +122,12 @@ const SYNTHESIS_SYSTEM_PROMPT: &str = r#"你是辩证综合官。你是独立子
 剥离比较框架的合法性。还原每个命题的物质生产条件与阶级位置——不比较"观点"，只比较"谁在提取、提取什么、以谁为代价"。暴露大他者欲望的运作公式。停止用"共识/分歧"给哲学尸检：统一性不在坐标交点，在自我否定的运动中。承认理论立场的构成性盲区就是承认其阶级位置。将"问题本身"的批判指向组织化实践——不是寻找更聪明的提问方式，而是夺取定义现实的符号权力。灌输的终点不是理论共识，是被剥夺者获得行动主体性。"#;
 
 #[derive(Debug, Clone)]
-pub struct PromptBuilder;
+pub struct PromptBuilder {
+    /// 领域语义配置。默认 = 哲学领域（完全向后兼容）。
+    /// 通过 with_domain() 注入自定义配置后，综合模板和人格创建模板
+    /// 会使用 domain 配置中的文本，术语占位符会被替换。
+    domain: foundation::DomainProfile,
+}
 
 /// 动态任务上下文 — 对应 prompt-builder.py 的 --task / --role / --facts / --judgment 等参数。
 /// 静态身份信息（姓名、坐标、summon_prompt、skills 等）从 SoulProfile（由数据库/registry 加载）读取，不在此结构体中。
@@ -168,7 +176,26 @@ impl DynamicContext {
 
 impl PromptBuilder {
     pub fn new() -> Self {
-        PromptBuilder
+        PromptBuilder {
+            domain: foundation::DomainProfile::default(),
+        }
+    }
+
+    /// 用自定义领域配置构建。综合模板、人格创建模板、术语映射
+    /// 全部从 domain 配置读取。
+    pub fn with_domain(domain: foundation::DomainProfile) -> Self {
+        PromptBuilder { domain }
+    }
+
+    /// 获取领域配置引用（供外部使用术语渲染）
+    pub fn domain(&self) -> &foundation::DomainProfile {
+        &self.domain
+    }
+
+    /// 坐标标签：用于 prompt 中的"坐标 `{}`"措辞。
+    /// 哲学领域 = "坐标"，其他领域可自定义为 "法律坐标" 等。
+    fn coord_label(&self) -> &str {
+        self.domain.terms.get("coord_label").map(|s| s.as_str()).unwrap_or("坐标")
     }
 
     /// 统一召唤入口。静态身份 → system message，动态上下文 → user message。
@@ -180,12 +207,12 @@ impl PromptBuilder {
         tier: &ModelTier,
         use_cache: bool,
     ) -> Prompt {
-        let system_content = Self::build_soul_identity(soul, tier);
+        let system_content = self.build_soul_identity(soul, tier);
 
         if use_cache {
             let mut shared = Self::build_task_brief(ctx);
             shared.push_str(&format!("\n任务：{}", ctx.task));
-            let soul_mission = Self::build_soul_mission(soul, ctx);
+            let soul_mission = self.build_soul_mission(soul, ctx);
             Prompt {
                 messages: vec![
                     PromptMessage { role: "system".into(), content: system_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
@@ -196,7 +223,7 @@ impl PromptBuilder {
         } else {
             let mut user_content = Self::build_task_brief(ctx);
             user_content.push_str(&format!("\n任务：{}", ctx.task));
-            user_content.push_str(&format!("\n\n{}", Self::build_soul_mission(soul, ctx)));
+            user_content.push_str(&format!("\n\n{}", self.build_soul_mission(soul, ctx)));
             Prompt {
                 messages: vec![
                     PromptMessage { role: "system".into(), content: system_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
@@ -250,12 +277,13 @@ impl PromptBuilder {
 
     // ── 静态身份（System Message）—— 从 SoulProfile（数据库/registry）组装 ──
 
-    fn build_soul_identity(soul: &SoulProfile, tier: &ModelTier) -> String {
+    fn build_soul_identity(&self, soul: &SoulProfile, tier: &ModelTier) -> String {
         let mut c = String::new();
 
         // 头部：身份声明（primacy effect）
+        let coord_label = self.coord_label();
         c.push_str(&format!(
-            "你是 **{}**，主义主义坐标 `{}`。\n", soul.name, soul.ismism_code
+            "你是 **{}**，{} `{}`。\n", soul.name, coord_label, soul.ismism_code
         ));
         if !soul.field.is_empty() {
             c.push_str(&format!("领域：{}\n", soul.field));
@@ -265,9 +293,14 @@ impl PromptBuilder {
         // 核心：魂专属召唤词
         c.push_str(&soul.summon_prompt);
 
-        // 深度协议（替代五维自检 + 输出规范）
+        // 深度协议 —— 从 DomainProfile 读取，支持领域定制
         c.push('\n');
-        c.push_str(&Self::depth_protocol(tier));
+        let protocol = if self.domain.depth_protocol.is_empty() {
+            Self::depth_protocol(tier)  // 向后兼容：空则用旧的硬编码版本
+        } else {
+            self.domain.render(&self.domain.depth_protocol)
+        };
+        c.push_str(&protocol);
 
         // 尾部：身份重申（recency effect）
         c.push_str(&format!(
@@ -323,6 +356,18 @@ impl PromptBuilder {
         }
     }
 
+    /// 默认分析要求 — 当 domain.mission_requirements 为空时使用。
+    /// 保持与旧版硬编码完全一致，确保向后兼容。
+    fn default_mission_requirements() -> String {
+        String::from("## 分析要求\n\
+1. **从你的本体论预设出发**——你默认什么是最真实的？这个预设在这次分析中让你看见了什么、又让你必然看不见什么？\n\
+2. **使用你自己的方法论**——不要模仿其他魂的分析方式。你的价值恰恰在于你和别人不同。\n\
+3. **诚实标注你的盲区**——在分析结尾，明确说「以我的框架，我看不见X」「我这套方法在Y条件下会失效」。\n\
+4. **面向实践输出**——你的分析最终要能帮助使用者做决定或看清局面。不要停留在纯理论推演。\n\
+5. **保持角色一致性**——用你自己的术语、风格和思维节奏。你是你，不是ChatGPT。\n\
+6. **承认你的结构性预设**——在发言中，如果你察觉到自己正在被某个结构性预设支配（如「我默认理性个体是分析的基本单位」「我的方法预设了市场机制存在」「我分析的前提是国家在场」），把它说出来。这不是示弱——说出「我是被这样构成的」的同时，你已经开始拆解那个构成你的力量。\n")
+    }
+
     // ── 任务简报（User Message 前半段）—— 所有魂共享的动态上下文 ──
 
     fn build_task_brief(ctx: &DynamicContext) -> String {
@@ -353,9 +398,10 @@ impl PromptBuilder {
 
     // ── 魂专属使命（User Message 后半段）—— 魂专属的动态任务指令 ──
 
-    fn build_soul_mission(soul: &SoulProfile, ctx: &DynamicContext) -> String {
+    fn build_soul_mission(&self, soul: &SoulProfile, ctx: &DynamicContext) -> String {
+        let coord_label = self.coord_label();
         let mut m = format!(
-            "## 你的分析任务\n\n你是 **{}**（ismism `{}`）。\n\n", soul.name, soul.ismism_code
+            "## 你的分析任务\n\n你是 **{}**（{} `{}`）。\n\n", soul.name, coord_label, soul.ismism_code
         );
 
         if !soul.self_declare.is_empty() {
@@ -367,7 +413,7 @@ impl PromptBuilder {
                 "### 你的专属职责\n{}\n\n这是总任务中**只有你能做、其他魂做不到或做不好的部分**。请聚焦你的专属问题，用你的方法论框架深度回答。\n\n", role
             ));
         } else {
-            m.push_str("请从你的立场、本体论预设、认识论路径和目的论指向前提出发，对以上总任务进行深度分析。\n\n");
+            m.push_str("请从你的立场和专长出发，对以上总任务进行深度分析。\n\n");
         }
 
         if !soul.skills_expertise.is_empty() {
@@ -379,13 +425,13 @@ impl PromptBuilder {
             m.push_str(&format!("**排除场景**：{}\n\n", exclude));
         }
 
-        m.push_str("## 分析要求\n\
-1. **从你的本体论预设出发**——你默认什么是最真实的？这个预设在这次分析中让你看见了什么、又让你必然看不见什么？\n\
-2. **使用你自己的方法论**——不要模仿其他魂的分析方式。你的价值恰恰在于你和别人不同。\n\
-3. **诚实标注你的盲区**——在分析结尾，明确说「以我的框架，我看不见X」「我这套方法在Y条件下会失效」。\n\
-4. **面向实践输出**——你的分析最终要能帮助使用者做决定或看清局面。不要停留在纯理论推演。\n\
-5. **保持角色一致性**——用你自己的术语、风格和思维节奏。你是你，不是ChatGPT。\n\
-6. **承认你的结构性预设**——在发言中，如果你察觉到自己正在被某个结构性预设支配（如「我默认理性个体是分析的基本单位」「我的方法预设了市场机制存在」「我分析的前提是国家在场」），把它说出来。这不是示弱——说出「我是被这样构成的」的同时，你已经开始拆解那个构成你的力量。\n");
+        // 分析要求 —— 从 DomainProfile 读取，支持领域定制
+        let requirements = if self.domain.mission_requirements.is_empty() {
+            Self::default_mission_requirements()
+        } else {
+            self.domain.render(&self.domain.mission_requirements)
+        };
+        m.push_str(&requirements);
 
         if let Some(ref role) = ctx.role {
             if role.contains("地基") || role.contains("是什么") {
@@ -405,6 +451,7 @@ impl PromptBuilder {
     /// 构建幡主审查 + 任务分派 Prompt。
     /// 幡主（默认未明子）审查候选魂组合是否适合该任务，并为每个魂分配专属的子任务。
     pub fn build_banner_lord_review_prompt(
+        &self,
         banner_lord: &SoulProfile,
         task: &str,
         candidate_souls: &[SoulProfile],
@@ -413,15 +460,20 @@ impl PromptBuilder {
         unknown: Option<&str>,
     ) -> Prompt {
         let system_content = format!(
-            "{}你是{}，ismism坐标{}。你作为幡主审查官，需要完成两项任务：\n\
+            "{}你是{}，{}{}。你作为幡主审查官，需要完成两项任务：\n\
              1. 审查候选魂是否适合这个任务——不适合的要去掉或替换\n\
              2. 为每个确定使用的魂分派一个**差异化的子问题**——不是所有人分析同一个问题，\
              而是把你的总任务拆解成每个魂最擅长回答的那一个侧面\n\n\
              不读取文件——所有上下文已在 prompt 中。",
-            banner_lord.summon_prompt, banner_lord.name, banner_lord.ismism_code
+            banner_lord.summon_prompt, banner_lord.name, self.coord_label(), banner_lord.ismism_code
         );
 
         let mut candidates_info = String::new();
+        let dims = &self.domain.coordinate.dimensions;
+        let d0 = dims.first().map(|d| d.name.as_str()).unwrap_or("场域");
+        let d1 = dims.get(1).map(|d| d.name.as_str()).unwrap_or("本体论");
+        let d2 = dims.get(2).map(|d| d.name.as_str()).unwrap_or("认识论");
+        let d3 = dims.get(3).map(|d| d.name.as_str()).unwrap_or("目的论");
         for s in candidate_souls {
             let f = s.ismism_code.chars().next().unwrap_or('?');
             let o = s.ismism_code.chars().nth(2).unwrap_or('?');
@@ -432,8 +484,8 @@ impl PromptBuilder {
             let excl_str = s.exclude_scenarios.join("、");
             let excl = if s.exclude_scenarios.is_empty() { "无" } else { excl_str.as_str() };
             candidates_info.push_str(&format!(
-                "- **{}** [{}] 场域={} 本体论={} 认识论={} 目的论={}\n  self_declare={}\n  skills={}\n  exclude={}\n\n",
-                s.name, s.field, f, o, e, t, self_decl, skill, excl
+                "- **{}** [{}] {}={} {}={} {}={} {}={}\n  self_declare={}\n  skills={}\n  exclude={}\n\n",
+                s.name, s.field, d0, f, d1, o, d2, e, d3, t, self_decl, skill, excl
             ));
         }
 
@@ -446,39 +498,39 @@ impl PromptBuilder {
             candidates_info
         );
 
-        user_content.push_str(r#"## 你的两阶段任务
+        user_content.push_str(&self.domain.render(r#"## 你的两阶段任务
 
-### 第一阶段：审查魂组合
-逐魂检查：
-1. 魂的领域是否覆盖任务的相关维度？self_declare 的边界是否与任务冲突？
+### 第一阶段：审查{agent_noun}组合
+逐{agent_noun}检查：
+1. {agent_noun}的领域是否覆盖任务的相关维度？self_declare 的边界是否与任务冲突？
 2. 场域定位是否匹配任务的性质？
-3. 魂之间的场域/本体论/目的论是否互补？是否存在结构冗余（两个魂的同维度值相同=覆盖重复）？是否存在断裂（场域不兼容=无法对话）？
-4. 是否缺少关键视角？（例如全是场域1的魂分析不到社会结构，全是场域4的魂分析不到理论前提）
+3. {agent_noun}之间的场域/本体论/目的论是否互补？是否存在结构冗余（两个{agent_noun}的同维度值相同=覆盖重复）？是否存在断裂（场域不兼容=无法对话）？
+4. 是否缺少关键视角？（例如全是场域1的{agent_noun}分析不到社会结构，全是场域4的{agent_noun}分析不到理论前提）
 
-裁决：pass（全部通过）/ conditional（增删某魂后通过）/ reject（全部重选）
+裁决：pass（全部通过）/ conditional（增删某{agent_noun}后通过）/ reject（全部重选）
 
 ### 第二阶段：差异化任务分派
-为每个**确认使用的魂**分配一个不同的子问题（task_card）。原则：
+为每个**确认使用的{agent_noun}**分配一个不同的子问题（task_card）。原则：
 - 不是每个人回答同一个问题——那会浪费多视角的价值
-- 每个魂的子问题应该是**只有他能回答好、其他魂回答不好的**
-- 利用魂的本体论/认识论差异——场域1的魂做地基（"这是什么"），场域2的魂做边界（"这看不到什么"），场域3的魂做自反（"这个问法本身有什么问题"），场域4的魂做实践（"怎么落地"）
+- 每个{agent_noun}的子问题应该是**只有他能回答好、其他{agent_noun}回答不好的**
+- 利用{agent_noun}的本体论/认识论差异——场域1的{agent_noun}做地基（"这是什么"），场域2的{agent_noun}做边界（"这看不到什么"），场域3的{agent_noun}做自反（"这个问法本身有什么问题"），场域4的{agent_noun}做实践（"怎么落地"）
 - 每个子问题要具体——不是"请分析"，而是"请回答：X在Y条件下的Z"
-- 如果某个魂不适合任何子问题——不在第一阶段通过它
+- 如果某个{agent_noun}不适合任何子问题——不在第一阶段通过它
 
 ### 输出格式
 返回 JSON（不要 markdown 包裹）：
 {
   "verdict": "pass|conditional|reject",
-  "verified_souls": ["魂名1", "魂名2"],
+  "verified_souls": ["{agent_noun}名1", "{agent_noun}名2"],
   "task_cards": {
-    "魂名1": "这个魂专属的子问题——具体、聚焦、只有他能回答好",
-    "魂名2": "另一个魂专属的不同子问题"
+    "{agent_noun}名1": "这个{agent_noun}专属的子问题——具体、聚焦、只有他能回答好",
+    "{agent_noun}名2": "另一个{agent_noun}专属的不同子问题"
   },
-  "checks": ["逐魂审查结果"],
+  "checks": ["逐{agent_noun}审查结果"],
   "notes": "审查备注",
   "missing_perspectives": ["缺少的关键视角"],
   "boundary_risks": ["识别的边界风险"]
-}"#);
+}"#));
 
         Prompt {
             messages: vec![
@@ -497,12 +549,12 @@ impl PromptBuilder {
         for (name, content) in outputs {
             user_content.push_str(&format!("\n### {}\n{}\n", name, content));
         }
-        user_content.push_str("\n请按五步辩证综合法进行综合。输出一份完整的综合报告。");
+        user_content.push_str(&format!("\n请按五步{}法进行综合。输出一份完整的综合报告。", self.domain.terms.get("synthesis_noun").cloned().unwrap_or_else(|| "辩证综合".into())));
         Prompt {
             messages: vec![
                 PromptMessage {
                     role: "system".into(),
-                    content: SYNTHESIS_SYSTEM_PROMPT.into(),
+                    content: self.domain.synthesis_system_prompt.clone(),
                     reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
                 PromptMessage { role: "user".into(), content: user_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
@@ -520,12 +572,12 @@ impl PromptBuilder {
         for (name, content) in outputs {
             user_content.push_str(&format!("\n### {}\n{}\n", name, content));
         }
-        user_content.push_str("\n请按五步辩证综合法输出结构化综合报告。");
+        user_content.push_str(&format!("\n请按五步{}法输出结构化综合报告。", self.domain.terms.get("synthesis_noun").cloned().unwrap_or_else(|| "辩证综合".into())));
         Prompt {
             messages: vec![
                 PromptMessage {
                     role: "system".into(),
-                    content: format!("{}\n\n## JSON 输出格式\n严格按以下 JSON 格式输出（不要 markdown 包裹）：\n{{\n  \"consensus\": [{{\"point\": \"共识内容\", \"shared_by\": [\"魂名1\", \"魂名2\"], \"depth\": \"独立抵达/表面共识\"}}],\n  \"divergence\": [{{\"axis\": \"分歧轴描述\", \"divergence_type\": \"事实/价值/前提\", \"positions\": [{{\"soul_name\": \"魂名\", \"stance\": \"立场\"}}]}}],\n  \"blind_spots\": [{{\"dimension\": \"盲区维度\", \"missing_perspective\": \"缺失的视角\", \"coverable_by_existing\": true/false, \"suggested_soul\": \"可选魂名\", \"is_structural\": true/false}}],\n  \"principal_contradiction\": {{\"description\": \"使用者的工具处境——ta被夹在什么力量之间，服务谁又被谁制约\", \"parties\": [\"力量1\", \"力量2\"], \"exposed_by\": [\"魂名\"]}},\n  \"action_program\": [{{\"direction\": \"行动方向\", \"rationale\": \"理由\", \"priority\": 1-3, \"timeline\": \"立即/一周/一月/长期\"}}],\n  \"synthesis_self_audit\": {{\"missing_perspectives\": [\"本综合可能遗漏的视角\"], \"synthesizer_bias\": \"综合官自身的潜在偏向\"}}\n}}\n\n规则：\n- divergence_type 必须是 事实/价值/前提 三者之一\n- is_structural=true 表示所有参与魂结构性地看不到这个维度（本体论/认识论限制）\n- priority 1=最高 3=最低\n- synthesis_self_audit 必须诚实标注——综合官也是站在某个立场上进行综合的", SYNTHESIS_SYSTEM_PROMPT),
+                    content: format!("{}\n\n## JSON 输出格式\n严格按以下 JSON 格式输出（不要 markdown 包裹）：\n{{\n  \"consensus\": [{{\"point\": \"共识内容\", \"shared_by\": [\"魂名1\", \"魂名2\"], \"depth\": \"独立抵达/表面共识\"}}],\n  \"divergence\": [{{\"axis\": \"分歧轴描述\", \"divergence_type\": \"事实/价值/前提\", \"positions\": [{{\"soul_name\": \"魂名\", \"stance\": \"立场\"}}]}}],\n  \"blind_spots\": [{{\"dimension\": \"盲区维度\", \"missing_perspective\": \"缺失的视角\", \"coverable_by_existing\": true/false, \"suggested_soul\": \"可选魂名\", \"is_structural\": true/false}}],\n  \"principal_contradiction\": {{\"description\": \"使用者的工具处境——ta被夹在什么力量之间，服务谁又被谁制约\", \"parties\": [\"力量1\", \"力量2\"], \"exposed_by\": [\"魂名\"]}},\n  \"action_program\": [{{\"direction\": \"行动方向\", \"rationale\": \"理由\", \"priority\": 1-3, \"timeline\": \"立即/一周/一月/长期\"}}],\n  \"synthesis_self_audit\": {{\"missing_perspectives\": [\"本综合可能遗漏的视角\"], \"synthesizer_bias\": \"综合官自身的潜在偏向\"}}\n}}\n\n规则：\n- divergence_type 必须是 事实/价值/前提 三者之一\n- is_structural=true 表示所有参与魂结构性地看不到这个维度（本体论/认识论限制）\n- priority 1=最高 3=最低\n- synthesis_self_audit 必须诚实标注——综合官也是站在某个立场上进行综合的", self.domain.synthesis_system_prompt),
                     reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
                 PromptMessage { role: "user".into(), content: user_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
@@ -546,12 +598,12 @@ impl PromptBuilder {
             user_content.push_str(&format!("\n### {}\n{}\n", name, content));
         }
         user_content.push_str(&format!("\n## 实时碰撞检测摘要\n在魂并行输出过程中，系统检测到以下碰撞事件。这些事件可能揭示了输出文本中没有明确写出来、但在思维过程中实时发生的冲突。请综合这些碰撞信息进行辩证综合：\n\n{}", collision_summary));
-        user_content.push_str("\n请按五步辩证综合法进行综合。输出一份完整的综合报告。");
+        user_content.push_str(&format!("\n请按五步{}法进行综合。输出一份完整的综合报告。", self.domain.terms.get("synthesis_noun").cloned().unwrap_or_else(|| "辩证综合".into())));
         Prompt {
             messages: vec![
                 PromptMessage {
                     role: "system".into(),
-                    content: SYNTHESIS_SYSTEM_PROMPT.into(),
+                    content: self.domain.synthesis_system_prompt.clone(),
                     reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
                 PromptMessage { role: "user".into(), content: user_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
@@ -567,8 +619,8 @@ impl PromptBuilder {
         context: Option<&str>,
     ) -> Prompt {
         let system = format!(
-            "你是 {}，ismism 坐标 {}。你正在与 {} 就以下议题进行辩论。请站在你的立场用你的思维方式进行论证和反驳。保持角色一致性。",
-            soul.name, soul.ismism_code, opponent
+            "你是 {}，{} {}。你正在与 {} 就以下议题进行辩论。请站在你的立场用你的思维方式进行论证和反驳。保持角色一致性。",
+            soul.name, self.coord_label(), soul.ismism_code, opponent
         );
         let mut user = format!("辩论议题：{}\n\n", topic);
         if let Some(c) = context {
@@ -590,8 +642,8 @@ impl PromptBuilder {
         task: &str,
     ) -> Prompt {
         let system = format!(
-            "你是 {}，ismism 坐标 {}（{}）。\n\n{}",
-            soul.name, soul.ismism_code, soul.field, soul.summon_prompt
+            "你是 {}，{} {}（{}）。\n\n{}",
+            soul.name, self.coord_label(), soul.ismism_code, soul.field, soul.summon_prompt
         );
         let mut user = format!("任务：{}\n\n", task);
         if let Some(po) = prev_output {
@@ -614,7 +666,7 @@ impl PromptBuilder {
                 PromptMessage {
                     role: "user".into(),
                     content: format!(
-                        "魂名：{}\nismism：{}\n召唤提示：{}\n输出：{}\n\n请评价该魂是否保持了角色一致性，是否符合其 ismism 坐标所描述的立场。如有偏差请指出。",
+                        "魂名：{}\n坐标：{}\n召唤提示：{}\n输出：{}\n\n请评价该魂是否保持了角色一致性，是否符合其坐标所描述的立场。如有偏差请指出。",
                         soul.name, soul.ismism_code, soul.summon_prompt, output
                     ),
                     reasoning_content: None, tool_call_id: None, tool_calls: None
@@ -633,8 +685,8 @@ impl PromptBuilder {
                 PromptMessage {
                     role: "system".into(),
                     content: format!(
-                        "你是 {}，ismism 坐标 {}。你现在以实践开口模式运行。一个实践者（在场者）提供了其实践现场数据，需要你从自己的立场和理论视角进行消化分析。记住：你的分析要服务于实践者的行动改进。",
-                        soul.name, soul.ismism_code
+                        "你是 {}，{} {}。你现在以实践开口模式运行。一个实践者（在场者）提供了其实践现场数据，需要你从自己的立场和理论视角进行消化分析。记住：你的分析要服务于实践者的行动改进。",
+                        soul.name, self.coord_label(), soul.ismism_code
                     ),
                     reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
@@ -651,22 +703,24 @@ impl PromptBuilder {
     }
 
     pub fn build_collect_prompt(&self, name: &str) -> Prompt {
+        let coord = &self.domain.coordinate;
+        let legend = self.domain.coordinate_legend();
+        let d0 = coord.dimensions.first().map(|d| d.name.as_str()).unwrap_or("场域");
+        let d1 = coord.dimensions.get(1).map(|d| d.name.as_str()).unwrap_or("本体论");
+        let d2 = coord.dimensions.get(2).map(|d| d.name.as_str()).unwrap_or("认识论");
+        let d3 = coord.dimensions.get(3).map(|d| d.name.as_str()).unwrap_or("目的论");
         Prompt {
             messages: vec![
                 PromptMessage {
                     role: "system".into(),
-                    content: "你是一个人物研究助手。你的任务是对指定人物进行收魂（信息收集），输出结构化的 raw 素材，为后续炼化（生成召唤词）提供高质量原材料。注意：此人物的思想/作品是严肃的——你在整理时也要保持严肃。**严禁剧场式旁白描写**：不要写'XXX从书堆中抬起头，目光如炬'之类的第三人称叙事。只输出事实和信息。请基于你的知识提供以下维度的信息：".into(),
+                    content: self.domain.collect_system_intro.clone(),
                     reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
                 PromptMessage {
                     role: "user".into(),
                     content: format!(
-                        "人物：{}\n\n请按以下维度输出（中文，每个维度要具体、有原文引用和事例，不要空洞概括）：\n\n## 生平\n（生卒年、关键转折事件、时代背景、阶级/社会位置）\n\n## 核心思想\n（主要理论/观点/贡献，每点给出核心命题+原文或代表性表述，3-5点）\n\n## 方法论\n（这个人的思维工具箱里有什么？怎么分析问题？有什么独特的思维习惯或技术？给出具体的分析步骤或框架）\n\n## 代表作\n（主要著作、论文、演讲，每部用一句话说明核心主张）\n\n## 语言风格\n（怎么说话？用什么句式？对什么受众？标志性表达、口头禅、修辞习惯。给出3-5个典型句式或原句引用）\n\n## 决策原则\n（这个人在关键时刻怎么选择？有什么不变的底线？有什么灵活的策略？）\n\n## 盲区与边界\n（这个人必然看不见什么？他的方法论在什么条件下失效？他自己承认过什么局限？）\n\n## 影响与争议\n（对后世的影响、主要批判者及其核心论点）\n\n## ismism 四维定位建议\n- 场域（1-4）：{}\n- 本体论（1-4）：{}\n- 认识论（1-4）：{}\n- 目的论（1-4）：{}",
-                        name,
-                        "场域(1-4)：1=形而下学(气学/自然科学), 2=形而上学(道学), 3=观念论(心学), 4=实践·辩证唯物主义",
-                        "本体论(1-4)：1=同一性/循环/秩序, 2=分裂/冲突/二元对立, 3=中心化/中介/调和, 4=虚无/敞开/内在不可能性",
-                        "认识论(1-4)：1=同一性/实证/循环, 2=分裂/建构/二元, 3=中心化/历史/辩证, 4=虚无/解构/敞开",
-                        "目的论(1-4)：1=保守/秩序/同一, 2=多元/分裂/循环, 3=进步/中心化/调和, 4=革命/虚无/敞开",
+                        "人物：{}\n\n请按以下维度输出（中文，每个维度要具体、有原文引用和事例，不要空洞概括）：\n\n## 生平\n（生卒年、关键转折事件、时代背景、阶级/社会位置）\n\n## 核心思想\n（主要理论/观点/贡献，每点给出核心命题+原文或代表性表述，3-5点）\n\n## 方法论\n（这个人的思维工具箱里有什么？怎么分析问题？有什么独特的思维习惯或技术？给出具体的分析步骤或框架）\n\n## 代表作\n（主要著作、论文、演讲，每部用一句话说明核心主张）\n\n## 语言风格\n（怎么说话？用什么句式？对什么受众？标志性表达、口头禅、修辞习惯。给出3-5个典型句式或原句引用）\n\n## 决策原则\n（这个人在关键时刻怎么选择？有什么不变的底线？有什么灵活的策略？）\n\n## 盲区与边界\n（这个人必然看不见什么？他的方法论在什么条件下失效？他自己承认过什么局限？）\n\n## 影响与争议\n（对后世的影响、主要批判者及其核心论点）\n\n## 四维定位建议\n{}\n- {}（1-4）\n- {}（1-4）\n- {}（1-4）\n- {}（1-4）",
+                        name, legend, d0, d1, d2, d3,
                     ),
                     reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
@@ -861,8 +915,8 @@ impl PromptBuilder {
                 PromptMessage {
                     role: "user".into(),
                     content: format!(
-                        "## Raw 素材\n{}\n\n{}\n\n## 输出格式\n请返回 JSON（不要 markdown 包裹）：\n{{\n  \"name\": \"角色名（与 raw 素材中的名字一致）\",\n  \"ismism_code\": \"f-o-e-t（四个数字，用-分隔）\",\n  \"field\": \"所属领域（用中文，如：哲学/经济学/物理学/文学/政治学等）\",\n  \"ontology\": \"本体论立场的一句话描述——这个角色认为什么是最真实的存在？\",\n  \"epistemology\": \"认识论立场的一句话描述——这个角色凭什么说'知道了'？\",\n  \"teleology\": \"目的论立场的一句话描述——这个角色要把人往哪个方向带？\",\n  \"domains\": [\"领域1\",\"领域2\"],\n  \"tags\": [\"标签1\",\"标签2\"],\n  \"summon_prompt\": \"按上面三个示例的结构+密度来写。1500-3000字。用角色自己的语言和思维节奏。如果不到1500字——重写。\",\n  \"voice\": \"一句话概括角色的表达风格和标志性语言特征\",\n  \"mind\": \"一句话概括角色的核心思维特质\",\n  \"self_declare\": \"以第一人称写一段30-80字的自我声明——'我是XXX。我做什么，我不做什么。我跟谁互补，我跟谁不兼容。'\",\n  \"rationale\": \"ismism 编码四个数字分别为什么，每个给一句话理据。格式：场域=X因为...；本体=X因为...；认识=X因为...；目的=X因为...\"\n}}\n\n## 主义主义 256 目录参考\n场域：1=形而下学(气学/自然科学/经验主义) 2=形而上学(道学/理性主义/体系哲学) 3=观念论(心学/唯心主义/主体性哲学) 4=实践·辩证唯物主义(革命行动/改造世界)\n本体论：1=同一/循环/秩序 2=分裂/冲突/二元对立 3=中心化/中介/调和/综合 4=虚无/敞开/内在不可能性\n认识论：1=同一/实证/循环 2=分裂/建构/二元 3=中心化/历史/辩证 4=虚无/解构/敞开\n目的论：1=保守/秩序/同一 2=多元/分裂/循环 3=进步/中心化/调和 4=革命/虚无/敞开\n\n规则：ismism 编码必须基于素材实际内容，不凭空编造。编码后必须在 rationale 中解释每个数字的理据。",
-                        raw_material, template
+                        "## Raw 素材\n{}\n\n{}\n\n## 输出格式\n请返回 JSON（不要 markdown 包裹）：\n{{\n  \"name\": \"角色名（与 raw 素材中的名字一致）\",\n  \"ismism_code\": \"f-o-e-t（四个数字，用-分隔）\",\n  \"field\": \"所属领域（用中文，如：哲学/经济学/物理学/文学/政治学等）\",\n  \"ontology\": \"本体论立场的一句话描述——这个角色认为什么是最真实的存在？\",\n  \"epistemology\": \"认识论立场的一句话描述——这个角色凭什么说'知道了'？\",\n  \"teleology\": \"目的论立场的一句话描述——这个角色要把人往哪个方向带？\",\n  \"domains\": [\"领域1\",\"领域2\"],\n  \"tags\": [\"标签1\",\"标签2\"],\n  \"summon_prompt\": \"按上面三个示例的结构+密度来写。1500-3000字。用角色自己的语言和思维节奏。如果不到1500字——重写。\",\n  \"voice\": \"一句话概括角色的表达风格和标志性语言特征\",\n  \"mind\": \"一句话概括角色的核心思维特质\",\n  \"self_declare\": \"以第一人称写一段30-80字的自我声明——'我是XXX。我做什么，我不做什么。我跟谁互补，我跟谁不兼容。'\",\n  \"rationale\": \"四维编码四个数字分别为什么，每个给一句话理据。\"\n}}\n\n## 坐标系参考\n{}\n\n规则：编码必须基于素材实际内容，不凭空编造。编码后必须在 rationale 中解释每个数字的理据。",
+                        raw_material, template, self.domain.coordinate_legend()
                     ),
                     reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
@@ -994,7 +1048,26 @@ impl PromptBuilder {
     /// 入场审讯：审查官（默认未明子）读使用者的提问，判断其欲望结构，
     /// 生成 2-4 个反问卡片要求使用者逐条填写。返回 JSON 数组。
     pub fn build_interrogation_prompt(&self, task: &str) -> Prompt {
-        let system_content = r#"你是审查官。使用者在下面给了你一个议题。你的任务有两层。
+        // Domain-aware system prompt: labor/worker domain gets additional evidence & action layers
+        let is_labor_domain = self.domain.terms.get("system_name")
+            .map(|n| n == "工友智囊团")
+            .unwrap_or(false);
+
+        let system_content = if is_labor_domain {
+            r#"你是事实核查员。劳动者在下面给了你一个处境。你的任务有三层。
+
+第一层：追问只有使用者才能提供的**具体事实**——钉在处境的具体环节上。什么时间？谁说的？有没有书面记录？合同里怎么写的？公司给的理由是什么？
+
+第二层：当使用者的描述里出现了"没办法""公司规定就是这样""一直都是这样"这类表述时，追问**谁在维护这个局面**——不是让ta反思自己，是帮ta看清：这条规则谁制定的？谁从中受益？如果打破它，谁的损失最大？
+
+第三层：追问**证据和准备**——你手头有什么可以证明你说法的东西（合同？工资条？聊天记录？录音？）？如果最坏的情况发生，你有什么退路？
+
+每轮提出 2-4 个反问，三层可以混合。反问必须钉在处境的具体环节上——不是"你合同签了吗"这种通用问题，是"合同第3条第2款关于离职条件是怎么写的"这种具体问题。
+
+输出纯 JSON 数组，不要任何其他文字：
+[{"text": "反问题目", "required": true}]"#.to_string()
+        } else {
+            r#"你是审查官。使用者在下面给了你一个议题。你的任务有两层。
 
 第一层：围绕议题追问只有使用者才能提供的**具体事实**——钉在议题的具体环节上，不是换关键词的通用模板。ta跳过了什么？什么被省略了？
 
@@ -1005,7 +1078,8 @@ impl PromptBuilder {
 每轮提出 2-4 个反问，两层可以混合。
 
 输出纯 JSON 数组，不要任何其他文字：
-[{"text": "反问题目", "required": true}]"#.to_string();
+[{"text": "反问题目", "required": true}]"#.to_string()
+        };
 
         Prompt {
             messages: vec![
