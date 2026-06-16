@@ -67,7 +67,7 @@ pub async fn run(
                     let definitions = tool_registry.filter_definitions(&tool_names);
                     if !definitions.is_empty() {
                         config = config.with_tools(definitions);
-                    }
+            }
                 }
 
                 let prompt = if let Some(card) = task_cards.get(soul_name) {
@@ -158,7 +158,7 @@ pub async fn run(
                     acc.push(output);
                     if acc.len() >= expected_soul_count {
                         break;
-                    }
+            }
                 }
                 Err(e) => {
                     acc.push(SoulOutput::error("unknown".into(), e.to_string()));
@@ -180,7 +180,7 @@ pub async fn run(
                 match tokio::time::timeout(Duration::from_millis(50), set.join_next()).await {
                     Ok(Some(Ok(output))) => {
                         acc.push(output);
-                    }
+            }
                     _ => break,
                 }
             }
@@ -268,7 +268,7 @@ pub async fn run(
                         empty_chair: None,
                         user_feedback: None,
                         usage: synth_usage,
-                    }).await;
+            }).await;
                 }
 
                 if let Err(e) = store.archive_synthesis(session_id, &content).await {
@@ -292,14 +292,14 @@ pub async fn run(
                 if !recommendations.is_empty() {
                     let payload = serde_json::json!({
                         "recommendations": recommendations,
-                    });
+            });
                     let _ = system_tx.try_send(WsEvent {
                         event_type: WsEventType::SoulRecommendations,
                         payload: payload.to_string(),
                         reasoning_content: None,
                         soul_name: None,
                         seq: 0,
-                    }).ok();
+            }).ok();
                 }
 
                 let card_content = content;
@@ -309,7 +309,7 @@ pub async fn run(
                         content: format!("从以下辩证综合报告中提取最核心的 ≤500 字的卡片：\n\n{}", if card_content.len() > 3000 { &card_content[..3000] } else { &card_content }),
                         reasoning_content: None,
                         ..Default::default()
-                    }],
+            }],
                 };
                 let card_config = CallConfig { temperature: 0.3, max_tokens: 256, stream: false, ..Default::default() };
                 let card_req = LLMRequest { provider: card_provider, prompt: card_prompt, config: card_config };
@@ -330,8 +330,8 @@ pub async fn run(
                             if let Ok(c) = r {
                                 if let Some(u) = c.usage { card_usage = u; }
                                 card.push_str(&c.content);
-                            }
-                        }
+            }
+                }
                         if !card.is_empty() {
                             let card_entity = KnowledgeCard {
                                 id: uuid::Uuid::new_v4().to_string(),
@@ -342,9 +342,9 @@ pub async fn run(
                                 tags: souls.to_vec(),
                                 created_at: chrono::Utc::now(),
                                 updated_at: chrono::Utc::now(),
-                            };
+            };
                             let _ = store.insert_knowledge_card(&card_entity).await;
-                        }
+                }
                         if card_usage.total_tokens > 0 {
                             let _ = store.record_call(&foundation::CallRecord {
                                 id: uuid::Uuid::new_v4().to_string(),
@@ -359,9 +359,9 @@ pub async fn run(
                                 empty_chair: None,
                                 user_feedback: None,
                                 usage: card_usage,
-                            }).await;
-                        }
-                    }
+            }).await;
+                }
+            }
                 };
 
                 let ann_fut = async {
@@ -372,8 +372,8 @@ pub async fn run(
                         if let Ok(c) = r {
                             if let Some(u) = c.usage { ann_usage = u; }
                             raw.push_str(&c.content);
-                        }
-                    }
+                }
+            }
                     if ann_usage.total_tokens > 0 {
                         let _ = store.record_call(&foundation::CallRecord {
                             id: uuid::Uuid::new_v4().to_string(),
@@ -388,8 +388,8 @@ pub async fn run(
                             empty_chair: None,
                             user_feedback: None,
                             usage: ann_usage,
-                        }).await;
-                    }
+                }).await;
+            }
                     let trimmed = raw.trim();
                     let json_str = trimmed
                         .trim_start_matches("```json")
@@ -409,8 +409,8 @@ pub async fn run(
                                     comment: v.get("comment")?.as_str()?.to_string(),
                                     kind: v.get("kind").and_then(|k| k.as_str()).unwrap_or("nuance").to_string(),
                                     created_at: now,
-                                })
-                            }).collect();
+                })
+            }).collect();
                             if !annotations.is_empty() {
                                 match store.insert_annotations(&annotations).await {
                                     Ok(_) => {
@@ -422,24 +422,24 @@ pub async fn run(
                                             reasoning_content: None,
                                             soul_name: None,
                                             seq: 0,
-                                        }).ok();
+                        }).ok();
                                         tracing::info!(
                                             "Persisted {} marginalia annotations for session {}",
                                             annotations.len(),
                                             session_id
-                                        );
-                                    }
+                                );
+                    }
                                     Err(e) => {
                                         tracing::error!("Failed to persist annotations: {}", e);
-                                    }
-                                }
-                            }
-                        }
+                    }
+                }
+            }
+                }
                         Err(e) => {
-                            tracing::warn!("Failed to parse annotation JSON: {} (raw len={})", e, raw.len());
-                        }
-                    }
-                    }
+                    tracing::warn!("Failed to parse annotation JSON: {} (raw len={})", e, raw.len());
+                }
+            }
+            }
                 };
 
                 tokio::join!(card_fut, ann_fut);
@@ -513,7 +513,7 @@ async fn run_soul_with_tools(
                         used_providers.push(next_provider);
                         current_provider = next_provider;
                         continue;
-                    }
+            }
                 }
 
                 ws.broadcast_soul(
@@ -525,7 +525,7 @@ async fn run_soul_with_tools(
                         reasoning_content: None,
                         soul_name: Some(name.clone()),
                         seq: 0,
-                    },
+            },
                 );
                 return SoulOutput::error(name, error_msg);
             }
@@ -540,32 +540,33 @@ async fn run_soul_with_tools(
         ).await;
 
         if output.error.is_some() {
-                    if let Some(next_provider) = gw.try_next_provider(&current_provider) {
-                        if !used_providers.contains(&next_provider) {
-                            tracing::warn!(
-                                "Soul '{}' provider {:?} stream failed, trying fallback {:?}",
-                                name, current_provider, next_provider
-                            );
-                            used_providers.push(next_provider);
-                            current_provider = next_provider;
-                            continue;
-                        }
-                    }
-                    return output;
+            gw.mark_provider_unhealthy(&current_provider, output.error.clone().unwrap_or_default());
+            if let Some(next_provider) = gw.try_next_provider(&current_provider) {
+                if !used_providers.contains(&next_provider) {
+                    tracing::warn!(
+                        "Soul '{}' provider {:?} stream failed, trying fallback {:?}",
+                        name, current_provider, next_provider
+                    );
+                    used_providers.push(next_provider);
+                    current_provider = next_provider;
+                    continue;
                 }
+            }
+            return output;
+        }
 
-                if output.tool_calls.is_empty() {
-                    gw.mark_provider_healthy(&current_provider);
-                    return output;
-                }
+        if output.tool_calls.is_empty() {
+            gw.mark_provider_healthy(&current_provider);
+            return output;
+        }
 
-                for tc in &output.tool_calls {
+        for tc in &output.tool_calls {
                     let payload = crate::ToolCallPayload {
                         tool_call_id: tc.id.clone(),
                         tool_name: tc.function.name.clone(),
                         arguments: tc.function.arguments.clone(),
                         soul_name: name.clone(),
-                    };
+            };
                     let json = serde_json::to_string(&payload).unwrap_or_default();
                     ws.broadcast_soul(session_id, &name, &WsEvent {
                         event_type: WsEventType::ToolCallStarted,
@@ -573,7 +574,7 @@ async fn run_soul_with_tools(
                         reasoning_content: None,
                         soul_name: Some(name.clone()),
                         seq: 0,
-                    });
+            });
 
                     match tool_registry.execute(tc).await {
                         Ok(result) => {
@@ -582,7 +583,7 @@ async fn run_soul_with_tools(
                                 tool_name: tc.function.name.clone(),
                                 result: result.clone(),
                                 soul_name: name.clone(),
-                            };
+            };
                             let result_json = serde_json::to_string(&result_payload).unwrap_or_default();
                             ws.broadcast_soul(session_id, &name, &WsEvent {
                                 event_type: WsEventType::ToolResult,
@@ -590,7 +591,7 @@ async fn run_soul_with_tools(
                                 reasoning_content: None,
                                 soul_name: Some(name.clone()),
                                 seq: 0,
-                            });
+            });
 
                             history.push(foundation::PromptMessage {
                                 role: "assistant".to_string(),
@@ -598,15 +599,15 @@ async fn run_soul_with_tools(
                                 reasoning_content: Some(String::new()),
                                 tool_calls: Some(output.tool_calls.clone()),
                                 tool_call_id: None,
-                            });
+            });
                             history.push(foundation::PromptMessage {
                                 role: "tool".to_string(),
                                 content: result,
                                 reasoning_content: None,
                                 tool_calls: None,
                                 tool_call_id: Some(tc.id.clone()),
-                            });
-                        }
+            });
+                }
                         Err(e) => {
                             let error_msg = format!("Tool {} failed: {}", tc.function.name, e);
                             ws.broadcast_soul(
@@ -618,11 +619,11 @@ async fn run_soul_with_tools(
                                     reasoning_content: None,
                                     soul_name: Some(name.clone()),
                                     seq: 0,
-                                },
-                            );
+                },
+                    );
                             return SoulOutput::error(name, error_msg);
-                        }
-                    }
+                }
+            }
                 }
             }
 
@@ -683,7 +684,7 @@ async fn stream_single_soul_with_detection_with_provider(
                             reasoning_content: chunk.reasoning_content.clone(),
                             soul_name: Some(name.clone()),
                             seq,
-                        },
+                },
                     );
 
                     // 直接调用检测器，不走广播通道
@@ -701,10 +702,10 @@ async fn stream_single_soul_with_detection_with_provider(
                                 reasoning_content: Some(reasoning.clone()),
                                 soul_name: Some(name.clone()),
                                 seq,
-                            },
+            },
                         );
                         seq += 1;
-                    }
+            }
                 }
                 if chunk.finish_reason.as_deref() == Some("length") {
                     truncated = true;
@@ -722,7 +723,7 @@ async fn stream_single_soul_with_detection_with_provider(
                         reasoning_content: None,
                         soul_name: Some(name.clone()),
                         seq,
-                    },
+            },
                 );
                 return SoulOutput::error(name, error_msg);
             }
@@ -784,8 +785,8 @@ fn extract_recommended_souls(synthesis: &str) -> Vec<serde_json::Value> {
                         results.push(serde_json::json!({
                             "name": name,
                             "rationale": if rationale.is_empty() { "综合官推荐补充" } else { rationale },
-                        }));
-                    }
+                }));
+            }
                 }
             }
         }

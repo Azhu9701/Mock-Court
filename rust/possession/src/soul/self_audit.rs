@@ -1,4 +1,4 @@
-use foundation::{Result, SoulProfile};
+use foundation::SoulProfile;
 
 const CONTRADICTION_PATTERNS: &[(&str, &str)] = &[
     ("一方面", "另一方面"),
