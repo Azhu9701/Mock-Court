@@ -87,12 +87,37 @@ pub struct TriggerMarkers {
 impl Default for TriggerMarkers {
     fn default() -> Self {
         TriggerMarkers {
-            single: vec!["简单".into(), "快速".into(), "一句话".into(), "查询".into()],
-            conference: vec!["分析".into(), "综合".into(), "多角度".into(), "全面".into(), "评估".into()],
-            debate: vec!["还是".into(), "要么".into(), "或者".into(), "利弊".into(), "优劣".into(), "权衡".into()],
-            relay: vec!["步骤".into(), "流程".into(), "阶段".into(), "路线".into(), "路径".into()],
-            learn: vec!["学习".into(), "了解".into(), "是什么".into(), "教我".into(), "解释".into()],
-            practice: vec!["我的".into(), "我公司".into(), "我们".into(), "最近".into(), "正在".into()],
+            single: vec![
+                "简单".into(), "快速".into(), "一句话".into(), "查询".into(),
+            ],
+            conference: vec![
+                "分析".into(), "综合".into(), "多角度".into(), "全面".into(), "评估".into(),
+            ],
+            debate: vec![
+                "还是".into(), "要么".into(), "或者".into(), "利弊".into(), "优劣".into(),
+                "权衡".into(), "两难".into(), "选择".into(), "取舍".into(),
+                "对立".into(), "矛盾".into(), "冲突".into(), "辩论".into(), "争论".into(),
+            ],
+            relay: vec![
+                "步骤".into(), "流程".into(), "阶段".into(), "路线".into(), "路径".into(),
+                "路线图".into(), "然后".into(), "接着".into(), "下一步".into(), "之后".into(),
+                "最终".into(),
+            ],
+            learn: vec![
+                "学习".into(), "了解".into(), "是什么".into(), "怎么理解".into(),
+                "教我".into(), "解释一下".into(), "解释".into(),
+                "理论".into(), "概念".into(), "思想".into(), "哲学".into(), "方法论".into(),
+            ],
+            practice: vec![
+                "我的".into(), "我公司".into(), "我工厂".into(), "我们".into(),
+                "最近".into(), "昨天".into(), "今天".into(), "上周".into(),
+                "正在".into(), "上次".into(),
+                "我做了".into(), "我经历过".into(), "我的项目".into(), "我遇到".into(),
+                "我观察到".into(),
+                "车间".into(), "产线".into(), "出货".into(), "供应商".into(),
+                "工单".into(), "来料".into(), "客户".into(), "竞品".into(),
+                "报价".into(), "招投标".into(),
+            ],
         }
     }
 }
