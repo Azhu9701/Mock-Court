@@ -10,7 +10,7 @@ pub mod semantic_collision;
 pub mod distiller;
 
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use ai_gateway::GatewayRegistry;
 use foundation::{
@@ -317,6 +317,7 @@ pub struct PossessionEngine {
     ws_manager: WsSessionManager,
     shutdown_flag: AtomicBool,
     tool_registry: tools::ToolRegistry,
+    domain: Arc<RwLock<foundation::DomainProfile>>,
 }
 
 impl PossessionEngine {
@@ -324,6 +325,7 @@ impl PossessionEngine {
         store: Arc<dyn Storage>,
         registry: Arc<SoulRegistry>,
         gateway: Arc<GatewayRegistry>,
+        domain: foundation::DomainProfile,
     ) -> Self {
         PossessionEngine {
             store,
@@ -332,7 +334,19 @@ impl PossessionEngine {
             ws_manager: WsSessionManager::new(),
             shutdown_flag: AtomicBool::new(false),
             tool_registry: tools::ToolRegistry::new(),
+            domain: Arc::new(RwLock::new(domain)),
         }
+    }
+
+    /// 热重载领域配置——无需重启 API
+    pub fn reload_domain(&self, new: foundation::DomainProfile) {
+        *self.domain.write().unwrap() = new;
+        tracing::info!("Domain profile reloaded at runtime");
+    }
+
+    /// 获取领域配置快照（clone）
+    pub fn domain(&self) -> foundation::DomainProfile {
+        self.domain.read().unwrap().clone()
     }
 
     pub fn tool_registry(&self) -> &tools::ToolRegistry {
@@ -348,7 +362,7 @@ impl PossessionEngine {
         input: PossessionInput,
         system_tx: mpsc::Sender<WsEvent>,
     ) -> Result<String> {
-        let entry = triage::triage(&input);
+        let entry = triage::triage(&input, &self.domain());
         let session_id = Uuid::new_v4().to_string();
         let mode = entry_to_mode(&entry);
 
@@ -375,6 +389,7 @@ impl PossessionEngine {
         let sid = session_id.clone();
         let task = input.task.clone();
         let created_at = session.created_at;
+        let domain_for_dispatch = self.domain.read().unwrap().clone();
 
         tokio::spawn(async move {
             let result = dispatch_mode(
@@ -387,6 +402,7 @@ impl PossessionEngine {
                 &sid,
                 &input,
                 &system_tx,
+                &domain_for_dispatch,
             )
             .await;
 
@@ -457,6 +473,7 @@ async fn dispatch_mode(
     session_id: &str,
     input: &PossessionInput,
     system_tx: &mpsc::Sender<WsEvent>,
+    domain: &foundation::DomainProfile,
 ) -> Result<()> {
     let presets = UserPresets::from(input);
 
@@ -506,7 +523,7 @@ async fn dispatch_mode(
         }
         EntryType::Conference => {
             conference::run(
-                store, registry, gateway, ws, session_id, &input.task, &input.souls, &input.task_cards, &presets, system_tx, tool_registry,
+                store, registry, gateway, ws, session_id, &input.task, &input.souls, &input.task_cards, &presets, system_tx, tool_registry, domain,
             )
             .await?;
         }
