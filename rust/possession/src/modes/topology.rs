@@ -208,6 +208,7 @@ impl TopologyPlanner {
 /// 拓扑动态监控器
 ///
 /// 在合议进行中监控碰撞率和语义重叠，必要时自动降级拓扑以节省成本
+#[allow(dead_code)]
 pub struct TopologyMonitor {
     /// 多久后触发检查（秒）
     pub check_after_secs: u64,
@@ -227,6 +228,7 @@ impl Default for TopologyMonitor {
     }
 }
 
+#[allow(dead_code)]
 impl TopologyMonitor {
     pub fn new() -> Self {
         Self::default()
