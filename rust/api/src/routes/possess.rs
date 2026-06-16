@@ -1148,6 +1148,10 @@ async fn analyze_task(
             final_verified_souls.extend(fills);
         }
 
+        // Cap total souls to prevent matching explosion
+        let max_souls = 5usize;
+        final_verified_souls.truncate(max_souls);
+
         // ── Step 4: 以审查官 verified_souls 为唯一权威 ──
         // 审查官是唯一权威。算法匹配只是参考，终裁的 verified_souls 决定最终阵容。
         let final_souls = if !final_verified_souls.is_empty() {
