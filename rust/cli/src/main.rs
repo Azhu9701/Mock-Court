@@ -7,6 +7,8 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
+mod init;
+
 // ── CLI Arguments ───────────────────────────────────────────────────────
 
 #[derive(Parser)]
@@ -48,6 +50,23 @@ enum Commands {
         server: String,
         #[arg(long)]
         token: Option<String>,
+    },
+    /// 生成新项目骨架
+    Init {
+        /// 项目名称
+        name: String,
+        /// 领域模板: custom, philosophy, legal, labor
+        #[arg(long, default_value = "custom")]
+        domain: String,
+        /// API 端口
+        #[arg(long, default_value = "3001")]
+        port: u16,
+        /// 前端端口
+        #[arg(long, default_value = "3000")]
+        frontend_port: u16,
+        /// 跳过前端生成
+        #[arg(long)]
+        skip_frontend: bool,
     },
 }
 
@@ -512,6 +531,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let resp = client.get(format!("{}/api/v1/sessions", server)).send().await?;
             let sessions: serde_json::Value = resp.json().await?;
             println!("{}", serde_json::to_string_pretty(&sessions)?);
+        }
+        Commands::Init { name, domain, port, frontend_port, skip_frontend } => {
+            init::run(init::InitArgs {
+                project_name: name,
+                domain,
+                port,
+                frontend_port,
+                skip_frontend,
+            })?;
         }
     }
 
