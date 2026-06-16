@@ -11,8 +11,9 @@ import {
   MessageCircle, Wand2
 } from "lucide-react";
 import {
-  analyzeTask, startPossession, searchWeb, startInterrogation, submitInterrogation,
-  type SearxngResultItem, type InterrogationQuestion, type InterrogationVerdictResponse,
+  analyzeTask, startPossession, searchWeb, submitInterrogation,
+  type SearxngResultItem, type InterrogationQuestion, type InterrogationVerdictResponse, type InterrogationResponse,
+  API_BASE,
 } from "@/lib/api";
 import { 
   MODE_LABELS_LONG, 
@@ -25,6 +26,7 @@ import {
 import { triggerSessionsUpdate } from "@/components/sidebar-sessions";
 import { AttachmentUpload } from "@/components/attachment-upload";
 import { SoulCarousel } from "@/components/soul-carousel";
+import { getSoulAvatarBg } from "@/lib/soul-utils";
 import { cn } from "@/lib/utils";
 import { SessionContextHeader } from "@/components/session-context-header";
 
@@ -103,6 +105,10 @@ export function PossessionEntry() {
   const [currentStreamSource, setCurrentStreamSource] = useState<string>("");
   const [isStreaming, setIsStreaming] = useState(false);
   const isStreamingRef = useRef(false);
+  // 流式内容缓冲 — 用 ref 积累 token，节流 flush 到 React state，避免高频 setState 爆内存
+  const streamBufferRef = useRef("");
+  const streamFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const STREAM_FLUSH_MS = 50; // 20fps flush
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
@@ -114,8 +120,13 @@ export function PossessionEntry() {
 
   const logEndRef = useRef<HTMLDivElement>(null);
 
+  const MAX_LOG_ENTRIES = 200;
+
   const addLog = useCallback((msg: string) => {
-    setLog((p) => [...p, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+    setLog((p) => {
+      const next = [...p, `[${new Date().toLocaleTimeString()}] ${msg}`];
+      return next.length > MAX_LOG_ENTRIES ? next.slice(-MAX_LOG_ENTRIES) : next;
+    });
   }, []);
 
   useEffect(() => {
@@ -127,6 +138,16 @@ export function PossessionEntry() {
       triggerSessionsUpdate();
     }
   }, [sessionDone]);
+
+  // 卸载时清理流式缓冲定时器，防止泄漏
+  useEffect(() => {
+    return () => {
+      if (streamFlushTimerRef.current) {
+        clearTimeout(streamFlushTimerRef.current);
+        streamFlushTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const handleOcrResults = useCallback((texts: string[]) => {
     const block = texts.join("\n\n");
@@ -253,12 +274,22 @@ export function PossessionEntry() {
     // ── 审查官入场审讯 ──
     if (skipInterrogationRef.current) {
       skipInterrogationRef.current = false;
-      // 已经通过了审查，直接跳过
     } else try {
       setPhase("interrogation");
-      setProgressLine("审查官正在审问你的提问意图…");
+      setProgressLine("审查官正在审问你的提问意图…（可点击取消跳过）");
       addLog("🔍 审查官正在分析你的提问『意图』…");
-      const igResp = await startInterrogation(task);
+
+      // 直接 fetch 以支持 AbortController
+      const igRes = await fetch(`${API_BASE}/possess/interrogate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task }),
+        signal: abortRef.current!.signal,
+      });
+      if (!igRes.ok) throw new Error(`审讯接口返回 ${igRes.status}`);
+      const igResp: InterrogationResponse = await igRes.json();
+
+      if (isCancelled) return;
       setIgGateId(igResp.gate_id);
       setIgQuestions(igResp.questions);
       setIgAnswers(new Array(igResp.questions.length).fill(""));
@@ -273,10 +304,9 @@ export function PossessionEntry() {
         return; // 暂停，等用户填写反问
       }
     } catch (e: unknown) {
-      addLog(`❌ 审查官审讯失败: ${e instanceof Error ? e.message : String(e)}——请稍后重试`);
-      setPhase("input");
-      setError(`审查官审讯出错: ${e instanceof Error ? e.message : String(e)}`);
-      return;
+      // 审讯失败（LLM 超时/不可用）→ 不阻塞，直接跳过
+      addLog(`⚠️ 审查官暂时不可用 (${e instanceof Error ? e.message : String(e)})——跳过审讯直接入场`);
+      setPhase("classifying");
     }
 
     try {
@@ -355,17 +385,34 @@ export function PossessionEntry() {
             isStreamingRef.current = true;
             setIsStreaming(true);
             setCurrentStreamSource(event.source || "");
+            streamBufferRef.current = "";
             setStreamingContent("");
             addLog(`📝 ${event.source} 正在生成内容...`);
           }
           if (event.is_done) {
+            // 流结束：立即 flush 剩余缓冲，停在"已完成"状态
+            if (streamFlushTimerRef.current) {
+              clearTimeout(streamFlushTimerRef.current);
+              streamFlushTimerRef.current = null;
+            }
+            if (streamBufferRef.current) {
+              setStreamingContent(streamBufferRef.current);
+              streamBufferRef.current = "";
+            }
             isStreamingRef.current = false;
             setIsStreaming(false);
             addLog(`📝 ${event.source} 生成完成`);
-            setStreamingContent("");
-            setCurrentStreamSource("");
+            // 保留 streamingContent 和 currentStreamSource 不清空
+            // 让魂卡片持续显示"已完成"状态，直到阶段切换自然消失
           } else if (event.content) {
-            setStreamingContent((prev) => prev + event.content);
+            // 节流：写入 ref 缓冲，50ms 后批量 flush 到 React state
+            streamBufferRef.current += event.content;
+            if (!streamFlushTimerRef.current) {
+              streamFlushTimerRef.current = setTimeout(() => {
+                streamFlushTimerRef.current = null;
+                setStreamingContent(streamBufferRef.current);
+              }, STREAM_FLUSH_MS);
+            }
           }
         }
       });
@@ -1005,6 +1052,40 @@ export function PossessionEntry() {
                 </Button>
               </div>
 
+              {/* 魂卡片——agent 思考过程的流式展示 */}
+              {(isStreaming || streamingContent) && currentStreamSource && (
+                <div className="rounded-xl border border-purple-200 dark:border-purple-800/50 bg-card overflow-hidden shadow-md animate-in fade-in slide-in-from-bottom-2 duration-300">
+                  <div className="flex items-center gap-3 px-4 py-3 border-b border-purple-100 dark:border-purple-900/30 bg-purple-50/50 dark:bg-purple-950/20">
+                    <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${getSoulAvatarBg(currentStreamSource)}`}>
+                      {currentStreamSource.charAt(0)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-sm truncate">{currentStreamSource}</span>
+                        {isStreaming ? (
+                          <span className="flex items-center gap-1 text-[10px] text-purple-600 dark:text-purple-400">
+                            <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                            思考中
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400">
+                            <CheckCircle2 className="h-2.5 w-2.5" />
+                            已完成
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <Brain className={`h-4 w-4 shrink-0 ${isStreaming ? "text-purple-500 animate-pulse" : "text-muted-foreground"}`} />
+                  </div>
+                  <div className="px-4 py-3 max-h-80 overflow-y-auto">
+                    <div className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap leading-relaxed text-sm text-foreground/90">
+                      {streamingContent}
+                      {isStreaming && <span className="inline-block w-0.5 h-4 bg-purple-500 animate-pulse ml-0.5 align-middle" />}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="rounded-xl border bg-muted/20 p-4 shadow-sm">
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
@@ -1054,20 +1135,6 @@ export function PossessionEntry() {
                       <div className="text-primary font-medium flex items-center gap-2 pb-2 mb-2 border-b border-primary/10">
                         <Loader2 className="h-3 w-3 animate-spin shrink-0" />
                         <span>{progressLine}</span>
-                      </div>
-                    )}
-                    {isStreaming && streamingContent && (
-                      <div className="mt-2 mb-2 p-2 rounded-md border border-purple-200 dark:border-purple-800 bg-purple-50/50 dark:bg-purple-950/20">
-                        <div className="flex items-center gap-2 mb-1">
-                          <Loader2 className="h-3 w-3 animate-spin text-purple-500" />
-                          <span className="text-purple-600 dark:text-purple-400 font-medium text-[10px]">
-                            {currentStreamSource} 正在生成...
-                          </span>
-                        </div>
-                        <div className="text-muted-foreground whitespace-pre-wrap leading-relaxed text-[11px]">
-                          {streamingContent}
-                          <span className="animate-pulse">▌</span>
-                        </div>
                       </div>
                     )}
                     {filteredLogs.map((l, i) => {

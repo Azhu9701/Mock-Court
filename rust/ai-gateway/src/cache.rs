@@ -16,10 +16,10 @@ impl LlMCache {
         LlMCache { db, ttl_secs }
     }
 
-    fn hash_key(provider: &str, model: &str, system_prompt: &str, user_prompt: &str) -> String {
+    fn hash_key(provider: &str, model: &str, system_prompt: &str, user_prompt: &str, tool_names: &str) -> String {
         let mut hasher = Sha256::new();
         // Length-prefixed encoding to prevent delimiter collisions
-        for part in [provider, model, system_prompt, user_prompt] {
+        for part in [provider, model, system_prompt, user_prompt, tool_names] {
             let len = (part.len() as u64).to_le_bytes();
             hasher.update(len);
             hasher.update(part.as_bytes());
@@ -40,8 +40,9 @@ impl LlMCache {
         model: &str,
         system_prompt: &str,
         user_prompt: &str,
+        tool_names: &str,
     ) -> Option<(String, UsageStats)> {
-        let hash = Self::hash_key(provider, model, system_prompt, user_prompt);
+        let hash = Self::hash_key(provider, model, system_prompt, user_prompt, tool_names);
         let cutoff = Self::now_secs().saturating_sub(self.ttl_secs);
 
         self.db
@@ -88,10 +89,11 @@ impl LlMCache {
         model: &str,
         system_prompt: &str,
         user_prompt: &str,
+        tool_names: &str,
         content: &str,
         usage: &UsageStats,
     ) -> Result<()> {
-        let hash = Self::hash_key(provider, model, system_prompt, user_prompt);
+        let hash = Self::hash_key(provider, model, system_prompt, user_prompt, tool_names);
         let usage_json = serde_json::to_string(usage).unwrap_or_default();
 
         self.db.with_conn(|conn| {

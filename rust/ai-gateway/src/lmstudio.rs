@@ -43,7 +43,7 @@ impl LmStudioNativeClient {
             dynamic_api_key,
             dynamic_model,
             client: Client::builder()
-                .timeout(Duration::from_secs(300))
+                .connect_timeout(Duration::from_secs(30))
                 .build()
                 .expect("Failed to build reqwest Client"),
             cached_model: Arc::new(RwLock::new(None)),

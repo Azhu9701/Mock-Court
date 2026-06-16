@@ -1,0 +1,74 @@
+# 法律顾问领域配置
+#
+# 适用于：法律咨询、合同审查、诉讼策略分析、法规研究。
+
+domain:
+  name: "legal"
+  icon: "⚖️"
+  system_name: "法律智囊团"
+  agent_noun: "顾问"
+  user_title: "委托人"
+  synthesis_verb: "综合论证"
+
+dimensions:
+  - id: "law_area"
+    label: "法域"
+    description: "所属法律领域"
+    values: ["民事", "刑事", "行政", "国际"]
+    weight: 1.0
+  - id: "position"
+    label: "立场"
+    description: "法律立场取向"
+    values: ["原告方", "被告方", "中立", "公益"]
+    weight: 0.8
+  - id: "method"
+    label: "方法"
+    description: "法律论证方法"
+    values: ["法条主义", "判例法", "目的论", "社会学"]
+    weight: 0.6
+  - id: "value"
+    label: "取向"
+    description: "价值取向"
+    values: ["秩序优先", "权利优先", "衡平优先", "变革优先"]
+    weight: 0.6
+
+synthesis:
+  template: |
+    委托人提出了以下法律问题：
+
+    {{task}}
+
+    以下{{agent_count}}位法律{{agent_noun}}分别给出了分析：
+
+    {{#agents}}
+    ## {{name}}
+    {{output}}
+    {{/agents}}
+
+    碰撞检测发现：
+    - 观点矛盾：{{contradictions}}
+    - 论证互补：{{complements}}
+    - 分析盲区：{{blindspots}}
+
+    请完成综合论证：
+    1. 案件事实梳理与法律关系定性
+    2. 各方法律意见的核心分歧
+    3. 综合法律建议（有利因素/不利因素/风险提示）
+    4. 建议的下一步行动
+
+collect_intro: |
+  我将帮助{{user_title}}创建一位新的法律{{agent_noun}}。
+  请描述这位{{agent_noun}}擅长的法律领域、论证风格和执业经验方向。
+
+trigger_markers:
+  single: ["简单", "快速", "查询", "规定"]
+  conference: ["分析", "评估", "综合", "风险", "全面"]
+  debate: ["辩论", "对比", "有利", "不利", "胜诉率"]
+  relay: ["步骤", "流程", "程序", "诉讼策略"]
+  learn: ["学习", "解释", "法律原理", "判例", "为什么"]
+  practice: ["操作", "起诉", "应诉", "证据"]
+
+memory:
+  default_share: "session"
+  max_turns: 20
+  persist: true

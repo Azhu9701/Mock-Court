@@ -8,6 +8,7 @@ mod ocr;
 mod rate_limiter;
 mod routes;
 mod state;
+mod worker_tools;
 mod store;
 mod web_search_tool;
 mod ws;
@@ -203,6 +204,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     engine.tool_registry_mut().register(std::sync::Arc::new(coding_tools::GlobSearchTool::new(working_dir.clone())));
     engine.tool_registry_mut().register(std::sync::Arc::new(coding_tools::GrepSearchTool::new(working_dir.clone())));
     engine.tool_registry_mut().register(std::sync::Arc::new(coding_tools::ClaudeCodeTool::new(working_dir)));
+    // Worker rights tools — 劳动者权益工具
+    engine.tool_registry_mut().register(std::sync::Arc::new(worker_tools::CalculateSeveranceTool));
+    engine.tool_registry_mut().register(std::sync::Arc::new(worker_tools::EvidenceChecklistTool));
+    engine.tool_registry_mut().register(std::sync::Arc::new(worker_tools::LaborLawSearchTool::new(
+        data_dir.join("knowledge").join("labor-law"),
+    )));
     let engine = Arc::new(engine);
 
     let collector = Arc::new(SoulCollector::new(

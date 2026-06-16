@@ -987,6 +987,7 @@ const DOMAIN_FILES: &[(&str, &str, &str)] = &[
     // (profile_id, display_label, config_file)
     ("philosophy", "万民幡", "domain.yaml"),
     ("legal", "法律智囊团", "domain.legal.yaml.example"),
+    ("labor", "工友智囊团", "domain.labor.yaml"),
 ];
 
 #[derive(Debug, Clone, Serialize)]

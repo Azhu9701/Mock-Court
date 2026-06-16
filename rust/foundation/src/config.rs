@@ -1,6 +1,7 @@
 use config::{Config as ConfigBuilder, Environment, File};
 use std::path::{Path, PathBuf};
 
+use crate::domain::DomainProfile;
 use crate::error::Result;
 
 #[derive(Debug, Clone)]
@@ -19,6 +20,8 @@ pub struct Config {
     pub search_engine: String,
     pub api_token: Option<String>,
     pub cors_origins: Vec<String>,
+    /// 领域语义配置——术语、坐标轴、综合模板。默认 = 哲学领域。
+    pub domain: DomainProfile,
 }
 
 impl Config {
@@ -57,6 +60,36 @@ impl Config {
             cors_origins: cfg.get_string("cors_origins")
                 .map(|s| s.split(',').map(|o| o.trim().to_string()).collect())
                 .unwrap_or_else(|_| vec!["http://localhost:3000".into()]),
+            domain: Self::load_domain(),
         })
+    }
+
+    /// 加载领域配置。优先级：config/domain.yaml > 内置默认值。
+    /// config/domain.yaml 如果存在，会提供带 {占位符} 的模板；
+    /// 加载后调用 render() 进行术语替换。
+    /// 失败（文件不存在/解析错误）静默降级到默认值——保证向后兼容。
+    fn load_domain() -> DomainProfile {
+        let candidates = ["config/domain.yaml", "config/domain.yml"];
+        for path in &candidates {
+            match std::fs::read_to_string(path) {
+                Ok(content) => {
+                    match serde_yaml::from_str::<DomainProfile>(&content) {
+                        Ok(mut profile) => {
+                            tracing::info!("Loaded domain profile from {}", path);
+                            // 对从文件加载的模板做术语渲染（内置默认值是已渲染的最终文本，不需要渲染）
+                            profile.synthesis_system_prompt = profile.render(&profile.synthesis_system_prompt);
+                            profile.collect_system_intro = profile.render(&profile.collect_system_intro);
+                            return profile;
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to parse {}: {} — using default domain", path, e);
+                        }
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+        // 没有配置文件——用内置默认值（哲学领域）
+        DomainProfile::default()
     }
 }

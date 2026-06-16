@@ -1,4 +1,5 @@
 pub mod config;
+pub mod domain;
 pub mod error;
 pub mod fs_store;
 pub mod health;
@@ -8,6 +9,7 @@ pub mod storage;
 pub mod vector_search;
 
 pub use config::Config;
+pub use domain::DomainProfile;
 pub use error::{FoundationError, Result};
 pub use fs_store::FileStore;
 pub use models::*;

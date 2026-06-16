@@ -5,6 +5,7 @@ import { Breadcrumb } from "@/components/breadcrumb";
 import { MobileMenuButton } from "@/components/mobile-menu-button";
 import { QuickActions } from "@/components/quick-actions";
 import { SettingsDialog } from "@/components/settings-dialog";
+import { DomainSwitcher } from "@/components/domain-switcher";
 import { Button } from "@/components/ui/button";
 import { Settings } from "lucide-react";
 
@@ -17,6 +18,7 @@ export function Header() {
         <MobileMenuButton />
         <Breadcrumb />
         <div className="flex-1" />
+        <DomainSwitcher />
         <QuickActions />
         <Button
           variant="ghost"

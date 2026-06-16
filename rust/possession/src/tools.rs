@@ -3,17 +3,51 @@ use std::sync::Arc;
 
 use foundation::{Result, ToolDefinition, ToolCall};
 
-const MAX_TOOL_ROUNDS: usize = 3;
+const DEFAULT_MAX_TOOL_ROUNDS: usize = 3;
+const CODING_MAX_TOOL_ROUNDS: usize = 20;
 
-pub fn parse_soul_tools(tools_json: &str) -> Vec<String> {
-    if tools_json.trim().is_empty() {
+pub fn parse_soul_tools(tools_str: &str) -> Vec<String> {
+    if tools_str.trim().is_empty() {
         return Vec::new();
     }
-    let parsed: Result<Vec<ToolDefinition>> = serde_json::from_str(tools_json)
-        .map_err(|e| foundation::FoundationError::Validation(format!("Invalid tools JSON: {}", e)));
-    match parsed {
-        Ok(tools) => tools.into_iter().map(|t| t.function.name).collect(),
-        Err(_) => Vec::new(),
+    // Try JSON format first (legacy)
+    if let Ok(tools) = serde_json::from_str::<Vec<ToolDefinition>>(tools_str) {
+        return tools.into_iter().map(|t| t.function.name).collect();
+    }
+    // Comma-separated names: "Read, Bash, Glob, Grep, Write, WebFetch"
+    tools_str
+        .split(',')
+        .map(|s| resolve_tool_name(s.trim()))
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Map soul tool short names to registry handler names
+pub fn resolve_tool_name(soul_name: &str) -> String {
+    match soul_name {
+        "Read" => "read_file".to_string(),
+        "Write" => "write_file".to_string(),
+        "Edit" => "edit_file".to_string(),
+        "Bash" => "bash_command".to_string(),
+        "Glob" => "glob_search".to_string(),
+        "Grep" => "grep_search".to_string(),
+        "ClaudeCode" | "claude_code" => "claude_code".to_string(),
+        "WebSearch" | "WebFetch" | "Search" => "web_search".to_string(),
+        other => other.to_string(),
+    }
+}
+
+pub fn max_tool_rounds_for_tools(tool_names: &[String]) -> usize {
+    let has_coding_tools = tool_names.iter().any(|n| {
+        matches!(
+            n.as_str(),
+            "read_file" | "write_file" | "edit_file" | "bash_command" | "glob_search" | "grep_search" | "claude_code"
+        )
+    });
+    if has_coding_tools {
+        CODING_MAX_TOOL_ROUNDS
+    } else {
+        DEFAULT_MAX_TOOL_ROUNDS
     }
 }
 
@@ -86,5 +120,5 @@ impl ToolRegistry {
 }
 
 pub fn max_tool_rounds() -> usize {
-    MAX_TOOL_ROUNDS
+    DEFAULT_MAX_TOOL_ROUNDS
 }

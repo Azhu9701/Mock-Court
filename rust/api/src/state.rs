@@ -33,6 +33,7 @@ pub struct InterrogationQuestion {
 pub struct InterrogationGate {
     pub task: String,
     pub questions: Vec<InterrogationQuestion>,
+    pub created_at: u64,
 }
 
 #[derive(Clone)]

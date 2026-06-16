@@ -45,10 +45,11 @@ pub async fn run(
     presets: &UserPresets,
     system_tx: &mpsc::Sender<WsEvent>,
     tool_registry: &ToolRegistry,
+    domain: &foundation::DomainProfile,
 ) -> Result<Vec<SoulOutput>> {
     let limited: Vec<String> = souls.iter().take(MAX_PARALLEL_SOULS).cloned().collect();
     let _providers = gateway.list_providers();
-    let prompt_builder = PromptBuilder::new();
+    let prompt_builder = PromptBuilder::with_domain(domain.clone());
     let task_arc = std::sync::Arc::new(task.to_string());
 
     // 创建交叉检测器
@@ -531,7 +532,12 @@ async fn run_soul_with_tools(
     chunk_tx: broadcast::Sender<SoulStreamMessage>,
     mut intervention_rx: mpsc::Receiver<InterventionDecision>,
 ) -> SoulOutput {
-    let max_rounds = crate::tools::max_tool_rounds();
+    let max_rounds = if let Some(tools) = &config.tools {
+        let names: Vec<String> = tools.iter().map(|t| t.function.name.clone()).collect();
+        crate::tools::max_tool_rounds_for_tools(&names)
+    } else {
+        crate::tools::max_tool_rounds()
+    };
     let mut history: Vec<foundation::PromptMessage> = prompt.messages.clone();
     let name = soul_name.to_string();
     let mut _intervention_count = 0usize;

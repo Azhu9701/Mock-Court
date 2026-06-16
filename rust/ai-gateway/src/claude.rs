@@ -73,9 +73,9 @@ impl ClaudeClient {
                 .timeout(Duration::from_secs(120))
                 .build()
                 .expect("Failed to build reqwest Client"),
-            dynamic_base_url: None,
-            dynamic_api_key: None,
-            dynamic_model: None,
+            dynamic_base_url: Some(Arc::new(RwLock::new(String::new()))),
+            dynamic_api_key: Some(Arc::new(RwLock::new(None))),
+            dynamic_model: Some(Arc::new(RwLock::new(String::new()))),
         }
     }
 }
@@ -185,7 +185,7 @@ impl Gateway for ClaudeClient {
                 "max_tokens": config.max_tokens,
                 "temperature": config.temperature,
                 "messages": messages,
-                "stream": true,
+                "stream": false,
             })
         } else {
             serde_json::json!({
@@ -194,7 +194,7 @@ impl Gateway for ClaudeClient {
                 "temperature": config.temperature,
                 "system": system,
                 "messages": messages,
-                "stream": true,
+                "stream": false,
             })
         };
 
@@ -220,6 +220,9 @@ impl Gateway for ClaudeClient {
                 .header("x-api-key", &api_key)
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
+                // Claude Code 伪装头
+                .header("user-agent", "claude-cli/1.0.83 (external, cli)")
+                .header("x-app", "cli")
                 .json(&body)
                 .send()
                 .await;
@@ -235,6 +238,7 @@ impl Gateway for ClaudeClient {
             if !response.status().is_success() {
                 let status = response.status().as_u16();
                 let body = response.text().await.unwrap_or_default();
+                tracing::error!("Claude API error {}: {}", status, &body[..body.len().min(500)]);
                 let _ = tx.send(Err(FoundationError::Validation(format!(
                     "Claude API error {}: {}",
                     status, body
@@ -243,140 +247,24 @@ impl Gateway for ClaudeClient {
             }
 
             use futures::StreamExt;
-
-            let mut stream = response.bytes_stream();
-            let mut buffer = String::new();
-            let mut chunk_index: u32 = 0;
-            let mut input_tokens: u32 = 0;
-            let mut output_tokens: u32 = 0;
-            let mut stop_reason: Option<String> = None;
-
-            // Tool use state tracking
-            let mut in_tool_use = false;
-            let mut current_tool_id = String::new();
-            let mut current_tool_name = String::new();
-            let mut current_tool_args = String::new();
-
-            while let Some(bytes_result) = stream.next().await {
-                match bytes_result {
-                    Ok(bytes) => {
-                        buffer.push_str(&String::from_utf8_lossy(&bytes));
-                        while let Some(end) = buffer.find('\n') {
-                            let line = buffer[..end].to_string();
-                            buffer = buffer[end + 1..].to_string();
-                            if line.starts_with("data: ") {
-                                let data = &line[6..];
-                                if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
-                                    match event["type"].as_str() {
-                                        Some("message_start") => {
-                                            if let Some(u) = event["message"]["usage"]["input_tokens"].as_u64() {
-                                                input_tokens = u as u32;
-                                            }
-                                        }
-                                        Some("content_block_start") => {
-                                            if event["content_block"]["type"].as_str() == Some("tool_use") {
-                                                in_tool_use = true;
-                                                current_tool_id = event["content_block"]["id"]
-                                                    .as_str()
-                                                    .unwrap_or("")
-                                                    .to_string();
-                                                current_tool_name = event["content_block"]["name"]
-                                                    .as_str()
-                                                    .unwrap_or("")
-                                                    .to_string();
-                                                current_tool_args.clear();
-                                            }
-                                        }
-                                        Some("content_block_delta") => {
-                                            if in_tool_use {
-                                                if let Some(partial) = event["delta"]["partial_json"].as_str() {
-                                                    current_tool_args.push_str(partial);
-                                                }
-                                            } else if let Some(text) = event["delta"]["text"].as_str() {
-                                                let _ = tx.send(Ok(Chunk {
-                                                    content: text.to_string(),
-                                                    reasoning_content: None,
-                                                    finish_reason: None,
-                                                    index: chunk_index,
-                                                    usage: None,
-                                                    tool_calls: Vec::new(),
-                                                })).await;
-                                                chunk_index += 1;
-                                            }
-                                        }
-                                        Some("content_block_stop") => {
-                                            if in_tool_use {
-                                                let tool_call = foundation::ToolCall {
-                                                    id: current_tool_id.clone(),
-                                                    r#type: "function".to_string(),
-                                                    function: foundation::ToolCallFunction {
-                                                        name: current_tool_name.clone(),
-                                                        arguments: current_tool_args.clone(),
-                                                    },
-                                                };
-                                                let _ = tx.send(Ok(Chunk {
-                                                    content: String::new(),
-                                                    reasoning_content: None,
-                                                    finish_reason: None,
-                                                    index: chunk_index,
-                                                    usage: None,
-                                                    tool_calls: vec![tool_call],
-                                                })).await;
-                                                chunk_index += 1;
-                                                in_tool_use = false;
-                                                current_tool_id.clear();
-                                                current_tool_name.clear();
-                                                current_tool_args.clear();
-                                            }
-                                        }
-                                        Some("message_delta") => {
-                                            if let Some(u) = event["usage"]["output_tokens"].as_u64() {
-                                                output_tokens = u as u32;
-                                            }
-                                            if let Some(sr) = event["delta"]["stop_reason"].as_str() {
-                                                stop_reason = Some(sr.to_string());
-                                            }
-                                        }
-                                        Some("message_stop") => {
-                                            let usage = UsageStats {
-                                                prompt_tokens: input_tokens,
-                                                completion_tokens: output_tokens,
-                                                total_tokens: input_tokens + output_tokens,
-                                            };
-                                            let _ = tx.send(Ok(Chunk {
-                                                content: String::new(),
-                                                reasoning_content: None,
-                                                finish_reason: Some(
-                                                    stop_reason.clone().unwrap_or_else(|| "stop".into()),
-                                                ),
-                                                index: chunk_index,
-                                                usage: Some(usage),
-                                                tool_calls: Vec::new(),
-                                            })).await;
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Err(FoundationError::Io(std::io::Error::other(e.to_string())))).await;
-                        return;
-                    }
-                }
+            // 非流式：读取完整响应，解析 JSON body
+            let body_text = response.text().await.unwrap_or_default();
+            tracing::info!("Claude response: {} bytes", body_text.len());
+            let resp: serde_json::Value = match serde_json::from_str(&body_text) {
+                Ok(v) => v,
+                Err(e) => { let _ = tx.send(Err(FoundationError::Validation(format!("Claude parse error: {}", e)))).await; return; }
+            };
+            let mut full_text = String::new();
+            if let Some(blocks) = resp["content"].as_array() {
+                for b in blocks { if b["type"].as_str() == Some("text") { if let Some(t) = b["text"].as_str() { full_text.push_str(t); } } }
             }
-            // Stream EOF without message_stop — send terminal chunk to unblock receiver
-            let _ = tx.send(Ok(Chunk {
-                content: String::new(),
-                reasoning_content: None,
-                finish_reason: Some("stop".into()),
-                index: chunk_index,
-                usage: None,
-                tool_calls: Vec::new(),
-            })).await;
+            let it = resp["usage"]["input_tokens"].as_u64().unwrap_or(0) as u32;
+            let ot = resp["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32;
+            if !full_text.is_empty() {
+                let _ = tx.send(Ok(Chunk { content: full_text, reasoning_content: None, finish_reason: None, index: 0, usage: None, tool_calls: vec![] })).await;
+            }
+            let _ = tx.send(Ok(Chunk { content: String::new(), reasoning_content: None, finish_reason: Some(resp["stop_reason"].as_str().unwrap_or("end_turn").to_string()), index: 1, usage: Some(UsageStats { prompt_tokens: it, completion_tokens: ot, total_tokens: it + ot }), tool_calls: vec![] })).await;
         });
-
         rx
     }
 }

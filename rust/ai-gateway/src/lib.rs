@@ -112,6 +112,12 @@ pub struct GatewayRegistry {
     lmstudio_base_url: Arc<RwLock<String>>,
     lmstudio_api_key: Arc<RwLock<Option<String>>>,
     lmstudio_model: Arc<RwLock<String>>,
+    openai_base_url: Arc<RwLock<String>>,
+    openai_api_key: Arc<RwLock<Option<String>>>,
+    openai_model: Arc<RwLock<String>>,
+    claude_base_url: Arc<RwLock<String>>,
+    claude_api_key: Arc<RwLock<Option<String>>>,
+    claude_model: Arc<RwLock<String>>,
     health_states: Arc<RwLock<HashMap<Provider, HealthState>>>,
 }
 
@@ -130,9 +136,9 @@ impl GatewayRegistry {
             available: claude_available,
             tier: claude_tier,
         });
-        if claude_available {
-            providers.insert(Provider::Claude, Arc::new(claude));
-        }
+        // 始终注册——可用性由 is_available() 动态检查
+        // 这样启动后从 data/claude.json 恢复 key 时 downcast 能成功
+        providers.insert(Provider::Claude, Arc::new(claude));
 
         // OpenAI
         let openai = OpenAIClient::new();
@@ -144,9 +150,7 @@ impl GatewayRegistry {
             available: openai_available,
             tier: openai_tier,
         });
-        if openai_available {
-            providers.insert(Provider::OpenAI, Arc::new(openai));
-        }
+        providers.insert(Provider::OpenAI, Arc::new(openai));
 
         // DeepSeek
         let deepseek = DeepSeekClient::new();
@@ -188,6 +192,25 @@ impl GatewayRegistry {
         // LM Studio 始终注册——可用性由 pick_provider 动态检查 gateway.is_available()
         providers.insert(Provider::LMStudio, Arc::new(lmstudio));
 
+        let openai_base_url: Arc<RwLock<String>> = Arc::new(RwLock::new(
+            std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".into())
+        ));
+        let openai_api_key: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(
+            crate::load_api_key("OPENAI_API_KEY", "openai")
+        ));
+        let openai_model: Arc<RwLock<String>> = Arc::new(RwLock::new(
+            std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".into())
+        ));
+        let claude_base_url: Arc<RwLock<String>> = Arc::new(RwLock::new(
+            std::env::var("ANTHROPIC_BASE_URL").unwrap_or_else(|_| "https://api.anthropic.com/v1".into())
+        ));
+        let claude_api_key: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(
+            crate::load_api_key("ANTHROPIC_API_KEY", "anthropic")
+        ));
+        let claude_model: Arc<RwLock<String>> = Arc::new(RwLock::new(
+            std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-sonnet-4-6".into())
+        ));
+
         let mut health_states: HashMap<Provider, HealthState> = HashMap::new();
         for p in [Provider::LMStudio, Provider::DeepSeek, Provider::Claude, Provider::OpenAI] {
             health_states.insert(p, HealthState::default());
@@ -201,6 +224,12 @@ impl GatewayRegistry {
             lmstudio_base_url,
             lmstudio_api_key,
             lmstudio_model,
+            openai_base_url,
+            openai_api_key,
+            openai_model,
+            claude_base_url,
+            claude_api_key,
+            claude_model,
             health_states: Arc::new(RwLock::new(health_states)),
         }
     }
@@ -208,14 +237,41 @@ impl GatewayRegistry {
     pub fn list_providers(&self) -> Vec<ProviderInfo> {
         let mut info = self.all_info.clone();
         for item in info.iter_mut() {
-            if item.provider == Provider::LMStudio {
-                let model = self.lmstudio_model.read().clone();
-                if !model.is_empty() {
-                    item.model = model;
+            match item.provider {
+                Provider::LMStudio => {
+                    let model = self.lmstudio_model.read().clone();
+                    if !model.is_empty() {
+                        item.model = model;
+                    }
                 }
+                Provider::OpenAI => {
+                    let model = self.openai_model.read().clone();
+                    if !model.is_empty() {
+                        item.model = model;
+                    }
+                }
+                Provider::Claude => {
+                    let model = self.claude_model.read().clone();
+                    if !model.is_empty() {
+                        item.model = model;
+                    }
+                }
+                _ => {}
             }
             if let Some(gw) = self.providers.get(&item.provider) {
-                item.available = self.is_healthy_with_check(&item.provider, gw);
+                let gw_available = gw.is_available();
+                let registry_keyed = match item.provider {
+                    Provider::Claude => self.claude_api_key.read().is_some(),
+                    Provider::OpenAI => self.openai_api_key.read().is_some(),
+                    _ => false,
+                };
+                if gw_available || registry_keyed {
+                    // 有 key 即视为可用——不信任旧的 unhealthy 缓存
+                    // （缓存的 false 可能是端点配错时遗留的，修正后应恢复可用）
+                    item.available = true;
+                } else {
+                    item.available = false;
+                }
             }
         }
         info
@@ -264,6 +320,84 @@ impl GatewayRegistry {
         if let Some(gw) = self.providers.get(&Provider::LMStudio) {
             if let Some(lmstudio) = (**gw).as_any().downcast_ref::<crate::lmstudio::LmStudioNativeClient>() {
                 lmstudio.invalidate_model_cache();
+            }
+        }
+    }
+
+    pub fn openai_base_url(&self) -> String {
+        self.openai_base_url.read().clone()
+    }
+
+    pub fn set_openai_base_url(&self, url: String) {
+        *self.openai_base_url.write() = url;
+        if let Some(gw) = self.providers.get(&Provider::OpenAI) {
+            if let Some(client) = (**gw).as_any().downcast_ref::<crate::openai::OpenAIClient>() {
+                client.set_dynamic_base_url(self.openai_base_url.read().clone());
+            }
+        }
+    }
+
+    pub fn openai_api_key(&self) -> Option<String> {
+        self.openai_api_key.read().clone()
+    }
+
+    pub fn set_openai_api_key(&self, key: Option<String>) {
+        *self.openai_api_key.write() = key;
+        if let Some(gw) = self.providers.get(&Provider::OpenAI) {
+            if let Some(client) = (**gw).as_any().downcast_ref::<crate::openai::OpenAIClient>() {
+                client.set_dynamic_api_key(self.openai_api_key.read().clone());
+            }
+        }
+    }
+
+    pub fn openai_model(&self) -> String {
+        self.openai_model.read().clone()
+    }
+
+    pub fn set_openai_model(&self, model: String) {
+        *self.openai_model.write() = model;
+        if let Some(gw) = self.providers.get(&Provider::OpenAI) {
+            if let Some(client) = (**gw).as_any().downcast_ref::<crate::openai::OpenAIClient>() {
+                client.set_dynamic_model(self.openai_model.read().clone());
+            }
+        }
+    }
+
+    pub fn claude_base_url(&self) -> String {
+        self.claude_base_url.read().clone()
+    }
+
+    pub fn set_claude_base_url(&self, url: String) {
+        *self.claude_base_url.write() = url;
+        if let Some(gw) = self.providers.get(&Provider::Claude) {
+            if let Some(client) = (**gw).as_any().downcast_ref::<crate::claude::ClaudeClient>() {
+                client.set_dynamic_base_url(self.claude_base_url.read().clone());
+            }
+        }
+    }
+
+    pub fn claude_api_key(&self) -> Option<String> {
+        self.claude_api_key.read().clone()
+    }
+
+    pub fn set_claude_api_key(&self, key: Option<String>) {
+        *self.claude_api_key.write() = key;
+        if let Some(gw) = self.providers.get(&Provider::Claude) {
+            if let Some(client) = (**gw).as_any().downcast_ref::<crate::claude::ClaudeClient>() {
+                client.set_dynamic_api_key(self.claude_api_key.read().clone());
+            }
+        }
+    }
+
+    pub fn claude_model(&self) -> String {
+        self.claude_model.read().clone()
+    }
+
+    pub fn set_claude_model(&self, model: String) {
+        *self.claude_model.write() = model;
+        if let Some(gw) = self.providers.get(&Provider::Claude) {
+            if let Some(client) = (**gw).as_any().downcast_ref::<crate::claude::ClaudeClient>() {
+                client.set_dynamic_model(self.claude_model.read().clone());
             }
         }
     }
@@ -418,15 +552,22 @@ impl GatewayRegistry {
                 req.provider
             )))?;
 
-        if let Some(ref cache) = *self.cache.read() {
-            let model = req.config.model.as_deref().unwrap_or("unknown");
-            let (system_prompt, user_prompt) = extract_prompts(&req.prompt);
-            if let Some((cached_content, cached_usage)) = cache.get(
-                &format!("{:?}", req.provider).to_lowercase(),
-                model,
-                &system_prompt,
-                &user_prompt,
-            ) {
+        // Skip cache when tools are configured — tool call responses can't be cached
+        // because the cached result has no tool_calls, which would bypass tool execution
+        let has_tools = req.config.tools.as_ref().map_or(false, |t| !t.is_empty());
+
+        if !has_tools {
+            if let Some(ref cache) = *self.cache.read() {
+                let model = req.config.model.as_deref().unwrap_or("unknown");
+                let (system_prompt, user_prompt) = extract_prompts(&req.prompt);
+                let tool_names = extract_tool_names(&req.config);
+                if let Some((cached_content, cached_usage)) = cache.get(
+                    &format!("{:?}", req.provider).to_lowercase(),
+                    model,
+                    &system_prompt,
+                    &user_prompt,
+                    &tool_names,
+                ) {
                 tracing::info!(
                     "Cache hit for provider={:?} model={} ({} chars)",
                     req.provider,
@@ -444,6 +585,7 @@ impl GatewayRegistry {
                 }));
                 return Ok(rx);
             }
+        }
         }
 
         Ok(gateway.call(&req.prompt, &req.config))
@@ -471,11 +613,13 @@ impl GatewayRegistry {
         if let Some(ref cache) = *self.cache.read() {
             let model = req.config.model.as_deref().unwrap_or("unknown");
             let (system_prompt, user_prompt) = extract_prompts(&req.prompt);
+            let tool_names = extract_tool_names(&req.config);
             let _ = cache.set(
                 &format!("{:?}", req.provider).to_lowercase(),
                 model,
                 &system_prompt,
                 &user_prompt,
+                &tool_names,
                 content,
                 usage,
             );
@@ -516,4 +660,15 @@ fn extract_prompts(prompt: &Prompt) -> (String, String) {
         }
     }
     (system, user)
+}
+
+fn extract_tool_names(config: &CallConfig) -> String {
+    match &config.tools {
+        Some(tools) => {
+            let mut names: Vec<&str> = tools.iter().map(|t| t.function.name.as_str()).collect();
+            names.sort();
+            names.join(",")
+        }
+        None => String::new(),
+    }
 }

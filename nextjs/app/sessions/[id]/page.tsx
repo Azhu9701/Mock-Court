@@ -43,6 +43,8 @@ export default function SessionDetailPage() {
   const id = params.id;
   const searchParams = useSearchParams();
   const isFork = searchParams?.get("fork") === "true";
+  const mountedRef = useRef(true);
+  useEffect(() => { return () => { mountedRef.current = false; }; }, []);
 
   // Layer 1: lightweight digest (5-10 observations, ~5-10KB)
   const [digest, setDigest] = useState<SessionDigest | null>(null);
@@ -78,9 +80,9 @@ export default function SessionDetailPage() {
   // Check if this session already has a review
   useEffect(() => {
     fetchSessionReview(id)
-      .then((r: { effectiveness?: string } | null) => { if (r) setReviewDone(true); })
+      .then((r: { effectiveness?: string } | null) => { if (mountedRef.current && r) setReviewDone(true); })
       .catch(() => {})
-      .finally(() => setReviewLoading(false));
+      .finally(() => { if (mountedRef.current) setReviewLoading(false); });
   }, [id]);
 
   // Track whether auto-distill has been attempted for this session
@@ -88,7 +90,7 @@ export default function SessionDetailPage() {
 
   // Fetch digest on mount
   useEffect(() => {
-    fetchSessionDigest(id).then(setDigest).catch(() => setDigestError(true));
+    fetchSessionDigest(id).then((d) => { if (mountedRef.current) setDigest(d); }).catch(() => { if (mountedRef.current) setDigestError(true); });
   }, [id]);
 
   // Auto-distill: if session is completed but has no observations, trigger distill
@@ -100,8 +102,9 @@ export default function SessionDetailPage() {
       triggerDistill(id).finally(() => {
         // Poll for digest after a short delay
         setTimeout(() => {
-          fetchSessionDigest(id).then(setDigest).catch(() => {});
-          setDistilling(false);
+          if (!mountedRef.current) return;
+          fetchSessionDigest(id).then((d) => { if (mountedRef.current) setDigest(d); }).catch(() => {});
+          if (mountedRef.current) setDistilling(false);
         }, 3000);
       });
     }
@@ -109,15 +112,16 @@ export default function SessionDetailPage() {
 
   // Fetch annotations on mount
   useEffect(() => {
-    fetchSessionAnnotations(id).then(setAnnotations).catch(() => {});
+    fetchSessionAnnotations(id).then((a) => { if (mountedRef.current) setAnnotations(a); }).catch(() => {});
   }, [id]);
 
   // Refresh digest + annotations when SESSIONS_UPDATED_EVENT fires
   // (dispatched by WS observations_ready or annotations_ready)
   useEffect(() => {
     const handle = () => {
-      fetchSessionDigest(id).then(setDigest).catch(() => {});
-      fetchSessionAnnotations(id).then(setAnnotations).catch(() => {});
+      if (!mountedRef.current) return;
+      fetchSessionDigest(id).then((d) => { if (mountedRef.current) setDigest(d); }).catch(() => {});
+      fetchSessionAnnotations(id).then((a) => { if (mountedRef.current) setAnnotations(a); }).catch(() => {});
     };
     window.addEventListener(SESSIONS_UPDATED_EVENT, handle);
     return () => window.removeEventListener(SESSIONS_UPDATED_EVENT, handle);
@@ -136,7 +140,7 @@ export default function SessionDetailPage() {
   // soul recommendations even when user keeps the conversation collapsed.
   useEffect(() => {
     if (digest && !detail) {
-      fetchSessionDetail(id, true).then(setDetail).catch(() => {});
+      fetchSessionDetail(id, true).then((d) => { if (mountedRef.current) setDetail(d); }).catch(() => {});
     }
   }, [digest, id, detail]);
 
@@ -168,11 +172,12 @@ export default function SessionDetailPage() {
       await triggerDistill(id);
       // distill is async; poll digest a few times
       setTimeout(() => {
-        fetchSessionDigest(id).then(setDigest).catch(() => {});
-        setDistilling(false);
+        if (!mountedRef.current) return;
+        fetchSessionDigest(id).then((d) => { if (mountedRef.current) setDigest(d); }).catch(() => {});
+        if (mountedRef.current) setDistilling(false);
       }, 3000);
     } catch {
-      setDistilling(false);
+      if (mountedRef.current) setDistilling(false);
     }
   };
 

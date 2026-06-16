@@ -44,8 +44,10 @@ async function apiRequest<T>(
 
     // 合并外部 signal 和超时 signal
     const existingSignal = fetchOptions.signal;
+    let onExternalAbort: (() => void) | undefined;
     if (existingSignal) {
-      existingSignal.addEventListener("abort", () => controller.abort());
+      onExternalAbort = () => controller.abort();
+      existingSignal.addEventListener("abort", onExternalAbort);
     }
 
     try {
@@ -99,6 +101,10 @@ async function apiRequest<T>(
       const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
       console.warn(`[apiRequest] ${opName} 网络错误，${delay}ms 后重试 (${attempt + 1}/${retries})`, err);
       await new Promise((r) => setTimeout(r, delay));
+    } finally {
+      if (existingSignal && onExternalAbort) {
+        existingSignal.removeEventListener("abort", onExternalAbort);
+      }
     }
   }
 
@@ -743,8 +749,40 @@ export interface ActionItem {
   priority: number;
 }
 
+// ── Domain Profile (领域模式切换) ──
+
+export interface DomainOption {
+  profile: string;
+  label: string;
+  available: boolean;
+}
+
+export interface DomainInfo {
+  profile: string;
+  system_name: string;
+  agent_noun: string;
+  synthesis_verb: string;
+  dimensions: string[];
+  available: DomainOption[];
+}
+
+export async function getDomainInfo(): Promise<DomainInfo> {
+  return apiRequest<DomainInfo>('/config/domain', {
+    cache: 'no-store',
+    operation: 'getDomainInfo',
+  });
+}
+
+export async function setDomain(profile: string): Promise<DomainInfo> {
+  return apiRequest<DomainInfo>('/config/domain', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profile }),
+    operation: 'setDomain',
+  });
+}
+
 // ── DeepSeek Cache Hint ──
-// Indicates the prompt was constructed for maximum prefix cache hit rate
 
 export interface CacheHint {
   provider: "deepseek";

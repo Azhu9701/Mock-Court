@@ -36,9 +36,9 @@ impl OpenAIClient {
                 .timeout(Duration::from_secs(120))
                 .build()
                 .expect("Failed to build reqwest Client"),
-            dynamic_base_url: None,
-            dynamic_api_key: None,
-            dynamic_model: None,
+            dynamic_base_url: Some(Arc::new(RwLock::new(String::new()))),
+            dynamic_api_key: Some(Arc::new(RwLock::new(None))),
+            dynamic_model: Some(Arc::new(RwLock::new(String::new()))),
         }
     }
 

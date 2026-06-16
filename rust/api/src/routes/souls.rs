@@ -220,7 +220,7 @@ async fn collect_soul(
     });
 
     // LLM collect returns immediately
-    let prompt_builder = ai_gateway::prompt::PromptBuilder::new();
+    let prompt_builder = ai_gateway::prompt::PromptBuilder::with_domain(state.config.domain.clone());
     let prompt = prompt_builder.build_collect_prompt(&body.name);
 
     let gateway = state.engine.gateway();
@@ -256,7 +256,7 @@ async fn refine_soul(
     State(state): State<Arc<AppState>>,
     Json(body): Json<RefineRequest>,
 ) -> Result<Json<RefineResponse>, (axum::http::StatusCode, Json<ApiError>)> {
-    let prompt_builder = ai_gateway::prompt::PromptBuilder::new();
+    let prompt_builder = ai_gateway::prompt::PromptBuilder::with_domain(state.config.domain.clone());
     let prompt = prompt_builder.build_refine_prompt(&body.raw_material);
 
     let gateway = state.engine.gateway();
@@ -337,6 +337,7 @@ async fn auto_create_soul(
     let gateway = state.engine.gateway().clone();
     let registry = state.registry.clone();
     let tasks = state.auto_create_tasks.clone();
+    let domain = state.config.domain.clone();
 
     // Kickoff event
     let _ = tx.send(AutoCreateEvent {
@@ -378,7 +379,7 @@ async fn auto_create_soul(
 
         tracing::info!("auto_create task started: task={}, name={}", task_id_clone, name_clone);
 
-        let prompt_builder = PromptBuilder::new();
+        let prompt_builder = PromptBuilder::with_domain(domain.clone());
         let providers = gateway.list_providers();
         let first_available = providers.iter().find(|i| i.available);
         let provider = match first_available {

@@ -16,6 +16,7 @@ export const PRESETS: Preset[] = [
   { name: "gender-race", label: "性别种族", description: "结构性压迫分析", souls: ["波伏娃", "法农", "鲁迅"], constraint: "聚焦结构性因素", scenarios: ["性别分析", "种族批判", "交叉性研究"] },
   { name: "existential", label: "存在意义", description: "人生意义与存在追问", souls: ["尼采", "庄子", "波伏娃"], constraint: "聚焦个体存在体验", scenarios: ["人生选择", "意义危机", "自由与责任"] },
   { name: "epistemology", label: "认识论", description: "知识的本质与获取方式", souls: ["费曼", "胡塞尔", "马克思"], constraint: "聚焦认识方法而非具体知识", scenarios: ["研究方法", "认知偏见", "学科交叉"] },
-  { name: "labor", label: "劳动分析", description: "劳动与生产关系分析", souls: ["马克思", "毛泽东", "祝鹤槐"], constraint: "聚焦生产关系和劳动过程", scenarios: ["劳资关系", "工作设计", "自动化替代"] },
+  { name: "labor", label: "劳动分析", description: "劳动与生产关系理论分析", souls: ["马克思", "毛泽东", "祝鹤槐"], constraint: "聚焦生产关系和劳动过程", scenarios: ["劳资关系", "工作设计", "自动化替代"] },
+  { name: "worker-rights", label: "劳动者维权", description: "劳动者权益评估和行动指南", souls: ["老合同", "安姐", "集体之声", "平权者", "首席工友"], constraint: "聚焦劳动者具体处境和可操作的维权步骤", scenarios: ["被辞退维权", "工伤处理", "工资纠纷", "职场歧视", "集体谈判"] },
   { name: "spirit", label: "精神修养", description: "内在成长与文化修养", souls: ["孔子", "庄子", "稻盛和夫"], constraint: "聚焦个人修养和内在成长", scenarios: ["道德困境", "人生规划", "自我提升"] },
 ];

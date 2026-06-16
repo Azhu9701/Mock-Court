@@ -96,6 +96,7 @@ export function useWebSocket(sessionId: string) {
   const pendingFlushRef = useRef(false);
   const mountedRef = useRef(true);
   const noEventsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // forceTick: counter that React sees — incrementing it triggers a re-render
   // This is the ONLY React state for streaming content, avoiding per-token setState overhead
@@ -142,16 +143,32 @@ export function useWebSocket(sessionId: string) {
     setTick((t) => t + 1);
   }, []);
 
+  const MAX_PROCESS_STEPS = 100;
+  const MAX_LOGS = 200;
+  const MAX_COLLISIONS = 50;
+  const MAX_TOOL_CALLS = 50;
+
   const addStep = (event: string, message: string, soulName: string | null) => {
     const label = EVENT_LABEL[event] || event;
-    setProcessSteps((prev) => [...prev, { event: label, message, soulName, timestamp: new Date() }]);
+    setProcessSteps((prev) => {
+      const next = [...prev, { event: label, message, soulName, timestamp: new Date() }];
+      return next.length > MAX_PROCESS_STEPS ? next.slice(-MAX_PROCESS_STEPS) : next;
+    });
   };
 
   const addLog = (message: string, type: LogEntry['type'] = 'info') => {
-    setLogs((prev) => [...prev, { timestamp: new Date(), message, type }]);
+    setLogs((prev) => {
+      const next = [...prev, { timestamp: new Date(), message, type }];
+      return next.length > MAX_LOGS ? next.slice(-MAX_LOGS) : next;
+    });
   };
 
   const connect = useCallback(() => {
+    // 清理待执行的重连定时器，防止新旧 connect 交叠导致定时器累积
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
     // Close previous connection without triggering its onclose retry
     if (wsRef.current) {
       wsRef.current.onclose = null;
@@ -287,7 +304,10 @@ export function useWebSocket(sessionId: string) {
         case "collision":
           try {
             const c = JSON.parse(event.payload) as CollisionEvent;
-            setCollisions((prev) => [...prev, c]);
+            setCollisions((prev) => {
+              const next = [...prev, c];
+              return next.length > MAX_COLLISIONS ? next.slice(-MAX_COLLISIONS) : next;
+            });
           } catch {}
           break;
 
@@ -311,16 +331,19 @@ export function useWebSocket(sessionId: string) {
               arguments: string;
               soul_name: string;
             };
-            setToolCalls((prev) => [
-              ...prev,
-              {
-                toolCallId: tc.tool_call_id,
-                toolName: tc.tool_name,
-                arguments: tc.arguments,
-                soulName: tc.soul_name,
-                status: 'calling' as const,
-              },
-            ]);
+            setToolCalls((prev) => {
+              const next = [
+                ...prev,
+                {
+                  toolCallId: tc.tool_call_id,
+                  toolName: tc.tool_name,
+                  arguments: tc.arguments,
+                  soulName: tc.soul_name,
+                  status: 'calling' as const,
+                },
+              ];
+              return next.length > MAX_TOOL_CALLS ? next.slice(-MAX_TOOL_CALLS) : next;
+            });
             addLog(`${tc.soul_name} 调用工具: ${tc.tool_name}`, 'info');
           } catch {}
           break;
@@ -389,7 +412,9 @@ export function useWebSocket(sessionId: string) {
     ws.onclose = () => {
       if (!mountedRef.current) return;
       if (retryRef.current < MAX_RETRIES) {
-        setTimeout(connect, Math.pow(2, retryRef.current) * 1000);
+        // 清理旧的重连定时器，防止多次 connect 导致定时器累积泄漏
+        if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = setTimeout(connect, Math.pow(2, retryRef.current) * 1000);
         retryRef.current++;
       } else {
         setStatus("error");
@@ -452,6 +477,7 @@ export function useWebSocket(sessionId: string) {
       mountedRef.current = false;
       if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
       if (noEventsTimeoutRef.current) clearTimeout(noEventsTimeoutRef.current);
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       wsRef.current?.close();
     };
   }, [connect]);

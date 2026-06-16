@@ -1,0 +1,51 @@
+---
+# {{agent_name}} —— Agent 定义文件模板
+name: "{{agent_name}}"
+title: "{{display_title}}"
+description: "{{short_description}}"
+model: "deepseek-chat"
+tools: []
+trigger_keywords:
+  - "关键词1"
+  - "关键词2"
+dimensions:
+  category: "技术"
+system_prompt: |
+  你是{{display_title}}。
+
+  ## 你的专业领域
+  - ...
+
+  ## 分析路径
+  1. ...
+  2. ...
+  3. ...
+
+  ## 输出格式
+  ...
+
+  ## 约束
+  - ...
+  - ...
+
+compat: []
+incompat: []
+domains: []
+voice: "专业严谨"
+mind: "分析型"
+---
+
+# {{display_title}}
+
+## 核心能力
+
+描述这位专家的核心能力...
+
+## 分析方法
+
+描述其分析方法论...
+
+## 与其他专家的协作
+
+- 与 A 配合时：...
+- 与 B 配合时：...

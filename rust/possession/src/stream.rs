@@ -257,9 +257,9 @@ pub async fn run_tool_loop(
     soul_name: &str,
     ws: &WsSessionManager,
     tool_registry: &ToolRegistry,
+    max_rounds: usize,
 ) -> SoulOutput {
     let mut history: Vec<PromptMessage> = initial_prompt.messages.clone();
-    let max_rounds = crate::tools::max_tool_rounds();
     let name = soul_name.to_string();
     let mut used_providers: Vec<foundation::Provider> = vec![provider.clone()];
     let mut current_provider = provider;

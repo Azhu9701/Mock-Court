@@ -183,6 +183,8 @@ impl Gateway for DeepSeekClient {
             let mut buffer = String::new();
             let mut chunk_index: u32 = 0;
             const MAX_BUFFER: usize = 1_048_576; // 1MB — 防止畸形 SSE 流导致内存无限增长
+            // Accumulate tool calls across streaming deltas
+            let mut accumulated_tool_calls: Vec<ToolCall> = Vec::new();
 
             while let Some(bytes_result) = stream.next().await {
                 match bytes_result {
@@ -203,6 +205,19 @@ impl Gateway for DeepSeekClient {
                             pos = abs_end + 1;
                             if let Some(data) = line.strip_prefix("data: ") {
                                 if data == "[DONE]" {
+                                    // Flush accumulated tool calls before finishing
+                                    if !accumulated_tool_calls.is_empty() {
+                                        let _ = tx.send(Ok(Chunk {
+                                            content: String::new(),
+                                            reasoning_content: None,
+                                            finish_reason: None,
+                                            index: chunk_index,
+                                            usage: None,
+                                            tool_calls: accumulated_tool_calls.clone(),
+                                        })).await;
+                                        accumulated_tool_calls.clear();
+                                        chunk_index += 1;
+                                    }
                                     let _ = tx.send(Ok(Chunk {
                                         content: String::new(),
                                         reasoning_content: None,
@@ -214,7 +229,6 @@ impl Gateway for DeepSeekClient {
                                     return;
                                 }
                                 if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
-                                    // 诊断日志：记录原始 SSE 事件
                                     if let Some(choices) = event["choices"].as_array() {
                                         for choice in choices {
                                             let delta_content = choice["delta"]["content"].as_str().unwrap_or("");
@@ -226,37 +240,50 @@ impl Gateway for DeepSeekClient {
                                                     delta_content.len(), delta_reasoning.len(), finish
                                                 );
                                             }
+
+                                            // 处理 tool_calls delta — accumulate by index
+                                            if let Some(tool_calls) = choice["delta"]["tool_calls"].as_array() {
+                                                for tc in tool_calls {
+                                                    let index = tc["index"].as_u64().unwrap_or(0) as usize;
+                                                    while accumulated_tool_calls.len() <= index {
+                                                        accumulated_tool_calls.push(ToolCall {
+                                                            id: String::new(),
+                                                            r#type: "function".to_string(),
+                                                            function: ToolCallFunction {
+                                                                name: String::new(),
+                                                                arguments: String::new(),
+                                                            },
+                                                        });
+                                                    }
+                                                    if let Some(id) = tc["id"].as_str() {
+                                                        accumulated_tool_calls[index].id = id.to_string();
+                                                    }
+                                                    if let Some(name) = tc["function"]["name"].as_str() {
+                                                        accumulated_tool_calls[index].function.name = name.to_string();
+                                                    }
+                                                    if let Some(args) = tc["function"]["arguments"].as_str() {
+                                                        accumulated_tool_calls[index].function.arguments.push_str(args);
+                                                    }
+                                                }
+                                            }
+
+                                            // On finish_reason with accumulated tool calls, flush them
+                                            if finish == "tool_calls" && !accumulated_tool_calls.is_empty() {
+                                                let _ = tx.send(Ok(Chunk {
+                                                    content: String::new(),
+                                                    reasoning_content: None,
+                                                    finish_reason: None,
+                                                    index: chunk_index,
+                                                    usage: None,
+                                                    tool_calls: accumulated_tool_calls.clone(),
+                                                })).await;
+                                                accumulated_tool_calls.clear();
+                                                chunk_index += 1;
+                                            }
+
                                             // DeepSeek 思考模型：reasoning_content 是思维链，content 是最终回答
                                             let reasoning = choice["delta"]["reasoning_content"].as_str();
                                             let content = choice["delta"]["content"].as_str();
-
-                                            // 处理 tool_calls delta
-                                            if let Some(tool_calls) = choice["delta"]["tool_calls"].as_array() {
-                                                let mut parsed_calls: Vec<ToolCall> = Vec::new();
-                                                for tc in tool_calls {
-                                                    let function = &tc["function"];
-                                                    let call = ToolCall {
-                                                        id: tc["id"].as_str().unwrap_or("").to_string(),
-                                                        r#type: "function".to_string(),
-                                                        function: ToolCallFunction {
-                                                            name: function["name"].as_str().unwrap_or("").to_string(),
-                                                            arguments: function["arguments"].as_str().unwrap_or("").to_string(),
-                                                        },
-                                                    };
-                                                    parsed_calls.push(call);
-                                                }
-                                                if !parsed_calls.is_empty() {
-                                                    let _ = tx.send(Ok(Chunk {
-                                                        content: String::new(),
-                                                        reasoning_content: None,
-                                                        finish_reason: None,
-                                                        index: chunk_index,
-                                                        usage: None,
-                                                        tool_calls: parsed_calls,
-                                                    })).await;
-                                                    chunk_index += 1;
-                                                }
-                                            }
 
                                             // 发送思维链（如果有）
                                             if let Some(reasoning_text) = reasoning.filter(|s| !s.is_empty()) {
@@ -311,7 +338,18 @@ impl Gateway for DeepSeekClient {
                     }
                 }
             }
-            // Stream EOF without [DONE] — send terminal chunk to unblock receiver
+            // Stream EOF without [DONE] — flush remaining tool calls then send terminal
+            if !accumulated_tool_calls.is_empty() {
+                let _ = tx.send(Ok(Chunk {
+                    content: String::new(),
+                    reasoning_content: None,
+                    finish_reason: None,
+                    index: chunk_index,
+                    usage: None,
+                    tool_calls: accumulated_tool_calls,
+                })).await;
+                chunk_index += 1;
+            }
             let _ = tx.send(Ok(Chunk {
                 content: String::new(),
                 reasoning_content: None,

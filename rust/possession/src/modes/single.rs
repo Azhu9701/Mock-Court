@@ -49,8 +49,9 @@ pub async fn run(
     let output = if has_tools {
         let definitions = tool_registry.filter_definitions(&tool_names);
         if !definitions.is_empty() {
+            let max_rounds = crate::tools::max_tool_rounds_for_tools(&tool_names);
             config = config.with_tools(definitions);
-            stream::run_tool_loop(gateway, info.provider, &prompt, &config, session_id, soul_name, ws, tool_registry).await
+            stream::run_tool_loop(gateway, info.provider, &prompt, &config, session_id, soul_name, ws, tool_registry, max_rounds).await
         } else {
             let provider = info.provider;
             match gateway.call(&LLMRequest { provider, prompt, config }) {

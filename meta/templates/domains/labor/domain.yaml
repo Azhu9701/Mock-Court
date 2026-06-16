@@ -1,0 +1,78 @@
+# 劳动者权益领域配置
+#
+# 适用于：劳动法咨询、工伤认定、劳动合同纠纷、职场歧视、集体谈判。
+
+domain:
+  name: "labor"
+  icon: "🛡️"
+  system_name: "工友智囊团"
+  agent_noun: "工友"
+  user_title: "工友"
+  synthesis_verb: "综合研判"
+
+dimensions:
+  - id: "rights_area"
+    label: "劳权领域"
+    description: "涉及的劳动权益类别"
+    values: ["工资工时", "解雇合同", "安全健康", "平等尊严"]
+    weight: 1.0
+  - id: "perspective"
+    label: "权利视角"
+    description: "维权分析的视角"
+    values: ["个人维权", "集体谈判", "制度推动", "社会公义"]
+    weight: 0.8
+  - id: "evidence_path"
+    label: "证据路径"
+    description: "证据收集与分析方式"
+    values: ["书面证据", "证人证言", "数据比较", "结构分析"]
+    weight: 0.6
+  - id: "action_orientation"
+    label: "行动取向"
+    description: "维权目标取向"
+    values: ["恢复原状", "获得赔偿", "制度推动", "自我保护"]
+    weight: 0.6
+
+synthesis:
+  template: |
+    工友遇到了以下问题：
+
+    {{task}}
+
+    以下{{agent_count}}位{{agent_noun}}分别给出了分析：
+
+    {{#agents}}
+    ## {{name}}
+    {{output}}
+    {{/agents}}
+
+    碰撞检测发现：
+    - 判断分歧：{{contradictions}}
+    - 分析互补：{{complements}}
+    - 遗漏要点：{{blindspots}}
+
+    请完成综合研判：
+    1. 处境还原：工友当前面临的具体处境
+    2. 分歧诊断：各方判断的核心差异及原因
+    3. 知识盲区：还需要补充哪些信息
+    4. 权力分析：工友在博弈中的筹码与风险
+    5. 行动指南：按优先级排序的具体行动建议
+
+    **你的立场不是中立——是帮工友看清处境、评估选项、做出知情决策。**
+
+collect_intro: |
+  我将帮助创建一位新的{{agent_noun}}。
+  请描述这位{{agent_noun}}擅长的劳动权益领域、分析风格和经验方向。
+  可以包括：处理过的典型案例类型、擅长的法律领域、沟通风格等。
+
+trigger_markers:
+  single: ["简单", "快速", "查询", "规定", "能不能"]
+  conference: ["分析", "评估", "综合", "风险", "全面", "帮我看看"]
+  debate: ["对比", "选择", "有利", "不利", "哪个方案"]
+  relay: ["步骤", "流程", "怎么办", "维权", "程序"]
+  learn: ["学习", "解释", "法律", "规定", "为什么", "什么是"]
+  practice: ["操作", "仲裁", "起诉", "协商", "证据"]
+
+memory:
+  default_share: "session"
+  max_turns: 20
+  persist: true

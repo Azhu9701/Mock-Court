@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SidebarTitle } from "@/components/sidebar-title";
 
 export function SidebarLogo() {
   return (
@@ -12,7 +13,7 @@ export function SidebarLogo() {
         <path d="M10 17 Q10 8 14 6 Q18 8 18 17" stroke="currentColor" strokeWidth="1.2" fill="currentColor" fillOpacity="0.3" />
         <path d="M10.5 20 Q10.5 22 14 23.5 Q17.5 22 17.5 20" stroke="currentColor" strokeWidth="1.2" fill="none" />
       </svg>
-      <span className="text-lg font-bold whitespace-nowrap">Snake Skin</span>
+      <SidebarTitle />
     </Link>
   );
 }
