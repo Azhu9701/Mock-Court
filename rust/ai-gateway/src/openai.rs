@@ -78,6 +78,26 @@ impl OpenAIClient {
     }
 }
 
+impl OpenAIClient {
+    pub fn set_dynamic_base_url(&self, url: String) {
+        if let Some(ref lock) = self.dynamic_base_url {
+            *lock.write() = url;
+        }
+    }
+
+    pub fn set_dynamic_api_key(&self, key: Option<String>) {
+        if let Some(ref lock) = self.dynamic_api_key {
+            *lock.write() = key;
+        }
+    }
+
+    pub fn set_dynamic_model(&self, model: String) {
+        if let Some(ref lock) = self.dynamic_model {
+            *lock.write() = model;
+        }
+    }
+}
+
 impl Gateway for OpenAIClient {
     fn provider(&self) -> Provider {
         self.provider_type
@@ -180,6 +200,14 @@ impl Gateway for OpenAIClient {
             });
         }
 
+        // Tool definitions
+        if let Some(tools) = &config.tools {
+            body["tools"] = serde_json::to_value(tools).unwrap();
+            if let Some(tool_choice) = &config.tool_choice {
+                body["tool_choice"] = serde_json::json!(tool_choice);
+            }
+        }
+
         tokio::spawn(async move {
             let mut req = client
                 .post(format!("{}/chat/completions", base_url))
@@ -262,6 +290,8 @@ impl Gateway for OpenAIClient {
             let mut stream = response.bytes_stream();
             let mut buffer = String::new();
             let mut chunk_index: u32 = 0;
+            // Accumulate tool calls across streaming deltas
+            let mut accumulated_tool_calls: Vec<foundation::ToolCall> = Vec::new();
 
             while let Some(bytes_result) = stream.next().await {
                 match bytes_result {
@@ -273,6 +303,19 @@ impl Gateway for OpenAIClient {
                             if line.starts_with("data: ") {
                                 let data = &line[6..];
                                 if data == "[DONE]" {
+                                    // Flush any accumulated tool calls before finishing
+                                    if !accumulated_tool_calls.is_empty() {
+                                        let _ = tx.send(Ok(Chunk {
+                                            content: String::new(),
+                                            reasoning_content: None,
+                                            finish_reason: Some("tool_calls".into()),
+                                            index: chunk_index,
+                                            usage: None,
+                                            tool_calls: accumulated_tool_calls.clone(),
+                                        })).await;
+                                        accumulated_tool_calls.clear();
+                                        chunk_index += 1;
+                                    }
                                     let _ = tx.send(Ok(Chunk {
                                         content: String::new(),
                                         reasoning_content: None,
@@ -286,13 +329,56 @@ impl Gateway for OpenAIClient {
                                 if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
                                     if let Some(choices) = event["choices"].as_array() {
                                         for choice in choices {
+                                            // Parse tool_calls deltas (incremental)
+                                            if let Some(tool_calls) = choice["delta"]["tool_calls"].as_array() {
+                                                for tc in tool_calls {
+                                                    let index = tc["index"].as_u64().unwrap_or(0) as usize;
+                                                    while accumulated_tool_calls.len() <= index {
+                                                        accumulated_tool_calls.push(foundation::ToolCall {
+                                                            id: String::new(),
+                                                            r#type: "function".to_string(),
+                                                            function: foundation::ToolCallFunction {
+                                                                name: String::new(),
+                                                                arguments: String::new(),
+                                                            },
+                                                        });
+                                                    }
+                                                    if let Some(id) = tc["id"].as_str() {
+                                                        accumulated_tool_calls[index].id = id.to_string();
+                                                    }
+                                                    if let Some(name) = tc["function"]["name"].as_str() {
+                                                        accumulated_tool_calls[index].function.name = name.to_string();
+                                                    }
+                                                    if let Some(args) = tc["function"]["arguments"].as_str() {
+                                                        accumulated_tool_calls[index].function.arguments.push_str(args);
+                                                    }
+                                                }
+                                            }
+
                                             let content_text = choice["delta"]["content"].as_str();
                                             let reasoning_text = choice["delta"]["reasoning_content"].as_str();
+                                            let finish = choice["finish_reason"].as_str();
+
+                                            // On tool_calls finish reason, flush accumulated tool calls
+                                            // Don't set finish_reason here — [DONE] will be the terminal chunk
+                                            if finish == Some("tool_calls") && !accumulated_tool_calls.is_empty() {
+                                                let _ = tx.send(Ok(Chunk {
+                                                    content: String::new(),
+                                                    reasoning_content: None,
+                                                    finish_reason: None,
+                                                    index: chunk_index,
+                                                    usage: None,
+                                                    tool_calls: accumulated_tool_calls.clone(),
+                                                })).await;
+                                                accumulated_tool_calls.clear();
+                                                chunk_index += 1;
+                                            }
+
                                             if content_text.is_some() || reasoning_text.is_some() {
                                                 let _ = tx.send(Ok(Chunk {
                                                     content: content_text.unwrap_or("").to_string(),
                                                     reasoning_content: reasoning_text.map(|s| s.to_string()),
-                                                    finish_reason: choice["finish_reason"].as_str().map(|s| s.to_string()),
+                                                    finish_reason: finish.map(|s| s.to_string()),
                                                     index: chunk_index,
                                                     usage: None,
                                                     tool_calls: Vec::new(),
@@ -327,7 +413,18 @@ impl Gateway for OpenAIClient {
                     }
                 }
             }
-            // Stream EOF without [DONE] — send terminal chunk to unblock receiver
+            // Stream EOF without [DONE] — flush any remaining tool calls then send terminal
+            if !accumulated_tool_calls.is_empty() {
+                let _ = tx.send(Ok(Chunk {
+                    content: String::new(),
+                    reasoning_content: None,
+                    finish_reason: Some("tool_calls".into()),
+                    index: chunk_index,
+                    usage: None,
+                    tool_calls: accumulated_tool_calls,
+                })).await;
+                chunk_index += 1;
+            }
             let _ = tx.send(Ok(Chunk {
                 content: String::new(),
                 reasoning_content: None,
