@@ -864,45 +864,66 @@ async fn analyze_task(
             let provider = state.engine.gateway().pick_provider()
                 .ok_or_else(|| "No LLM provider available".to_string());
 
+            let domain = &state.config.domain;
+            let coord_label = domain.terms.get("coord_label").map(|s| s.as_str()).unwrap_or("坐标");
+            let agent_noun = domain.terms.get("agent_noun").map(|s| s.as_str()).unwrap_or("魂");
+            let banner_lord_title = domain.terms.get("banner_lord").map(|s| s.as_str()).unwrap_or("幡主");
+
             let result = match provider {
                 Ok(provider) => {
                     let review_system = format!(
-                        "{}你是{}，ismism坐标{}。你作为幡主审查官，需要完成两项任务：\n\
-                         1. 审查候选魂是否适合这个任务——不适合的要去掉或替换\n\
-                         2. 为每个确定使用的魂分派一个**差异化的子问题**——不是所有人分析同一个问题，\
-                         而是把你的总任务拆解成每个魂最擅长回答的那一个侧面\n\n\
+                        "{}{}你是{}，{}{}。你作为{banner_lord_title}审查官，需要完成两项任务：\n\
+                         1. 审查候选{agent_noun}是否适合这个任务——不适合的要去掉或替换\n\
+                         2. 为每个确定使用的{agent_noun}分派一个**差异化的子问题**——不是所有人分析同一个问题，\
+                         而是把你的总任务拆解成每个{agent_noun}最擅长回答的那一个侧面\n\n\
                          不读取文件——所有上下文已在 prompt 中。",
-                        banner_lord.summon_prompt, banner_lord.name, banner_lord.ismism_code
+                        banner_lord.summon_prompt, banner_lord.name, coord_label, banner_lord.ismism_code,
+                        banner_lord_title = banner_lord_title,
+                        agent_noun = agent_noun,
                     );
 
                     let mut candidates_info = String::new();
                     for p in &candidate_profiles {
                         let exclude_str = p.exclude_scenarios.join("、");
                         candidates_info.push_str(&format!(
-                            "- **{}** [{}] ismism={} self_declare=\"{}\" exclude_scenarios=\"{}\"\n",
-                            p.name, p.field, p.ismism_code,
+                            "- **{}** [{}] {}=\"{}\" self_declare=\"{}\" exclude_scenarios=\"{}\"\n",
+                            p.name, p.field, coord_label, p.ismism_code,
                             if p.self_declare.is_empty() { "无" } else { &p.self_declare },
                             if p.exclude_scenarios.is_empty() { "无" } else { &exclude_str }
                         ));
                     }
 
+                    // Domain-specific role descriptions for differential task assignment
+                    let dims = &domain.coordinate.dimensions;
+                    let d0 = dims.first().map(|d| d.name.as_str()).unwrap_or("维度1");
+                    let d1 = dims.get(1).map(|d| d.name.as_str()).unwrap_or("维度2");
+                    let d2 = dims.get(2).map(|d| d.name.as_str()).unwrap_or("维度3");
+                    let d3 = dims.get(3).map(|d| d.name.as_str()).unwrap_or("维度4");
+                    let role_guide = format!(
+                        "- 利用坐标差异——{d0}在前的{agent_noun}做地基（\"这是什么\"），\
+                         {d1}在前的{agent_noun}做边界（\"这看不到什么\"），\
+                         {d2}在前的{agent_noun}做自反（\"这个问法本身有什么问题\"），\
+                         {d3}在前的{agent_noun}做实践（\"怎么落地\"）",
+                        d0 = d0, d1 = d1, d2 = d2, d3 = d3, agent_noun = agent_noun
+                    );
+
                     let review_user = format!(
-                        "## 总任务\n{}\n\n## 使用者预设\n判断：{}\n担忧：{}\n未知：{}\n\n## 候选魂\n{}\n\n\
-                         ## 全魂库（供补位参考）\n{}\n\n\
+                        "## 总任务\n{}\n\n## 使用者预设\n判断：{}\n担忧：{}\n未知：{}\n\n## 候选{agent_noun}\n{}\n\n\
+                         ## 全{agent_noun}库（供补位参考）\n{}\n\n\
                          ## 你的两阶段任务\n\n\
-                         ### 第一阶段：审查魂组合\n\
-                         逐魂检查：领域覆盖、场域定位、魂间互补、视角缺失。裁决：pass / conditional / reject\n\n\
-                         **CRITICAL：如果裁决为 conditional 且需要补位，你必须把补位魂的名字也加入 verified_souls 数组中。\
-                         verified_souls 是上场名单的唯一数据源，只写在 missing_perspectives 里的魂不会上场！**\n\n\
+                         ### 第一阶段：审查{agent_noun}组合\n\
+                         逐{agent_noun}检查：领域覆盖、{coord_label}定位、{agent_noun}间互补、视角缺失。\
+                         裁决：pass / conditional / reject\n\n\
+                         **CRITICAL：如果裁决为 conditional 且需要补位，你必须把补位{agent_noun}的名字也加入 verified_souls 数组中。\
+                         verified_souls 是上场名单的唯一数据源，只写在 missing_perspectives 里的{agent_noun}不会上场！**\n\n\
                          ### 第二阶段：差异化任务分派\n\
-                         为每个确认使用的魂分配一个**只有他能回答好的子问题**。原则：\n\
-                         - 利用场域差异——场域1做地基（\"这是什么\"），场域2做边界（\"这看不到什么\"），\
-                         场域3做自反（\"这个问法本身有什么问题\"），场域4做实践（\"怎么落地\"）\n\
+                         为每个确认使用的{agent_noun}分配一个**只有他能回答好的子问题**。原则：\n\
+                         {role_guide}\n\
                          - 每个子问题要具体（\"请回答：X在Y条件下的Z\"），不要\"请分析\"这种空指令\n\n\
                          返回JSON：\
                          {{\"verdict\":\"pass|conditional|reject\",\
-                         \"verified_souls\":[\"魂名\"],\
-                         \"task_cards\":{{\"魂名\":\"专属子问题\"}},\
+                         \"verified_souls\":[\"{agent_noun}名\"],\
+                         \"task_cards\":{{\"{agent_noun}名\":\"专属子问题\"}},\
                          \"checks\":[\"审查结果\"],\
                          \"notes\":\"审查备注\",\
                          \"missing_perspectives\":[\"缺失视角\"],\
@@ -912,7 +933,10 @@ async fn analyze_task(
                         body.worry.as_deref().unwrap_or(""),
                         body.unknown.as_deref().unwrap_or(""),
                         candidates_info,
-                        &all_souls.iter().map(|s| format!("{} [{}] ismism={}", s.name, s.field, s.ismism_code)).collect::<Vec<_>>().join("\n"),
+                        &all_souls.iter().map(|s| format!("{} [{}] {}={}", s.name, s.field, coord_label, s.ismism_code)).collect::<Vec<_>>().join("\n"),
+                        agent_noun = agent_noun,
+                        coord_label = coord_label,
+                        role_guide = role_guide,
                     );
 
                     let messages = vec![
