@@ -54,6 +54,10 @@ pub struct SoulProfile {
     pub incompat: Vec<String>,
 }
 
+/// Framework-standard name for SoulProfile.
+/// SoulProfile is retained for backward compatibility.
+pub type AgentProfile = SoulProfile;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SoulFrontmatter {
     pub name: String,
