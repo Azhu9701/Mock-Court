@@ -254,8 +254,8 @@ impl Gateway for ClaudeClient {
                     );
                     format!("{}[uses:{:?} results:{:?}]", role, tool_uses, tool_results)
                 }).collect();
-                tracing::error!("Claude 400: {} | msgs={} roles={:?}", 
-                    &body[..body.len().min(300)], messages.len(), msg_roles);
+                tracing::error!("Claude {} error: {} | msgs={} roles={:?}", 
+                    status, &body[..body.len().min(300)], messages.len(), msg_roles);
                 let _ = tx.send(Err(FoundationError::Validation(format!(
                     "Claude API error {}: {}",
                     status, body

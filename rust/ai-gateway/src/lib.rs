@@ -526,7 +526,7 @@ impl GatewayRegistry {
     }
 
     pub fn try_next_provider(&self, current: &Provider) -> Option<Provider> {
-        let all = [Provider::LMStudio, Provider::DeepSeek, Provider::Claude, Provider::OpenAI];
+        let all = [Provider::Claude, Provider::DeepSeek, Provider::LMStudio, Provider::OpenAI];
         let current_idx = all.iter().position(|p| p == current);
         if let Some(idx) = current_idx {
             for i in (idx + 1)..all.len() {
