@@ -24,3 +24,4 @@ rate_limit:
 # CORS 允许的来源（默认 http://localhost:3000）
 cors_origins:
   - "http://localhost:3000"
+  - "http://localhost:3002"

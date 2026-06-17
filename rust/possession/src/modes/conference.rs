@@ -16,7 +16,7 @@ use crate::{SoulOutput, UserPresets, WsEvent, WsEventType, WsSessionManager};
 use super::topology;
 
 const MAX_PARALLEL_SOULS: usize = 10;
-const SOUL_TIMEOUT_SECS: u64 = 120;
+const SOUL_TIMEOUT_SECS: u64 = 180;
 
 /// 增强的合议模式
 pub async fn run(
@@ -512,6 +512,7 @@ async fn run_soul_with_tools(
                         );
                         used_providers.push(next_provider);
                         current_provider = next_provider;
+                        history = prompt.messages.clone();
                         continue;
             }
                 }
@@ -549,6 +550,8 @@ async fn run_soul_with_tools(
                     );
                     used_providers.push(next_provider);
                     current_provider = next_provider;
+                    // 重置 history 为原始 prompt，防止前一个 provider 残留的 tool_calls 污染
+                    history = prompt.messages.clone();
                     continue;
                 }
             }
