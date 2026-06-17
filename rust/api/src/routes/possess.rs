@@ -185,7 +185,7 @@ fn detect_case_type(task: &str) -> CaseType {
     // 注意：劳动者常同时提及多个问题（如"欠薪后开除"），此函数按首次命中返回。
     // 多问题复杂案件会归入第一个匹配的类型——覆盖主要诉求即可。
     if t.contains("开除") || t.contains("辞退") || t.contains("解雇") 
-       || t.contains("解除") && !t.contains("竞业限制") {
+       || (t.contains("解除") && !t.contains("竞业限制")) {
         CaseType::WrongfulDismissal
     } else if t.contains("工资") || t.contains("欠薪") || t.contains("拖欠") || t.contains("加班费") || t.contains("克扣") {
         CaseType::WageArrears

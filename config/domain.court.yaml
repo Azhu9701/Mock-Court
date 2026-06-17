@@ -184,5 +184,3 @@ enabled_modes:
 
 # 法庭裁决不需要马克思方法论底线——法官依法裁断，不按阶级分析
 methodological_commitment: ""
-  - conference
-  - debate

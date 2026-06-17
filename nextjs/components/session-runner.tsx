@@ -210,7 +210,7 @@ export function SessionRunner({ sessionId, mode, matchedSouls, taskTitle, onDone
     } else if (synthesisStarted) {
       progressText = `即将生成${synthesisVerb}…`;
     } else if (classifiedStep) {
-      const soulsInMsg = classifiedStep.message.match(/匹配魂[：:]\s*(.+)/);
+      const soulsInMsg = classifiedStep.message.match(/匹配.[：:]\s*(.+)/);
       const soulCount = soulsInMsg ? soulsInMsg[1].split(/[,，、]/).length : 0;
       progressText = `已匹配 ${soulCount} ${agentNoun}，等待回应…`;
     } else if (lastStep) {
