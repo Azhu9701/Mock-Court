@@ -238,7 +238,24 @@ impl Gateway for ClaudeClient {
             if !response.status().is_success() {
                 let status = response.status().as_u16();
                 let body = response.text().await.unwrap_or_default();
-                tracing::error!("Claude API error {}: {}", status, &body[..body.len().min(500)]);
+                // 诊断：打印所有消息的角色和 tool 状态
+                let msg_roles: Vec<String> = messages.iter().map(|m| {
+                    let role = m["role"].as_str().unwrap_or("?");
+                    let blocks = m["content"].as_array();
+                    let tool_uses: Vec<String> = blocks.map_or(vec![], |arr| 
+                        arr.iter().filter(|b| b["type"] == "tool_use")
+                           .map(|b| b["id"].as_str().unwrap_or("?").to_string())
+                           .collect()
+                    );
+                    let tool_results: Vec<String> = blocks.map_or(vec![], |arr|
+                        arr.iter().filter(|b| b["type"] == "tool_result")
+                           .map(|b| b["tool_use_id"].as_str().unwrap_or("?").to_string())
+                           .collect()
+                    );
+                    format!("{}[uses:{:?} results:{:?}]", role, tool_uses, tool_results)
+                }).collect();
+                tracing::error!("Claude 400: {} | msgs={} roles={:?}", 
+                    &body[..body.len().min(300)], messages.len(), msg_roles);
                 let _ = tx.send(Err(FoundationError::Validation(format!(
                     "Claude API error {}: {}",
                     status, body

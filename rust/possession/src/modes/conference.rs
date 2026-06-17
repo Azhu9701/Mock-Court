@@ -502,7 +502,9 @@ async fn run_soul_with_tools(
             Ok(rx) => rx,
             Err(e) => {
                 let error_msg = e.to_string();
-                gw.mark_provider_unhealthy(&current_provider, error_msg.clone());
+                if !error_msg.contains("400") {
+                    gw.mark_provider_unhealthy(&current_provider, error_msg.clone());
+                }
 
                 if let Some(next_provider) = gw.try_next_provider(&current_provider) {
                     if !used_providers.contains(&next_provider) {
@@ -541,7 +543,11 @@ async fn run_soul_with_tools(
         ).await;
 
         if output.error.is_some() {
-            gw.mark_provider_unhealthy(&current_provider, output.error.clone().unwrap_or_default());
+            let err_msg = output.error.clone().unwrap_or_default();
+            // 400 错误是 API 参数问题不是服务宕机，不标记 unhealthy
+            if !err_msg.contains("400") {
+                gw.mark_provider_unhealthy(&current_provider, err_msg.clone());
+            }
             if let Some(next_provider) = gw.try_next_provider(&current_provider) {
                 if !used_providers.contains(&next_provider) {
                     tracing::warn!(
@@ -562,6 +568,18 @@ async fn run_soul_with_tools(
             gw.mark_provider_healthy(&current_provider);
             return output;
         }
+
+        // 工具调用成功执行 → 标记 provider 健康
+        gw.mark_provider_healthy(&current_provider);
+
+        // 先追加 assistant 消息（含所有 tool_calls 和原始文本），再逐个追加 tool 结果
+        history.push(foundation::PromptMessage {
+            role: "assistant".to_string(),
+            content: output.content.clone(),
+            reasoning_content: Some(String::new()),
+            tool_calls: Some(output.tool_calls.clone()),
+            tool_call_id: None,
+        });
 
         for tc in &output.tool_calls {
                     let payload = crate::ToolCallPayload {
@@ -596,13 +614,6 @@ async fn run_soul_with_tools(
                                 seq: 0,
             });
 
-                            history.push(foundation::PromptMessage {
-                                role: "assistant".to_string(),
-                                content: String::new(),
-                                reasoning_content: Some(String::new()),
-                                tool_calls: Some(output.tool_calls.clone()),
-                                tool_call_id: None,
-            });
                             history.push(foundation::PromptMessage {
                                 role: "tool".to_string(),
                                 content: result,

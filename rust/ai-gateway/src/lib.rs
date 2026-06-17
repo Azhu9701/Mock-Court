@@ -248,7 +248,7 @@ impl GatewayRegistry {
         ));
 
         let mut health_states: HashMap<Provider, HealthState> = HashMap::new();
-        for p in [Provider::LMStudio, Provider::DeepSeek, Provider::Claude, Provider::OpenAI] {
+        for p in [Provider::Claude, Provider::DeepSeek, Provider::LMStudio, Provider::OpenAI] {
             health_states.insert(p, HealthState::default());
         }
 
@@ -492,7 +492,7 @@ impl GatewayRegistry {
                 }
             }
         }
-        for p in [Provider::LMStudio, Provider::DeepSeek, Provider::Claude, Provider::OpenAI] {
+        for p in [Provider::Claude, Provider::DeepSeek, Provider::LMStudio, Provider::OpenAI] {
             if let Some(gw) = self.providers.get(&p) {
                 if self.is_healthy_with_check(&p, gw) {
                     return Some(p);
@@ -512,7 +512,7 @@ impl GatewayRegistry {
                 }
             }
         }
-        for p in [Provider::LMStudio, Provider::DeepSeek, Provider::Claude, Provider::OpenAI] {
+        for p in [Provider::Claude, Provider::DeepSeek, Provider::LMStudio, Provider::OpenAI] {
             if available.contains(&p) {
                 continue;
             }
