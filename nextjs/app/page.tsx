@@ -4,10 +4,10 @@ import Link from "next/link";
 import { Brain, History, Search, BarChart3, ArrowRight } from "lucide-react";
 
 const QUICK_LINKS = [
-  { href: "/possess", label: "讨论", desc: "向历史与现在还有未来提问", icon: Brain },
-  { href: "/souls", label: "魂览", desc: "魂档案", icon: Search },
-  { href: "/sessions", label: "会话历史", desc: "回顾过去的附体会话", icon: History },
-  { href: "/analytics", label: "蛇皮统计", desc: "蛇皮指数 · 思辨消费跟踪", icon: BarChart3 },
+  { href: "/possess", label: "开庭", desc: "提交劳动争议案件，系统自动组建仲裁庭", icon: Brain },
+  { href: "/souls", label: "角色", desc: "仲裁庭角色档案", icon: Search },
+  { href: "/sessions", label: "庭审记录", desc: "回顾过往庭审会话", icon: History },
+  { href: "/analytics", label: "庭审统计", desc: "庭审效率指数 · 运行数据", icon: BarChart3 },
 ];
 
 export default function Home() {

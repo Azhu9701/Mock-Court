@@ -96,11 +96,9 @@ impl WsSessionManager {
         event: &WsEvent,
     ) {
         self.touch(session_id);
-        if let Some(state) = self.sessions.get(session_id) {
-            if let Some(senders) = state.soul_channels.get(soul_name) {
-                for tx in senders {
-                    let _ = tx.try_send(event.clone());
-                }
+        if let Some(mut state) = self.sessions.get_mut(session_id) {
+            if let Some(senders) = state.soul_channels.get_mut(soul_name) {
+                senders.retain(|tx| tx.try_send(event.clone()).is_ok());
             }
         }
         self.broadcast_system(session_id, event);
@@ -117,9 +115,8 @@ impl WsSessionManager {
                     state.event_buffer.pop_front();
                 }
             }
-            for tx in &state.system_channel {
-                let _ = tx.try_send(event.clone());
-            }
+            // retain 自动清除已关闭的 sender（客户端断开后 try_send 返回 Err）
+            state.system_channel.retain(|tx| tx.try_send(event.clone()).is_ok());
         }
     }
 
@@ -151,6 +148,8 @@ impl WsSessionManager {
     ) {
         self.touch(session_id);
         self.sessions.entry(session_id.to_string()).and_modify(|state| {
+            // 先清理已断开的僵尸 sender，再 replay 事件 + 添加新 sender
+            state.system_channel.retain(|tx| !tx.is_closed());
             for event in &state.event_buffer {
                 let _ = new_system_tx.try_send(event.clone());
             }
@@ -172,6 +171,8 @@ impl WsSessionManager {
             self.sessions.entry(session_id.to_string()).and_modify(|state| {
                 match channel {
                     "main" => {
+                        // 先清理僵尸 sender，再 replay + 添加
+                        state.system_channel.retain(|t| !t.is_closed());
                         for event in &state.event_buffer {
                             let _ = tx.try_send(event.clone());
                         }
@@ -179,11 +180,12 @@ impl WsSessionManager {
                         tracing::info!("Added to system channel, now {} subscribers (replayed {} buffered events)", state.system_channel.len(), state.event_buffer.len());
                     }
                     _ => {
-                        state
+                        let entry = state
                             .soul_channels
                             .entry(channel.to_string())
-                            .or_default()
-                            .push(tx);
+                            .or_default();
+                        entry.retain(|t| !t.is_closed());
+                        entry.push(tx);
                     }
                 }
             });

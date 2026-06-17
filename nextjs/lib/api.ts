@@ -652,6 +652,21 @@ export async function startPossession(params: {
   });
 }
 
+/** POST /possess/court — 一键启动模拟仲裁庭（5角色 conference） */
+export async function startCourtSession(params: {
+  task: string;
+  judgment?: string;
+  worry?: string;
+  unknown?: string;
+}): Promise<StartPossessionResponse> {
+  return apiRequest<StartPossessionResponse>('/possess/court', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+    operation: 'startCourtSession',
+  });
+}
+
 export async function exportSessionMarkdown(id: string, title: string): Promise<void> {
   const url = `${API_BASE}/sessions/${id}/export/markdown`;
   // window.open 触发浏览器原生下载行为，允许用户选择保存位置
@@ -1051,6 +1066,9 @@ const RESERVED_LABELS = new Set([
  * - Reject items whose extracted name is in RESERVED_LABELS (catches nested **推荐理由** etc)
  */
 export function extractRecommendedSouls(synthesis: string): ParsedSoulRecommendation[] {
+  // 保护：超过 50KB 的综合文本不进行正则解析（防止对巨型内容的灾难性回溯导致 OOM）
+  if (synthesis.length > 50_000) return [];
+
   const sectionStart = synthesis.indexOf("## 七、推荐补充魂");
   if (sectionStart === -1) return [];
 

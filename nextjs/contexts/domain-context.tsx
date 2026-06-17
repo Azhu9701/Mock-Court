@@ -5,9 +5,7 @@ import { getDomainInfo, setDomain as apiSetDomain, type DomainInfo } from "@/lib
 
 // 内置领域预设——用于初始显示（在 API 响应前）
 const DOMAIN_PRESETS: Record<string, { icon: string; label: string }> = {
-  philosophy: { icon: "🧭", label: "万民幡" },
-  legal: { icon: "⚖️", label: "法律智囊团" },
-  labor: { icon: "🛡️", label: "工友智囊团" },
+  court: { icon: "🏛", label: "模拟仲裁庭" },
 };
 
 interface DomainContextType {
@@ -25,13 +23,13 @@ interface DomainContextType {
 const DomainContext = createContext<DomainContextType | undefined>(undefined);
 
 const DEFAULT_STATE: Omit<DomainContextType, "switchDomain"> = {
-  profile: "philosophy",
-  systemName: "万民幡",
-  agentNoun: "魂",
-  synthesisVerb: "辩证综合",
-  dimensions: ["场域", "本体论", "认识论", "目的论"],
-  enabledModes: ["single", "conference", "debate", "relay", "learn", "practice_opening"],
-  icon: "🧭",
+  profile: "court",
+  systemName: "模拟仲裁庭",
+  agentNoun: "庭审参与者",
+  synthesisVerb: "法庭裁决",
+  dimensions: ["法庭角色", "法律立场", "论证方法", "价值取向"],
+  enabledModes: ["single", "conference", "debate"],
+  icon: "🏛",
   ready: false,
 };
 

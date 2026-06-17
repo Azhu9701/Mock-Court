@@ -6,10 +6,10 @@ import { ChevronRight } from "lucide-react";
 import { useBreadcrumb } from "@/contexts/breadcrumb-context";
 
 const labels: Record<string, string> = {
-  souls: "魂览",
-  possess: "讨论",
-  sessions: "会话历史",
-  analytics: "蛇皮统计",
+  souls: "角色",
+  possess: "开庭",
+  sessions: "庭审记录",
+  analytics: "庭审统计",
 };
 
 export function Breadcrumb() {

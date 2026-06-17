@@ -88,19 +88,21 @@ export default function SessionDetailPage() {
   // Track whether auto-distill has been attempted for this session
   const autoDistilledRef = useRef(false);
 
-  // Fetch digest on mount
+  // 并行拉取所有数据（digest + detail + annotations），不串行等待
   useEffect(() => {
     fetchSessionDigest(id).then((d) => { if (mountedRef.current) setDigest(d); }).catch(() => { if (mountedRef.current) setDigestError(true); });
+    fetchSessionDetail(id, true).then((d) => { if (mountedRef.current) setDetail(d); }).catch(() => {});
+    fetchSessionAnnotations(id).then((a) => { if (mountedRef.current) setAnnotations(a); }).catch(() => {});
   }, [id]);
 
-  // Auto-distill: if session is completed but has no observations, trigger distill
+  // Auto-distill: only trigger if session has NEVER been distilled (digest_at === null)
+  // 之前检查 observations.length === 0 会导致 distill 失败后每次打开都重新触发
   useEffect(() => {
     if (!digest || autoDistilledRef.current) return;
-    if ((digest.status === 'completed' || digest.status === 'active') && digest.observations.length === 0) {
+    if ((digest.status === 'completed' || digest.status === 'active') && digest.digest_at === null) {
       autoDistilledRef.current = true;
       setDistilling(true);
       triggerDistill(id).finally(() => {
-        // Poll for digest after a short delay
         setTimeout(() => {
           if (!mountedRef.current) return;
           fetchSessionDigest(id).then((d) => { if (mountedRef.current) setDigest(d); }).catch(() => {});
@@ -109,11 +111,6 @@ export default function SessionDetailPage() {
       });
     }
   }, [digest, id]);
-
-  // Fetch annotations on mount
-  useEffect(() => {
-    fetchSessionAnnotations(id).then((a) => { if (mountedRef.current) setAnnotations(a); }).catch(() => {});
-  }, [id]);
 
   // Refresh digest + annotations when SESSIONS_UPDATED_EVENT fires
   // (dispatched by WS observations_ready or annotations_ready)
@@ -135,14 +132,6 @@ export default function SessionDetailPage() {
       setExpanded(digest.observations.length === 0);
     }
   }, [digest, expanded]);
-
-  // Fetch full detail eagerly after digest loads — needed for synthesis-based
-  // soul recommendations even when user keeps the conversation collapsed.
-  useEffect(() => {
-    if (digest && !detail) {
-      fetchSessionDetail(id, true).then((d) => { if (mountedRef.current) setDetail(d); }).catch(() => {});
-    }
-  }, [digest, id, detail]);
 
   // After detail loads, scroll to pending anchor if requested
   useEffect(() => {
@@ -368,6 +357,8 @@ function FullConversation({
   const { messages } = detail;
   const [deleting, setDeleting] = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState<number | null>(null);
+  // 追问记录分页：初始只渲染前 5 条，避免大量 ReactMarkdown 一次性解析
+  const [followUpLimit, setFollowUpLimit] = useState(5);
 
   const handleDelete = async (seq: number) => {
     setDeleting(seq);
@@ -516,7 +507,7 @@ function FullConversation({
       {followPairs.length > 0 && (
         <div className="space-y-6 border-t pt-6">
           <h3 className="text-sm font-semibold text-muted-foreground">追问记录</h3>
-          {followPairs.map(({ question, answer }) => (
+          {followPairs.slice(0, followUpLimit).map(({ question, answer }) => (
             <div key={question.id} className="space-y-4">
               <div id={`msg-${question.seq}`} className="group flex gap-3 flex-row-reverse scroll-mt-20 rounded-xl">
                 <div className="shrink-0">
@@ -572,6 +563,17 @@ function FullConversation({
               )}
             </div>
           ))}
+          {followPairs.length > followUpLimit && (
+            <div className="text-center py-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setFollowUpLimit(followUpLimit + 10)}
+              >
+                加载更多追问（剩余 {followPairs.length - followUpLimit} 条）
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </div>

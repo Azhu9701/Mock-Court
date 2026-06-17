@@ -255,13 +255,31 @@ impl Gateway for ClaudeClient {
                 Err(e) => { let _ = tx.send(Err(FoundationError::Validation(format!("Claude parse error: {}", e)))).await; return; }
             };
             let mut full_text = String::new();
+            let mut tool_calls = Vec::new();
             if let Some(blocks) = resp["content"].as_array() {
-                for b in blocks { if b["type"].as_str() == Some("text") { if let Some(t) = b["text"].as_str() { full_text.push_str(t); } } }
+                for b in blocks {
+                    match b["type"].as_str() {
+                        Some("text") => {
+                            if let Some(t) = b["text"].as_str() { full_text.push_str(t); }
+                        }
+                        Some("tool_use") => {
+                            let id = b["id"].as_str().unwrap_or("").to_string();
+                            let name = b["name"].as_str().unwrap_or("").to_string();
+                            let args = b["input"].to_string();
+                            tool_calls.push(foundation::ToolCall {
+                                id,
+                                r#type: "function".to_string(),
+                                function: foundation::ToolCallFunction { name, arguments: args },
+                            });
+                        }
+                        _ => {}
+                    }
+                }
             }
             let it = resp["usage"]["input_tokens"].as_u64().unwrap_or(0) as u32;
             let ot = resp["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32;
-            if !full_text.is_empty() {
-                let _ = tx.send(Ok(Chunk { content: full_text, reasoning_content: None, finish_reason: None, index: 0, usage: None, tool_calls: vec![] })).await;
+            if !full_text.is_empty() || !tool_calls.is_empty() {
+                let _ = tx.send(Ok(Chunk { content: full_text, reasoning_content: None, finish_reason: None, index: 0, usage: None, tool_calls })).await;
             }
             let _ = tx.send(Ok(Chunk { content: String::new(), reasoning_content: None, finish_reason: Some(resp["stop_reason"].as_str().unwrap_or("end_turn").to_string()), index: 1, usage: Some(UsageStats { prompt_tokens: it, completion_tokens: ot, total_tokens: it + ot }), tool_calls: vec![] })).await;
         });

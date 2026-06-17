@@ -17,6 +17,7 @@ const PROFILE_ICONS: Record<string, string> = {
   philosophy: "🧭",
   legal: "⚖️",
   labor: "🛡️",
+  court: "🏛",
 };
 
 export function DomainSwitcher() {

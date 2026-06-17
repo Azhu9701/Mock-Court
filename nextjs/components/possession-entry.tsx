@@ -11,7 +11,7 @@ import {
   MessageCircle, Wand2
 } from "lucide-react";
 import {
-  analyzeTask, startPossession, searchWeb, submitInterrogation,
+  analyzeTask, startPossession, startCourtSession, searchWeb, submitInterrogation,
   type SearxngResultItem, type InterrogationQuestion, type InterrogationVerdictResponse, type InterrogationResponse,
   API_BASE,
 } from "@/lib/api";
@@ -273,6 +273,11 @@ export function PossessionEntry() {
     setCurrentStreamSource("");
     setIsStreaming(false);
     isStreamingRef.current = false;
+    // 清理上一次残留的流式缓冲定时器，防止旧 flush 覆盖新状态
+    if (streamFlushTimerRef.current) {
+      clearTimeout(streamFlushTimerRef.current);
+      streamFlushTimerRef.current = null;
+    }
 
     // ── 审查官入场审讯 ──
     if (skipInterrogationRef.current) {
@@ -344,6 +349,10 @@ export function PossessionEntry() {
       addLog("开始分析任务...");
       setProgressLine("正在分析任务，入口分流中…");
       const reviewer = localStorage.getItem("aionui-banner-lord") || undefined;
+      // 若存在上一轮未完成的 SSE 连接，先 abort 避免并发累积
+      if (abortRef.current) {
+        abortRef.current.abort();
+      }
       abortRef.current = new AbortController();
 
       const data = await analyzeTask(task, reviewer, abortRef.current.signal, (event) => {
@@ -510,6 +519,33 @@ export function PossessionEntry() {
     addLog("⏹️ 用户取消了操作");
   };
 
+  // ── 模拟仲裁庭快捷入口 ──
+  const onStartCourt = async () => {
+    if (!canStart) return;
+    setIsCancelled(false);
+    setLog([]);
+    setError("");
+    setPhase("starting");
+    setProgressLine("🏛 正在组建模拟仲裁庭…");
+    addLog("🏛 启动模拟仲裁庭：仲裁法官、原告律师、被告律师、专家证人、劳动者之声");
+    try {
+      abortRef.current = new AbortController();
+      const { session_id } = await startCourtSession({ task: task.trim() });
+      if (isCancelled) { setPhase("input"); return; }
+      setSessionId(session_id);
+      setMode("conference");
+      setPhase("running");
+      addLog("🎉 仲裁庭已开庭，5 位庭审参与者正在发言…");
+      setProgressLine("庭审进行中…");
+      triggerSessionsUpdate();
+    } catch (e: unknown) {
+      const errorMsg = e instanceof Error ? e.message : String(e);
+      setError(errorMsg);
+      addLog(`❌ 开庭失败: ${errorMsg}`);
+      setPhase("input");
+    }
+  };
+
   const getModeLabel = (m: string) => (MODE_LABELS_LONG as Record<string, string>)[m] || m;
 
   const getVerdictLabel = (v: string) => {
@@ -529,9 +565,9 @@ export function PossessionEntry() {
     }).catch(() => {});
   };
 
-  const handleSessionDone = () => {
+  const handleSessionDone = useCallback(() => {
     setSessionDone(true);
-  };
+  }, []);
 
   const filteredLogs = log.filter((l) => {
     if (logFilter === "全部") return true;
@@ -569,6 +605,15 @@ export function PossessionEntry() {
             <p className="text-sm text-muted-foreground">
               输入你的问题，系统将自动完成全流程
             </p>
+            <button
+              type="button"
+              onClick={onStartCourt}
+              disabled={!canStart}
+              className="inline-flex items-center gap-1.5 mt-2 px-4 py-1.5 rounded-full text-xs font-medium border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-950/50 transition-colors disabled:opacity-40"
+            >
+              🏛 模拟仲裁庭
+              <span className="text-[10px] opacity-70">5角色 · 一键开庭</span>
+            </button>
           </div>
           
           <div className="rounded-xl border bg-background p-6 shadow-sm">

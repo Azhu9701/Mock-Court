@@ -201,6 +201,8 @@ pub async fn distill_session(
 
     if raw.is_empty() {
         tracing::warn!("distill empty response for session {}", session_id);
+        // 即使失败也写入 summary，防止每次打开页面重复触发 distill
+        let _ = store.update_session_digest(session_id, "压缩失败：LLM 无输出").await;
         return Ok(DigestSummary {
             summary: "压缩失败：LLM 无输出".to_string(),
             observation_count: 0,
@@ -221,6 +223,8 @@ pub async fn distill_session(
         }
         Err(e) => {
             tracing::warn!("distill parse error: {} | raw: {}", e, raw_preview);
+            // 即使解析失败也写入 summary，防止重复触发
+            let _ = store.update_session_digest(session_id, &format!("压缩解析失败: {}", e)).await;
             return Ok(DigestSummary {
                 summary: format!("压缩解析失败: {}", e),
                 observation_count: 0,
@@ -442,6 +446,8 @@ pub fn spawn_distill(
     tokio::spawn(async move {
         tracing::info!("distill started for session {}", session_id);
         let timeout = Duration::from_secs(DISTILL_TIMEOUT_SECS);
+        // Clone store for fallback writes in error/timeout branches
+        let store_for_fallback = store.clone();
         match tokio::time::timeout(timeout, distill_session(store, gateway, &session_id)).await {
             Ok(Ok(digest)) => {
                 tracing::info!(
@@ -462,9 +468,11 @@ pub fn spawn_distill(
             }
             Ok(Err(e)) => {
                 tracing::warn!("distill failed for session {}: {}", session_id, e);
+                let _ = store_for_fallback.update_session_digest(&session_id, "压缩失败：引擎错误").await;
             }
             Err(_) => {
                 tracing::warn!("distill timed out after {}s for session {}", DISTILL_TIMEOUT_SECS, session_id);
+                let _ = store_for_fallback.update_session_digest(&session_id, "压缩失败：超时").await;
             }
         }
     });

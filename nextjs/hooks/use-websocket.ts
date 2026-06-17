@@ -78,6 +78,8 @@ export interface DigestReadyEvent {
 
 const MAX_RETRIES = 3;
 const FLUSH_INTERVAL_MS = 50; // batch state updates at ~20fps
+const MAX_SOUL_CONTENT_BYTES = 80_000; // 80KB per soul — 远超正常 LLM 输出，防止异常流式洪水
+const MAX_COST_PER_SOUL_ENTRIES = 20;   // 防止 cost 事件无限 push
 
 const EVENT_LABEL: Record<string, string> = {
   session_started: "SessionStarted",
@@ -257,11 +259,14 @@ export function useWebSocket(sessionId: string) {
                 error: null,
               };
             } else {
-              // Create a new object reference to ensure React detects changes
-              bufferRef.current[soulName] = {
-                ...bufferRef.current[soulName],
-                content: bufferRef.current[soulName].content + event.payload,
-              };
+              const current = bufferRef.current[soulName];
+              // 字节上限保护：超过 80KB 后不再累加，防止异常流式洪水导致 OOM
+              if (current.content.length < MAX_SOUL_CONTENT_BYTES) {
+                bufferRef.current[soulName] = {
+                  ...current,
+                  content: current.content + event.payload,
+                };
+              }
             }
             scheduleFlush();
           }
@@ -298,6 +303,7 @@ export function useWebSocket(sessionId: string) {
 
         case "synthesis_done":
           flushImmediate();
+          synthesisRef.current = "";  // 流结束立即清空 ref，防止无限累加
           addLog(`综合分析完成`, 'success');
           break;
 
@@ -316,6 +322,9 @@ export function useWebSocket(sessionId: string) {
             const payload = JSON.parse(event.payload);
             if (payload.soul_name) {
               costPerSoulRef.current = [...costPerSoulRef.current, payload as SoulCostBreakdown];
+              if (costPerSoulRef.current.length > MAX_COST_PER_SOUL_ENTRIES) {
+                costPerSoulRef.current = costPerSoulRef.current.slice(-MAX_COST_PER_SOUL_ENTRIES);
+              }
             } else {
               const perSoul = payload.per_soul || costPerSoulRef.current;
               setCost({ llm_calls: payload.llm_calls || 0, tokens_used: payload.tokens_used || 0, per_soul: perSoul });
@@ -403,6 +412,7 @@ export function useWebSocket(sessionId: string) {
         case "done":
         case "SessionComplete":
           flushImmediate();
+          synthesisRef.current = "";  // 防止 ref 中残留完整会话内容
           setStatus("done");
           addLog(`会话完成`, 'success');
           break;

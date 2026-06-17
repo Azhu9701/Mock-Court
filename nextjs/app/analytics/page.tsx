@@ -21,10 +21,10 @@ import { SessionTimeline } from "@/components/session-timeline";
 import { Skeleton } from "@/components/ui/skeleton";
 
 function pleasureLabel(pi: number): string {
-  if (pi >= 70) return "蛇皮厚重 — 用AI辩论代替思考，和刷短视频没区别";
-  if (pi >= 40) return "蛇皮中等 — 有一半在消费观点，不是在行动";
-  if (pi >= 15) return "蛇皮较薄 — 多数会话有实践产出";
-  return "接近蜕皮 — 思辨真的在服务行动";
+  if (pi >= 70) return "空转严重 — 庭审走过场，没有实质裁决产出";
+  if (pi >= 40) return "效率中等 — 部分庭审缺乏闭环";
+  if (pi >= 15) return "效率良好 — 多数庭审有明确裁决";
+  return "高效庭审 — 每次都有实质成果";
 }
 
 function pleasureColor(pi: number): string {
@@ -66,8 +66,8 @@ export default function DashboardPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-2xl font-bold">蛇皮统计</h1>
-          <p className="text-sm text-muted-foreground mt-1">你的思辨消费记录</p>
+          <h1 className="text-2xl font-bold">庭审统计</h1>
+          <p className="text-sm text-muted-foreground mt-1">模拟仲裁庭运行数据</p>
         </div>
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           {Array.from({ length: 5 }).map((_, i) => (
@@ -111,16 +111,16 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">蛇皮统计</h1>
-        <p className="text-sm text-muted-foreground mt-1">你的思辨消费记录</p>
+        <h1 className="text-2xl font-bold">庭审统计</h1>
+        <p className="text-sm text-muted-foreground mt-1">模拟仲裁庭运行数据</p>
       </div>
 
-      {/* 蛇皮指数 — 核心指标 */}
+      {/* 庭审效率指数 — 核心指标 */}
       <div className="rounded-xl border bg-gradient-to-br from-red-50/40 to-yellow-50/20 dark:from-red-950/15 dark:to-yellow-950/5 p-5 space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <h3 className="text-sm font-semibold">蛇皮指数</h3>
+          <h3 className="text-sm font-semibold">庭审效率指数</h3>
           <span className="text-xs text-muted-foreground">
-            基于 {pleasure.total_reviewed} 次会话 · 未走闭环 = 消费型
+            基于 {pleasure.total_reviewed} 次庭审 · 未出裁决 = 空转
           </span>
         </div>
         <div className="flex items-baseline gap-2">
@@ -150,21 +150,21 @@ export default function DashboardPage() {
       {/* 蛇皮分解卡片 */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
-          title="消费型会话"
+          title="空转庭审"
           value={pleasure.invalid_sessions}
-          subtitle="未走闭环或写不出行动"
+          subtitle="未出裁决或裁决空洞"
           icon="alert-triangle"
         />
         <StatCard
-          title="意向型会话"
+          title="部分有效庭审"
           value={pleasure.partial_sessions}
-          subtitle="承诺模糊"
+          subtitle="裁决不够具体"
           icon="bar-chart"
         />
         <StatCard
-          title="实践型会话"
+          title="有效庭审"
           value={pleasure.effective_sessions}
-          subtitle="有具体行动"
+          subtitle="有明确裁决和行动"
           icon="check-circle"
         />
         <StatCard
@@ -178,19 +178,19 @@ export default function DashboardPage() {
       {/* 原有统计 */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
-          title="总召唤次数"
+          title="总开庭次数"
           value={stats.total_calls}
           subtitle="全部历史"
           icon="bar-chart"
         />
         <StatCard
-          title="魂参与率"
+          title="角色参与率"
           value={participationRate}
-          subtitle={`${stats.unique_souls_called}/${stats.total_souls_available} 魂`}
+          subtitle={`${stats.unique_souls_called}/${stats.total_souls_available} 角色`}
           icon="users"
         />
         <StatCard
-          title="魂有效率"
+          title="庭审有效率"
           value={effectiveRate}
           subtitle={`${totalEffective} 有效 / ${totalAll} 次`}
           icon="check-circle"

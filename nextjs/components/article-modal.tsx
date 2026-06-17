@@ -20,7 +20,10 @@ function cleanContent(content: string): string {
 }
 
 export function ArticleModal({ isOpen, onClose, title, ismismCode, content }: ArticleModalProps) {
-  const cleanedContent = useMemo(() => cleanContent(content), [content]);
+  const cleanedContent = useMemo(() => {
+    if (!isOpen) return "";  // 关闭时不解析 Markdown，避免 20+ 实例同时创建 AST
+    return cleanContent(content);
+  }, [content, isOpen]);
 
   const handleEscape = useCallback((e: KeyboardEvent) => {
     if (e.key === "Escape") onClose();
@@ -38,13 +41,14 @@ export function ArticleModal({ isOpen, onClose, title, ismismCode, content }: Ar
     };
   }, [isOpen, handleEscape]);
 
-  const markdownElement = useMemo(() => (
-    <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanedContent}</ReactMarkdown>
-  ), [cleanedContent]);
+  const markdownElement = useMemo(() => {
+    if (!cleanedContent) return null;
+    return <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanedContent}</ReactMarkdown>;
+  }, [cleanedContent]);
 
   const handleDownload = useCallback(() => {
     const safeName = title.replace(/[\\/:*?"<>|]/g, "_").slice(0, 80) || "魂回应";
-    const blob = new Blob([cleanedContent], { type: "text/markdown;charset=utf-8" });
+    const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -53,7 +57,7 @@ export function ArticleModal({ isOpen, onClose, title, ismismCode, content }: Ar
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }, [title, cleanedContent]);
+  }, [title, content]);
 
   if (!isOpen) return null;
 

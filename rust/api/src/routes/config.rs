@@ -992,9 +992,7 @@ async fn test_claude(
 /// 内置领域预设——profile 名 → 文件名
 const DOMAIN_FILES: &[(&str, &str, &str)] = &[
     // (profile_id, display_label, config_file)
-    ("philosophy", "万民幡", "domain.yaml"),
-    ("legal", "法律智囊团", "domain.legal.yaml.example"),
-    ("labor", "工友智囊团", "domain.labor.yaml"),
+    ("court", "模拟仲裁庭", "domain.court.yaml"),
 ];
 
 #[derive(Debug, Clone, Serialize)]

@@ -55,7 +55,8 @@ pub async fn stream_single_soul_with_provider(
             }
             Err(e) => {
                 let error_msg = e.to_string();
-                gateway.mark_provider_unhealthy(provider, error_msg.clone());
+                // 瞬断不封杀 — 让 conference 自行 fallback
+tracing::warn!("Soul stream error for {}: {}", soul_name, error_msg);
                 ws.broadcast_soul(
                     session_id,
                     &name,
@@ -276,7 +277,7 @@ pub async fn run_tool_loop(
             Ok(rx) => rx,
             Err(e) => {
                 let error_msg = e.to_string();
-                gateway.mark_provider_unhealthy(&current_provider, error_msg.clone());
+                tracing::warn!("Tool loop: provider {:?} failed: {} — trying fallback", current_provider, error_msg);
 
                 if let Some(next_provider) = gateway.try_next_provider(&current_provider) {
                     if !used_providers.contains(&next_provider) {
@@ -325,6 +326,15 @@ pub async fn run_tool_loop(
         if output.tool_calls.is_empty() {
             return output;
         }
+
+        // 先推 assistant 消息（含所有 tool_calls），再逐个推 tool_result
+        history.push(PromptMessage {
+            role: "assistant".to_string(),
+            content: String::new(),
+            reasoning_content: Some(String::new()),
+            tool_calls: Some(output.tool_calls.clone()),
+            tool_call_id: None,
+        });
 
         for tc in &output.tool_calls {
             let payload = ToolCallPayload {

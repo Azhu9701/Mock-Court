@@ -335,6 +335,9 @@ export default function FollowUpInput({
           // Only accept done events after the follow-up HTTP POST has been sent.
           if (!followUpReadyRef.current) return;
           flushImmediate();
+          // 流结束后立即清空 ref，防止内容在 ref 中无限累加导致 OOM
+          contentRef.current = "";
+          reasoningContentRef.current = "";
           setSending(false);
           cleanup();
           router.refresh();
