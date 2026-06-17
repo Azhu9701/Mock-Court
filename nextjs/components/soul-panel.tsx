@@ -16,6 +16,7 @@ interface SoulPanelProps {
   ismismCode?: string;
   isExpanded?: boolean;
   onToggleExpand?: () => void;
+  roleLabel?: string;
 }
 
 export function SoulPanel({
@@ -27,6 +28,7 @@ export function SoulPanel({
   ismismCode = "",
   isExpanded = false,
   onToggleExpand,
+  roleLabel,
 }: SoulPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showTooltip, setShowTooltip] = useState(false);
@@ -68,8 +70,13 @@ export function SoulPanel({
     >
       {/* 头部 */}
       <div className="px-4 py-2 border-b bg-muted/30 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="font-semibold text-sm">{name}</span>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="font-semibold text-sm truncate">{name}</span>
+          {roleLabel && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium flex-shrink-0">
+              {roleLabel}
+            </span>
+          )}
           {ismismCode && (
             <div
               className="relative"

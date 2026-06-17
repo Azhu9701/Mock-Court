@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Sparkles, ShieldCheck, ChevronUp, ChevronDown, ArrowRightCircle } from "lucide-react";
 import { MODE_LABELS_LONG } from "@/config/possession-modes";
+import { useDomain } from "@/contexts/domain-context";
 
 /** 过滤 AI thinking / reasoning 内容 */
 function stripThinking(text: string): string {
@@ -61,6 +62,7 @@ function getVerdictLabel(v: string) {
 
 export function SessionContextHeader({ task, mode, matchedSouls, review }: SessionContextHeaderProps) {
   const [showDetail, setShowDetail] = useState(true);
+  const { agentNoun } = useDomain();
 
   return (
     <div className="rounded-xl border bg-gradient-to-br from-muted/40 to-background p-4 shadow-sm">
@@ -70,7 +72,7 @@ export function SessionContextHeader({ task, mode, matchedSouls, review }: Sessi
           <p className="text-sm text-muted-foreground mt-1 flex items-center gap-2">
             <span>模式：{(MODE_LABELS_LONG as Record<string, string>)[mode] || mode}</span>
             <span>·</span>
-            <span>{matchedSouls.length} 魂</span>
+            <span>{matchedSouls.length} {agentNoun}</span>
             {review && (
               <>
                 <span>·</span>
@@ -93,7 +95,7 @@ export function SessionContextHeader({ task, mode, matchedSouls, review }: Sessi
           <div>
             <h4 className="font-medium text-muted-foreground mb-3 flex items-center gap-2">
               <Sparkles className="h-4 w-4" />
-              匹配魂
+              匹配{agentNoun}
             </h4>
             <div className="grid gap-3">
               {matchedSouls.map((s) => (

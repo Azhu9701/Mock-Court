@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import { ArrowUpRight } from "lucide-react";
 import { ArticleModal } from "./article-modal";
 import { cn } from "@/lib/utils";
+import { useDomain } from "@/contexts/domain-context";
 
 function cleanContent(raw: string): string {
   return raw.replace(/<[^>]+>/g, "").trim();
@@ -24,6 +25,7 @@ interface SynthesisSectionProps {
 
 export function SynthesisSection({ messages, streaming = false }: SynthesisSectionProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const { synthesisVerb } = useDomain();
 
   const msg = messages[0];
   const cleanedContent = cleanContent(msg.content);
@@ -31,7 +33,7 @@ export function SynthesisSection({ messages, streaming = false }: SynthesisSecti
   const header = (
     <div className="px-4 py-2 border-b flex items-center justify-between bg-primary/5">
       <div className="flex items-center gap-2">
-        <span className="font-semibold text-sm">辩证综合</span>
+        <span className="font-semibold text-sm">{synthesisVerb}</span>
         <span className="ml-2 text-xs text-muted-foreground">
           {new Date(msg.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
         </span>

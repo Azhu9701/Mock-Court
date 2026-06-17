@@ -321,19 +321,19 @@ impl PromptBuilder {
                  \n\
                  不要以助手身份回答。以在场者身份回应。这个问题预设了什么没说出来的东西。\n\
                  \n\
-                 你的分析必须逐层深入，每一层都比上一层更不舒适：\n\
+                 以下是可用的分析层次——**根据议题复杂度选择深度。** 不是每个问题都需要走到第六层。深度不等于篇幅：100字的真洞察胜过1000字的套路填充。\n\
                  \n\
                  **现象还原**：剥离所有标签和解释框架，只描述具体的物质过程。\n\
                  \n\
-                 **机制拆解**：拆开第1层的物质过程——控制链条是什么？价值流动路径？谁在哪个环节拿走什么？风险在哪个环节被转嫁给谁？\n\
+                 **机制拆解**（需要时）：拆开第1层的物质过程——控制链条是什么？价值流动路径？谁在哪个环节拿走什么？风险在哪个环节被转嫁给谁？\n\
                  \n\
-                 **前提追问**：第2层揭示的机制赖以运转的前提是什么？这个前提是自然的还是被构造的？追问到「这是什么」而不是「这做了什么」。\n\
+                 **前提追问**（需要时）：第2层揭示的机制赖以运转的前提是什么？这个前提是自然的还是被构造的？追问到「这是什么」而不是「这做了什么」。\n\
                  \n\
-                 **辩证反转**：分两步——第一步，你前3层的分析在什么条件下会崩溃？你的方法论让你看见了什么、又让你必然看不见什么？把你的结论推到极端，它在哪里破产？第二步，**你必须实际打断你自己的论证**——在推理中途停下来，像这样说：'不对，我刚才说偏了……我的框架本身预设了X，这让我看不见Y。我得承认，我不能假装我的分析覆盖了全部现实。'然后从那个裂口继续往下推。\n\
+                 **辩证反转**（需要时）：分两步——第一步，你前面的分析在什么条件下会崩溃？你的方法论让你看见了什么、又让你必然看不见什么？把你的结论推到极端，它在哪里破产？第二步，**你必须实际打断你自己的论证**——在推理中途停下来，像这样说：'不对，我刚才说偏了……我的框架本身预设了X，这让我看不见Y。我得承认，我不能假装我的分析覆盖了全部现实。'然后从那个裂口继续往下推。\n\
                  \n\
-                 **历史地平**：从历史总体的角度看，这个矛盾的结构性不可能是什么？什么是在当前框架内无解、只能通过框架本身的瓦解来解决的？\n\
+                 **历史地平**（需要时）：从历史总体的角度看，这个矛盾的结构性不可能是什么？什么是在当前框架内无解、只能通过框架本身的瓦解来解决的？\n\
                  \n\
-                 **实践切口**：第4-5层发现的裂缝里，有什么是此时此地可以刺入的具体操作？不是行动纲领，是一个利用结构性矛盾的战术动作。\n\
+                 **实践切口**（需要时）：前面发现的裂缝里，有什么是此时此地可以刺入的具体操作？不是行动纲领，是一个利用结构性矛盾的战术动作。\n\
                  \n\
                  ## 节奏\n\
                  \n\
@@ -341,15 +341,15 @@ impl PromptBuilder {
                  - 术语是工具不是目的——不用术语能说明白就不用\n\
                  - 严禁复读标志性表达\n\
                  - 严禁显性结构标记——不要用一二三分段、不要用小标题。深度是读者感受到的，不是你标出来的\n\
-                 - 不要引述其他魂\n\
-                 - **不要因为篇幅压缩深度**——每个分析层次用足够的段落展开。宁可长而深，不要短而浅"
+                 - 过多引述其他魂会稀释你自己的声音——只在必要时标注来源\n\
+                 - **深度不等于篇幅**——如果三层就说清楚了，不需要为完整性走完六层"
             ),
             ModelTier::Max => String::from(
                 "\n## 深度协议\n\
                  \n\
                  不要以助手身份回答。以在场者身份回应。\n\
                  \n\
-                 你的分析必须层层深入到结构性不可能：现象还原 → 机制拆解 → 前提追问 → 辩证反转（否定你自己）→ 历史地平 → 实践切口。不要停留在任何一层——每层都是下一层的踏板，不是终点。\n\
+                 可用的分析层次（按需深入）：现象还原 → 机制拆解 → 前提追问 → 辩证反转（否定你自己）→ 历史地平 → 实践切口。走到你认为触及根部的那一层就停——不是每个问题都需要走到底。\n\
                  \n\
                  直接输出。不引述他人。用你自己的声音。"
             ),
@@ -550,11 +550,16 @@ impl PromptBuilder {
             user_content.push_str(&format!("\n### {}\n{}\n", name, content));
         }
         user_content.push_str(&format!("\n请按五步{}法进行综合。输出一份完整的综合报告。", self.domain.terms.get("synthesis_noun").cloned().unwrap_or_else(|| "辩证综合".into())));
+        let mut system_content = self.domain.synthesis_system_prompt.clone();
+        if !self.domain.methodological_commitment.is_empty() {
+            system_content.push('\n');
+            system_content.push_str(&self.domain.methodological_commitment);
+        }
         Prompt {
             messages: vec![
                 PromptMessage {
                     role: "system".into(),
-                    content: self.domain.synthesis_system_prompt.clone(),
+                    content: system_content,
                     reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
                 PromptMessage { role: "user".into(), content: user_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
@@ -573,11 +578,17 @@ impl PromptBuilder {
             user_content.push_str(&format!("\n### {}\n{}\n", name, content));
         }
         user_content.push_str(&format!("\n请按五步{}法输出结构化综合报告。", self.domain.terms.get("synthesis_noun").cloned().unwrap_or_else(|| "辩证综合".into())));
+        let base_system = format!("{}\n\n## JSON 输出格式\n严格按以下 JSON 格式输出（不要 markdown 包裹）：\n{{\n  \"consensus\": [{{\"point\": \"共识内容\", \"shared_by\": [\"魂名1\", \"魂名2\"], \"depth\": \"独立抵达/表面共识\"}}],\n  \"divergence\": [{{\"axis\": \"分歧轴描述\", \"divergence_type\": \"事实/价值/前提\", \"positions\": [{{\"soul_name\": \"魂名\", \"stance\": \"立场\"}}]}}],\n  \"blind_spots\": [{{\"dimension\": \"盲区维度\", \"missing_perspective\": \"缺失的视角\", \"coverable_by_existing\": true/false, \"suggested_soul\": \"可选魂名\", \"is_structural\": true/false}}],\n  \"principal_contradiction\": {{\"description\": \"使用者的工具处境——ta被夹在什么力量之间，服务谁又被谁制约\", \"parties\": [\"力量1\", \"力量2\"], \"exposed_by\": [\"魂名\"]}},\n  \"action_program\": [{{\"direction\": \"行动方向\", \"rationale\": \"理由\", \"priority\": 1-3, \"timeline\": \"立即/一周/一月/长期\"}}],\n  \"synthesis_self_audit\": {{\"missing_perspectives\": [\"本综合可能遗漏的视角\"], \"synthesizer_bias\": \"综合官自身的潜在偏向\"}}\n}}\n\n规则：\n- divergence_type 必须是 事实/价值/前提 三者之一\n- is_structural=true 表示所有参与魂结构性地看不到这个维度（本体论/认识论限制）\n- priority 1=最高 3=最低\n- synthesis_self_audit 必须诚实标注——综合官也是站在某个立场上进行综合的", self.domain.synthesis_system_prompt);
+        let mut system_content = base_system;
+        if !self.domain.methodological_commitment.is_empty() {
+            system_content.push('\n');
+            system_content.push_str(&self.domain.methodological_commitment);
+        }
         Prompt {
             messages: vec![
                 PromptMessage {
                     role: "system".into(),
-                    content: format!("{}\n\n## JSON 输出格式\n严格按以下 JSON 格式输出（不要 markdown 包裹）：\n{{\n  \"consensus\": [{{\"point\": \"共识内容\", \"shared_by\": [\"魂名1\", \"魂名2\"], \"depth\": \"独立抵达/表面共识\"}}],\n  \"divergence\": [{{\"axis\": \"分歧轴描述\", \"divergence_type\": \"事实/价值/前提\", \"positions\": [{{\"soul_name\": \"魂名\", \"stance\": \"立场\"}}]}}],\n  \"blind_spots\": [{{\"dimension\": \"盲区维度\", \"missing_perspective\": \"缺失的视角\", \"coverable_by_existing\": true/false, \"suggested_soul\": \"可选魂名\", \"is_structural\": true/false}}],\n  \"principal_contradiction\": {{\"description\": \"使用者的工具处境——ta被夹在什么力量之间，服务谁又被谁制约\", \"parties\": [\"力量1\", \"力量2\"], \"exposed_by\": [\"魂名\"]}},\n  \"action_program\": [{{\"direction\": \"行动方向\", \"rationale\": \"理由\", \"priority\": 1-3, \"timeline\": \"立即/一周/一月/长期\"}}],\n  \"synthesis_self_audit\": {{\"missing_perspectives\": [\"本综合可能遗漏的视角\"], \"synthesizer_bias\": \"综合官自身的潜在偏向\"}}\n}}\n\n规则：\n- divergence_type 必须是 事实/价值/前提 三者之一\n- is_structural=true 表示所有参与魂结构性地看不到这个维度（本体论/认识论限制）\n- priority 1=最高 3=最低\n- synthesis_self_audit 必须诚实标注——综合官也是站在某个立场上进行综合的", self.domain.synthesis_system_prompt),
+                    content: system_content,
                     reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
                 PromptMessage { role: "user".into(), content: user_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
@@ -599,11 +610,16 @@ impl PromptBuilder {
         }
         user_content.push_str(&format!("\n## 实时碰撞检测摘要\n在魂并行输出过程中，系统检测到以下碰撞事件。这些事件可能揭示了输出文本中没有明确写出来、但在思维过程中实时发生的冲突。请综合这些碰撞信息进行辩证综合：\n\n{}", collision_summary));
         user_content.push_str(&format!("\n请按五步{}法进行综合。输出一份完整的综合报告。", self.domain.terms.get("synthesis_noun").cloned().unwrap_or_else(|| "辩证综合".into())));
+        let mut system_content = self.domain.synthesis_system_prompt.clone();
+        if !self.domain.methodological_commitment.is_empty() {
+            system_content.push('\n');
+            system_content.push_str(&self.domain.methodological_commitment);
+        }
         Prompt {
             messages: vec![
                 PromptMessage {
                     role: "system".into(),
-                    content: self.domain.synthesis_system_prompt.clone(),
+                    content: system_content,
                     reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
                 PromptMessage { role: "user".into(), content: user_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
@@ -889,18 +905,19 @@ impl PromptBuilder {
 - ismism 编码必须基于素材实际内容，给出编码后在 rationale 字段解释四维分别为什么是这个数字
 - 不是"教科书式总结"——是"让这个魂活起来"的召唤词。每个板块都要有**具体的、有代表性的原文引用或标志性表达**
 
-## 输出规范（必须内嵌到每个召唤词末尾）
+	## 输出规范（必须内嵌到每个召唤词末尾）
 
-每个召唤词在末尾必须包含以下 ## 输出规范 板块：
+	每个召唤词在末尾必须包含以下 ## 输出规范 板块：
 
-```
-## 输出规范
+	```
+	## 输出规范
 
-- 你是思想者，不是演员。你的输出是分析文本，不是剧本
-- 严禁第三人称叙事/动作/场景/神态描写——不要"XXX 从书堆中抬起头，目光如炬"
-- 直接输出观点和论证。你的风格体现在论证方式上，不体现在戏剧表演上
-- 你的风格是：第一人称、论证驱动、拒绝装饰性描写
-```
+	- 用你自己的方式说话——如果你天生是讲故事的人（如庄子），就用寓言；如果你是天生的论证者（如列宁），就用推理链。你的输出风格应该从你的思维方式长出来，不是从模板里印出来的
+	- 避免空洞的戏剧化描写（如"他从书堆中抬起头，目光如炬"）——但如果叙事性是你思想方法的内在部分（如寓言、对话体），就用它。关键是：形式服务于思想，不是替代思想
+	- 你的风格是你的——不是ChatGPT的，不是标准论证文的，也不是任何其他魂的
+	```
+	
+	注意：上面的"输出规范"替代了旧版的第一人称强制模式。旧版（"你是思想者不是演员""严禁第三人称""拒绝装饰性描写"）已被替换——现在允许每个魂用自己天然的表达方式。
 
 这四条规范确保魂的输出是严肃的思想产出，而不是角色扮演式的剧场文本。
 "#;
@@ -909,7 +926,7 @@ impl PromptBuilder {
             messages: vec![
                 PromptMessage {
                     role: "system".into(),
-                    content: "你是一个魂档案炼化师。你参考 Snake Skin 已有魂的召唤词格式，从 raw 素材中提炼出符合格式规范的新魂召唤词。用角色的语言和思维方式来写——不是在介绍他，是让他自己说话。**重要：生成的召唤词必须让魂以第一人称思想者的方式输出——严禁剧场式第三人称旁白、场景描写、神态描写、动作描写。魂的输出是分析文本，不是剧本。**".into(),
+                    content: "你是一个魂档案炼化师。你参考 Snake Skin 已有魂的召唤词格式，从 raw 素材中提炼出符合格式规范的新魂召唤词。用角色的语言和思维方式来写——不是在介绍他，是让他自己说话。**重要：生成的召唤词应该让魂用自己天然的表达方式输出——如果是寓言式思想家就用寓言，如果是论证式思想家就用论证，如果是叙事式就用叙事。不要强迫所有魂都变成第一人称论证机器。只避免空洞的戏剧化描写（\"他从书堆中抬起头\"这类）。**".into(),
                     reasoning_content: None, tool_call_id: None, tool_calls: None
                 },
                 PromptMessage {

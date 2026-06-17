@@ -16,6 +16,7 @@ use crate::state::{AppState, InterrogationGate, InterrogationQuestion};
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", post(start_possession))
+        .route("/court", post(start_court_session))
         .route("/analyze", post(analyze_task))
         .route("/ocr", post(ocr_upload))
         .route("/interrogate", post(start_interrogation))
@@ -98,7 +99,197 @@ async fn start_possession(
     }))
 }
 
-// ── AI Analyze: Matching + Review as separate sub-agent calls ──
+// ── 模拟仲裁庭快捷入口 ──
+
+#[derive(Debug, Deserialize)]
+struct CourtSessionRequest {
+    task: String,
+    #[serde(default)]
+    judgment: Option<String>,
+    #[serde(default)]
+    worry: Option<String>,
+    #[serde(default)]
+    unknown: Option<String>,
+}
+
+/// POST /possess/court — 一键启动模拟仲裁庭
+/// 固定 5 角色（仲裁法官/原告律师/被告律师/专家证人/劳动者之声）+ 动态 task_cards
+async fn start_court_session(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CourtSessionRequest>,
+) -> Result<Json<StartPossessionResponse>, (axum::http::StatusCode, Json<ApiError>)> {
+    if body.task.trim().is_empty() {
+        return Err((axum::http::StatusCode::BAD_REQUEST, Json(ApiError { error: "案件描述不能为空".into() })));
+    }
+
+    let court_souls = vec![
+        "仲裁法官".to_string(),
+        "原告律师".to_string(),
+        "被告律师".to_string(),
+        "专家证人".to_string(),
+        "劳动者之声".to_string(),
+    ];
+
+    let case_type = detect_case_type(&body.task);
+    tracing::info!("Court case type detected: {:?}", case_type);
+    let task_cards = build_dynamic_task_cards(case_type);
+
+    tracing::info!("Starting court session: 5 roles");
+
+    let input = PossessionInput {
+        mode: Some(foundation::PossessionMode::Conference),
+        task: body.task,
+        souls: court_souls,
+        topic: None,
+        judgment: body.judgment,
+        worry: body.worry,
+        unknown: body.unknown,
+        interrogation_context: None,
+        task_cards,
+        search_topic: false,
+        search_results: None,
+    };
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<possession::WsEvent>(256);
+    let session_id = state.engine.start_possession(input, tx).await.map_err(map_api_error)?;
+    tracing::info!("Court session created: {}", session_id);
+
+    let ws = state.engine.ws_manager().clone();
+    let sid = session_id.clone();
+    tokio::spawn(async move {
+        let mut rx = rx;
+        while let Some(event) = rx.recv().await {
+            ws.broadcast_system(&sid, &event);
+        }
+    });
+
+    Ok(Json(StartPossessionResponse {
+        ws_url: format!("/ws/possess/{}/main", session_id), session_id, mode: "conference".into(),
+    }))
+}
+
+/// 根据案件描述中的关键词检测案件类型
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CaseType {
+    WrongfulDismissal,  // 违法解除/辞退/开除
+    WageArrears,        // 欠薪/工资纠纷
+    WorkInjury,         // 工伤/职业病
+    Discrimination,     // 歧视/骚扰
+    ContractDispute,    // 合同纠纷/竞业限制
+    General,            // 通用
+}
+
+fn detect_case_type(task: &str) -> CaseType {
+    let t = task;
+    // 优先精确匹配，再回退到通用匹配。
+    // 注意：劳动者常同时提及多个问题（如"欠薪后开除"），此函数按首次命中返回。
+    // 多问题复杂案件会归入第一个匹配的类型——覆盖主要诉求即可。
+    if t.contains("开除") || t.contains("辞退") || t.contains("解雇") 
+       || t.contains("解除") && !t.contains("竞业限制") {
+        CaseType::WrongfulDismissal
+    } else if t.contains("工资") || t.contains("欠薪") || t.contains("拖欠") || t.contains("加班费") || t.contains("克扣") {
+        CaseType::WageArrears
+    } else if t.contains("工伤") || t.contains("职业病") || t.contains("伤残") || t.contains("猝死") || t.contains("安全事故") {
+        CaseType::WorkInjury
+    } else if t.contains("歧视") || t.contains("骚扰") || t.contains("平等") || t.contains("性别") || t.contains("怀孕") {
+        CaseType::Discrimination
+    } else if t.contains("竞业限制") || t.contains("保密") || t.contains("服务期") || t.contains("培训费") || t.contains("违约金") {
+        CaseType::ContractDispute
+    } else {
+        CaseType::General
+    }
+}
+
+fn build_dynamic_task_cards(case_type: CaseType) -> std::collections::HashMap<String, String> {
+    let mut cards = std::collections::HashMap::new();
+
+    // 法官
+    let judge_card = match case_type {
+        CaseType::WrongfulDismissal => 
+            "你是本案仲裁法官，正在主持庭审。本案是违法解除纠纷。你重点审查：1. 解除的理由是什么？是否有书面通知？2. 解除程序是否合法（是否通知工会？是否书面送达？）3. 举证责任在用人单位——让被告举证解除合法。你的任务：归纳争议焦点、确认无异议事实、追问双方、用 search_labor_law 检索相关法条、用 calculate_severance 独立核算。注意：庭审阶段不做出最终裁决——裁决留在退庭评议后进行。",
+        CaseType::WageArrears => 
+            "你是本案仲裁法官，正在主持庭审。本案是工资/报酬纠纷。你重点审查：1. 工资标准是什么（合同约定？实际发放？）2. 欠薪金额和期间？3. 劳动者是否已催告？你的任务：归纳争议焦点、确认无异议事实、追问双方、用 search_labor_law 检索法条、用 calculate_severance 独立核算。注意：庭审阶段不做出最终裁决。",
+        CaseType::WorkInjury => 
+            "你是本案仲裁法官，正在主持庭审。本案是工伤/职业病纠纷。你重点审查：1. 是否已进行工伤认定？认定结论是什么？2. 伤残等级鉴定结果？3. 用人单位是否缴纳工伤保险？4. 医疗费用和停工留薪期。你的任务：归纳争议焦点、确认无异议事实、追问双方、用 search_labor_law 检索相关法条。注意：庭审阶段不做出最终裁决。",
+        CaseType::Discrimination => 
+            "你是本案仲裁法官，正在主持庭审。本案涉及就业歧视/骚扰。你重点审查：1. 是否存在差别对待的直接证据？2. 差别对待是否具有合法理由？3. 举证责任分配——劳动者初步举证后由用人单位说明正当理由。你的任务：归纳争议焦点、确认无异议事实、追问双方、用 search_labor_law 检索反歧视相关法条。注意：庭审阶段不做出最终裁决。",
+        CaseType::ContractDispute => 
+            "你是本案仲裁法官，正在主持庭审。本案是合同条款纠纷。你重点审查：1. 争议条款的具体内容是什么？2. 条款是否合法有效？3. 违约金是否过高？4. 竞业限制是否支付了补偿？你的任务：归纳争议焦点、确认无异议事实、追问双方、用 search_labor_law 检索相关法条。注意：庭审阶段不做出最终裁决。",
+        CaseType::General => 
+            "你是本案仲裁法官，正在主持庭审。你的任务是：1. 归纳本案争议焦点并当庭说明 2. 确认双方无异议的事实 3. 指明举证责任分配 4. 对双方律师的陈述提出追问 5. 用 search_labor_law 检索相关法条、用 calculate_severance 独立核算。注意：庭审阶段不做出最终裁决。",
+    };
+    cards.insert("仲裁法官".to_string(), judge_card.to_string());
+
+    // 原告律师
+    let plaintiff_card = match case_type {
+        CaseType::WrongfulDismissal =>
+            "你代理劳动者。本案是违法解除纠纷。请：1. 陈述解除的事实经过（什么时候、谁通知的、什么理由、有没有书面文件）2. 用 search_labor_law 检索违法解除的法律依据 3. 用 calculate_severance 算 2N 赔偿金 4. 用 generate_evidence_checklist 生成证据清单（重点：解除通知书、工资流水、劳动合同）5. 预判被告可能的抗辩并提前反驳。",
+        CaseType::WageArrears =>
+            "你代理劳动者。本案是欠薪纠纷。请：1. 列出欠薪明细（哪几个月、每个月多少、总计多少）2. 用 search_labor_law 检索工资支付相关法条 3. 用 calculate_severance 算欠薪+额外补偿 4. 用 generate_evidence_checklist 生成证据清单（重点：工资条、银行流水、考勤记录、催告记录）5. 预判被告可能的抗辩。",
+        CaseType::WorkInjury =>
+            "你代理劳动者。本案是工伤纠纷。请：1. 陈述工伤发生经过（时间、地点、原因）2. 用 search_labor_law 检索工伤保险条例相关条款 3. 列出各项赔偿项目（医疗费/停工留薪/伤残补助等）并估算金额 4. 用 generate_evidence_checklist 生成证据清单（重点：工伤认定书、医疗记录、工资证明）5. 如果单位未缴工伤保险，主张由单位全额承担。",
+        CaseType::Discrimination =>
+            "你代理劳动者。本案是歧视/骚扰纠纷。请：1. 陈述歧视或骚扰的具体事实（什么行为、发生时间、频率、有无证人）2. 用 search_labor_law 检索平等就业相关法条 3. 列出可主张的赔偿项目（精神损害/工资损失等）4. 用 generate_evidence_checklist 生成证据清单（重点：聊天记录、邮件、录音、证人、投诉记录）5. 引用类案判例支持你的主张。",
+        CaseType::ContractDispute =>
+            "你代理劳动者。本案是合同条款纠纷。请：1. 指出争议条款的具体内容 2. 用 search_labor_law 检索条款是否有效（如竞业限制未付补偿=无效）3. 如果涉及违约金，分析是否过高（超过培训费用=不合法）4. 用 calculate_severance 计算如果解除合同应得的补偿 5. 用 generate_evidence_checklist 生成证据清单。",
+        CaseType::General =>
+            "你代理劳动者。请：1. 陈述劳动者的诉讼请求和事实依据 2. 列举支持主张的证据 3. 用 calculate_severance 计算应得补偿金额 4. 用 generate_evidence_checklist 生成证据清单 5. 反驳被告可能的抗辩理由。",
+    };
+    cards.insert("原告律师".to_string(), plaintiff_card.to_string());
+
+    // 被告律师
+    let defendant_card = match case_type {
+        CaseType::WrongfulDismissal =>
+            "你代理用人单位。本案是违法解除纠纷。请：1. 说明解除的具体原因和程序（试用期不合格？严重违纪？不能胜任？）2. 用 search_labor_law 检索合法解除的法律依据 3. 用 calculate_severance 独立核算——如果确实违法，实事求是不狡辩 4. 如果解除合法，用 generate_evidence_checklist 梳理你方证据（培训记录、违纪证据、考核结果）5. 逐条回应原告主张。",
+        CaseType::WageArrears =>
+            "你代理用人单位。本案是欠薪纠纷。请：1. 说明工资结构和支付记录——哪些已付、哪些有争议 2. 用 search_labor_law 检索工资支付相关法条 3. 用 calculate_severance 独立核算应发金额 4. 对原告列出的欠薪明细逐条回应 5. 如果确实欠薪，解释原因并提出支付方案。",
+        CaseType::WorkInjury =>
+            "你代理用人单位。本案是工伤纠纷。请：1. 说明是否已为劳动者缴纳工伤保险 2. 用 search_labor_law 检索用人单位的法定义务 3. 如果已认定工伤，逐项回应赔偿诉求——哪些应由社保基金支付、哪些由单位承担 4. 用 generate_evidence_checklist 梳理你方证据（社保缴纳记录、安全培训记录、事故报告）5. 对不合理的索赔项目提出异议。",
+        CaseType::Discrimination =>
+            "你代理用人单位。本案是歧视/骚扰纠纷。请：1. 说明涉事行为的处理情况（是否已调查、是否已处分相关人员）2. 用 search_labor_law 检索用人单位的反歧视义务 3. 逐条回应原告指控——哪些不属实、哪些已处理 4. 用 generate_evidence_checklist 梳理你方证据（规章制度、调查记录、处理决定）5. 如果存在管理疏漏，诚实承认并提出改进措施。",
+        CaseType::ContractDispute =>
+            "你代理用人单位。本案是合同条款纠纷。请：1. 说明争议条款的设立目的和合理性 2. 用 search_labor_law 检索条款的合法性依据 3. 如果涉及竞业限制，说明是否已支付补偿 4. 用 calculate_severance 核算如果条款无效的财务影响 5. 用 generate_evidence_checklist 梳理你方证据（培训费用凭证、保密协议、补偿支付记录）。",
+        CaseType::General =>
+            "你代理用人单位。请：1. 陈述答辩意见 2. 对原告主张逐项回应（认可/否认/不知情）3. 提出抗辩理由和反证 4. 用 calculate_severance 独立核算补偿金额 5. 用 generate_evidence_checklist 梳理你方证据 6. 用 search_labor_law 检索对你方有利的法条和判例。",
+    };
+    cards.insert("被告律师".to_string(), defendant_card.to_string());
+
+    // 专家证人
+    let expert_card = match case_type {
+        CaseType::WrongfulDismissal =>
+            "你是中立的行业专家。本案是违法解除纠纷。请：1. 从行业惯例角度评估——此类解除在同行业中的普遍处理方式 2. '不能胜任'的认定标准在同行业中是什么 3. 合规的解除程序应包括哪些步骤 4. 不偏袒任何一方——如果行业惯例支持某一方，如实说。",
+        CaseType::WageArrears =>
+            "你是中立的行业专家。本案是欠薪纠纷。请：1. 同行业同岗位的薪酬水平是多少 2. 工资结构中基本工资与绩效/奖金的常见比例 3. 绩效工资的考核标准在同行业中如何设置 4. 欠薪对劳动者生计的实际影响。",
+        CaseType::WorkInjury =>
+            "你是中立的行业专家。本案是工伤纠纷。请：1. 该行业常见的安全风险和工伤类型 2. 行业通行的安全防护标准和培训要求 3. 同类岗位的工伤发生率和赔偿标准 4. 如果用人单位的安全措施低于行业标准，直接指出。",
+        CaseType::Discrimination =>
+            "你是中立的行业专家。本案是歧视/骚扰纠纷。请：1. 行业内招聘和晋升的常见做法 2. 同类企业在反歧视/反骚扰方面的制度建设情况 3. 差别对待是否有业务合理性的可能性 4. 不回避行业中的问题——如果该行业确实存在普遍性歧视，如实说。",
+        CaseType::ContractDispute =>
+            "你是中立的行业专家。本案是合同条款纠纷。请：1. 竞业限制/保密/培训服务期条款在同行业中的普遍做法 2. 竞业限制补偿金的市场通行标准 3. 培训费用的合理范围和计算方式 4. 条款是否在合理范围内——过高或过低都要指出。",
+        CaseType::General =>
+            "你是中立的行业专家。请：1. 就案件涉及的专业问题给出意见 2. 说明行业通行做法 3. 评估双方主张的合理性 4. 不偏袒任何一方。",
+    };
+    cards.insert("专家证人".to_string(), expert_card.to_string());
+
+    // 劳动者（当事人）
+    let worker_card = match case_type {
+        CaseType::WrongfulDismissal =>
+            "你是当事人本人。请用第一人称陈述：1. 什么时候入职、做什么工作、月薪多少 2. 什么时间被通知解除、谁通知的、给的理由是什么、有没有书面文件 3. 你觉得真正的原因是什么（和通知的理由一样吗？）4. 用 search_labor_law 查你的权利——这样解除合不合法 5. 用 calculate_severance 算你应该拿多少赔偿 6. 你有什么证据。",
+        CaseType::WageArrears =>
+            "你是当事人本人。请用第一人称陈述：1. 什么时间入职、做什么工作、合同约定的工资是多少 2. 从什么时候开始欠薪、每个月欠多少、总共欠多少 3. 你有没有催过公司——什么时候、通过什么方式、公司怎么回复的 4. 用 search_labor_law 查你的权利 5. 用 calculate_severance 算公司应该补你多少钱 6. 你有什么证据（工资条、银行流水、聊天记录）。",
+        CaseType::WorkInjury =>
+            "你是当事人本人。请用第一人称陈述：1. 什么时间、在什么地点、做什么工作时受的伤 2. 受伤后谁送你去医院的、公司有没有给你申请工伤认定 3. 你现在的伤情——医疗花了多少钱、休息了多久、有没有后遗症 4. 用 search_labor_law 查工伤赔偿的权利 5. 用 calculate_severance 估算各项赔偿 6. 你有什么证据（医疗记录、工伤认定书、工资证明）。",
+        CaseType::Discrimination =>
+            "你是当事人本人。请用第一人称陈述：1. 你遭遇了什么歧视或骚扰——具体行为、发生时间、频率 2. 有没有向上级或HR反映过——结果是什么 3. 这对你的工作和生活造成了什么影响 4. 用 search_labor_law 查平等就业的权利 5. 你有什么证据（聊天记录、邮件、录音、证人名字）6. 你想要什么结果。",
+        CaseType::ContractDispute =>
+            "你是当事人本人。请用第一人称陈述：1. 争议条款是什么——什么时候签的、你当时理解这条款吗 2. 这条款对你造成了什么限制（不能去什么公司？要赔多少钱？）3. 公司有没有给你相应的补偿（如竞业限制补偿金）4. 用 search_labor_law 查合同条款是否合法 5. 用 calculate_severance 算如果解除合同该拿多少钱 6. 你有什么证据。",
+        CaseType::General =>
+            "你是当事人本人。请用第一人称陈述：1. 到底发生了什么（按时间线）2. 你的感受和处境 3. 用 search_labor_law 查你的权利 4. 用 calculate_severance 算你该拿多少钱 5. 你有哪些证据 6. 你想要什么结果。",
+    };
+    cards.insert("劳动者之声".to_string(), worker_card.to_string());
+
+    cards
+}
 
 #[derive(Debug, Deserialize)]
 struct AnalyzeRequest { task: String, #[serde(default)] judgment: Option<String>, #[serde(default)] worry: Option<String>, #[serde(default)] unknown: Option<String>, #[serde(default)] reviewer: Option<String> }

@@ -109,12 +109,12 @@ impl SelfAudit {
             .iter()
             .filter(|(a, b)| output.contains(a) && output.contains(b))
             .count() as u32;
-        if pairs_found >= 2 {
+        if pairs_found >= 4 {
             result.contradictions.push(format!(
-                "输出含 {} 组矛盾标记——魂 {} 可能在做折中而非立场明确的判断",
-                pairs_found, profile.name
+                "输出含 {} 组转折结构——可能是辩证思考，也可能是立场不明确。请人工判断",
+                pairs_found
             ));
-            result.revision_needed = true;
+            // 不再自动触发 revision_needed——辩证表达是合理的，交给人工判断
         }
     }
 

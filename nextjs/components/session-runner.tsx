@@ -14,6 +14,7 @@ import Link from "next/link";
 
 import FollowUpInput from "@/components/follow-up-input";
 import { useState, useEffect } from "react";
+import { useDomain } from "@/contexts/domain-context";
 
 interface MatchedSoulInfo {
   name: string;
@@ -32,13 +33,13 @@ interface SessionRunnerProps {
 
 import { modeLabel } from "@/config/possession-modes";
 
-function ConnectingView() {
+function ConnectingView({ agentNoun }: { agentNoun: string }) {
   return (
     <div className="flex flex-col items-center justify-center flex-1 gap-4 text-muted-foreground">
       <Loader2 className="h-8 w-8 animate-spin text-primary" />
       <div className="text-center space-y-1">
         <p className="text-lg font-medium">正在建立连接...</p>
-        <p className="text-sm">连接到魂服务，准备召唤</p>
+        <p className="text-sm">连接到{agentNoun}服务，准备开始</p>
       </div>
     </div>
   );
@@ -113,10 +114,12 @@ function WaitingSoulsView({
   matchedSouls,
   processSteps,
   messages,
+  agentNoun,
 }: {
   matchedSouls?: MatchedSoulInfo[];
   processSteps?: ProcessStep[];
   messages: Record<string, SoulMessage>;
+  agentNoun: string;
 }) {
   const steps = processSteps || [];
   const arrivedSouls = steps
@@ -126,7 +129,7 @@ function WaitingSoulsView({
   const classified = steps.find((s) => s.event === "EntryClassified");
   const parsedFromClassified: string[] = [];
   if (classified) {
-    const match = classified.message.match(/匹配魂[：:]\s*(.+)/);
+    const match = classified.message.match(/匹配.[：:]\s*(.+)/);
     if (match) {
       match[1].split(/[,，、]\s*/).forEach((n) => { if (n.trim()) parsedFromClassified.push(n.trim()); });
     }
@@ -144,7 +147,7 @@ function WaitingSoulsView({
       <div className="flex flex-col items-center justify-center flex-1 gap-4 text-muted-foreground">
         <Brain className="h-8 w-8 text-primary animate-pulse" />
         <div className="text-center space-y-2">
-          <p className="text-lg font-medium">魂正在思考...</p>
+          <p className="text-lg font-medium">{agentNoun}正在思考...</p>
           <p className="text-sm">首次调用可能需要 5-10 秒，请耐心等待</p>
         </div>
       </div>
@@ -188,6 +191,7 @@ function ErrorView({ error, onReconnect }: { error: string; onReconnect: () => v
 export function SessionRunner({ sessionId, mode, matchedSouls, taskTitle, onDone, sessionDone }: SessionRunnerProps) {
   const { messages, synthesis, status, error, processSteps, cost, collisions, toolCalls, soulRecommendations, reconnect } =
     useWebSocket(sessionId);
+  const { agentNoun, synthesisVerb } = useDomain();
 
   const hasMessages = Object.keys(messages).length > 0;
   const streamingSouls = Object.entries(messages)
@@ -202,20 +206,20 @@ export function SessionRunner({ sessionId, mode, matchedSouls, taskTitle, onDone
     if (streamingSouls.length > 0) {
       progressText = `${streamingSouls.join("、")} 生成中…`;
     } else if (synthesis && synthesis.length > 0) {
-      progressText = "辩证综合生成中…";
+      progressText = `${synthesisVerb}生成中…`;
     } else if (synthesisStarted) {
-      progressText = "即将生成辩证综合…";
+      progressText = `即将生成${synthesisVerb}…`;
     } else if (classifiedStep) {
       const soulsInMsg = classifiedStep.message.match(/匹配魂[：:]\s*(.+)/);
       const soulCount = soulsInMsg ? soulsInMsg[1].split(/[,，、]/).length : 0;
-      progressText = `已匹配 ${soulCount} 魂，等待 DeepSeek 回应…`;
+      progressText = `已匹配 ${soulCount} ${agentNoun}，等待回应…`;
     } else if (lastStep) {
       progressText = lastStep.message;
     } else {
       progressText = "初始化中…";
     }
   } else if (status === "done" && hasMessages) {
-    progressText = "附体完成";
+    progressText = "会话完成";
   } else if (status === "error") {
     progressText = "连接中断";
   }
@@ -255,12 +259,12 @@ export function SessionRunner({ sessionId, mode, matchedSouls, taskTitle, onDone
 
       <div className="flex-1 overflow-y-auto">
         {status === "connecting" && !hasMessages && (matchedSouls && matchedSouls.length > 0 ? (
-          <WaitingSoulsView matchedSouls={matchedSouls} processSteps={processSteps} messages={messages} />
+          <WaitingSoulsView matchedSouls={matchedSouls} processSteps={processSteps} messages={messages} agentNoun={agentNoun} />
         ) : (
-          <ConnectingView />
+          <ConnectingView agentNoun={agentNoun} />
         ))}
         {status === "streaming" && !hasMessages && (
-          <WaitingSoulsView matchedSouls={matchedSouls} processSteps={processSteps} messages={messages} />
+          <WaitingSoulsView matchedSouls={matchedSouls} processSteps={processSteps} messages={messages} agentNoun={agentNoun} />
         )}
         {status === "error" && !hasMessages && <ErrorView error={error || "未知错误"} onReconnect={reconnect} />}
         {status === "done" && error && !hasMessages && <ErrorView error={error} onReconnect={reconnect} />}

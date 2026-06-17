@@ -16,7 +16,7 @@ use crate::{SoulOutput, UserPresets, WsEvent, WsEventType, WsSessionManager};
 use super::topology;
 
 const MAX_PARALLEL_SOULS: usize = 10;
-const SOUL_TIMEOUT_SECS: u64 = 300;
+const SOUL_TIMEOUT_SECS: u64 = 120;
 
 /// 增强的合议模式
 pub async fn run(
