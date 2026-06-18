@@ -350,23 +350,6 @@ export interface BoundaryReview {
   recommendation: string;
 }
 
-export interface PleasureStats {
-  pleasure_index: number;
-  effective_sessions: number;
-  partial_sessions: number;
-  invalid_sessions: number;
-  total_reviewed: number;
-  wasted_tokens: number;
-  total_tokens: number;
-  waste_ratio: number;
-}
-
-export async function fetchPleasureStats(): Promise<PleasureStats> {
-  return apiRequest<PleasureStats>('/analytics/pleasure-stats', {
-    next: { revalidate: 60 },
-    operation: 'fetchPleasureStats',
-  });
-}
 
 export async function fetchSummonStats(): Promise<SummonStatsResponse> {
   return apiRequest<SummonStatsResponse>('/analytics/summon-stats', {
@@ -522,17 +505,14 @@ export interface AnalyzeResponse {
   entry_type: string;
   matched_souls: { name: string; field: string; ismism_code: string; rationale: string }[];
   recommended_mode: string;
-  review: { verdict: string; checks: string[]; notes: string; reviewer: string };
   task_cards?: Record<string, string>;
 }
 
 export interface AnalyzeStreamEvent {
-  phase: "classifying" | "matching" | "matched" | "reviewing" | "review_done" | "adjusting" | "practice_opening" | "analysis_content" | "done";
+  phase: "classifying" | "matching" | "matched" | "review_done" | "adjusting" | "practice_opening" | "analysis_content" | "done";
   entry_type?: string;
   souls?: { name: string; field: string; ismism_code: string; rationale: string }[];
   mode?: string;
-  reviewer?: string;
-  review?: { verdict: string; checks: string[]; notes: string; reviewer: string };
   task_cards?: Record<string, string>;
   source?: string;
   is_done?: boolean;
@@ -542,7 +522,6 @@ export interface AnalyzeStreamEvent {
 
 export async function analyzeTask(
     task: string,
-    reviewer?: string,
     signal?: AbortSignal,
     onEvent?: (event: AnalyzeStreamEvent) => void,
 ): Promise<AnalyzeResponse> {
@@ -550,7 +529,7 @@ export async function analyzeTask(
     const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task, reviewer }),
+        body: JSON.stringify({ task }),
         signal,
     });
 
@@ -571,7 +550,6 @@ export async function analyzeTask(
     let intermediateEntryType = "conventional";
     let intermediateSouls: AnalyzeResponse["matched_souls"] = [];
     let intermediateMode = "single";
-    let intermediateReview: AnalyzeResponse["review"] | null = null;
 
     while (true) {
         const { done, value } = await reader.read();
@@ -591,7 +569,6 @@ export async function analyzeTask(
                 if (event.entry_type) intermediateEntryType = event.entry_type;
                 if (event.souls) intermediateSouls = event.souls;
                 if (event.mode) intermediateMode = event.mode;
-                if (event.review) intermediateReview = event.review;
                 if (event.phase === "done" && event.response) {
                     finalResponse = event.response;
                 }
@@ -603,13 +580,12 @@ export async function analyzeTask(
     // 如果没有收到 done 事件，尝试 fallback 机制
     if (!finalResponse) {
         // Fallback 1: 从中间状态构造响应
-        if (intermediateSouls.length > 0 || intermediateReview) {
+        if (intermediateSouls.length > 0) {
             console.warn("analyzeTask: stream ended without done event, constructing response from intermediate state");
             finalResponse = {
                 entry_type: intermediateEntryType,
                 matched_souls: intermediateSouls,
                 recommended_mode: intermediateMode,
-                review: intermediateReview || { verdict: "pass", checks: [], notes: "No review received", reviewer: "" },
                 task_cards: {}
             };
         }

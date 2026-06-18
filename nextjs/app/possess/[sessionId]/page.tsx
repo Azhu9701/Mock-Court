@@ -57,7 +57,6 @@ export default function SessionPage({
           task={taskTitle}
           mode={mode}
           matchedSouls={matchedSouls}
-          review={null}
         />
       )}
       <SessionRunner

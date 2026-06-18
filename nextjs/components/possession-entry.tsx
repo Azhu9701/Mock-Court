@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { SessionRunner } from "@/components/session-runner";
 import { 
-  Brain, Loader2, Sparkles, ShieldCheck, Zap, Play, ChevronDown, ChevronUp,
+  Brain, Loader2, Sparkles, Zap, Play, ChevronDown, ChevronUp,
   CheckCircle2, AlertCircle, Globe, Search, Copy, Check,
   MessageCircle, Wand2
 } from "lucide-react";
@@ -31,12 +31,11 @@ import { useDomain } from "@/contexts/domain-context";
 import { cn } from "@/lib/utils";
 import { SessionContextHeader } from "@/components/session-context-header";
 
-type Phase = "input" | "interrogation" | "classifying" | "matching" | "reviewing" | "adjusting" | "starting" | "running";
+type Phase = "input" | "interrogation" | "classifying" | "matching"  | "adjusting" | "starting" | "running";
 
 const PHASES: { key: Phase; icon: React.ComponentType<{ className?: string }>; label: string; desc: string }[] = [
   { key: "classifying", icon: Brain, label: "入口分流", desc: "分析任务类型" },
   { key: "matching", icon: Sparkles, label: "匹配魂", desc: "智能匹配思想者" },
-  { key: "reviewing", icon: ShieldCheck, label: "审查", desc: "幡主审查魂组合" },
   { key: "adjusting", icon: Zap, label: "调整", desc: "优化魂搭配" },
   { key: "starting", icon: Play, label: "启动", desc: "启动讨论会话" },
 ];
@@ -48,12 +47,6 @@ interface MatchedSoul {
   rationale: string;
 }
 
-interface ReviewResult {
-  verdict: string;
-  checks: string[];
-  notes: string;
-  reviewer: string;
-}
 
 const LOG_FILTERS = ["全部", "关键", "魂匹配", "审查"] as const;
 type LogFilter = typeof LOG_FILTERS[number];
@@ -61,7 +54,7 @@ type LogFilter = typeof LOG_FILTERS[number];
 function classifyLogType(line: string): "key" | "soul" | "review" | "other" {
   if (line.includes("🚀") || line.includes("🎉") || line.includes("❌") || line.includes("⏹️")) return "key";
   if (line.includes("魂") || line.includes("匹配")) return "soul";
-  if (line.includes("审查") || line.includes("幡主")) return "review";
+  if (line.includes("审查")) return "review";
   return "other";
 }
 
@@ -88,7 +81,6 @@ export function PossessionEntry() {
   const [mode, setMode] = useState<PossessionMode>("conference");
   const [isManualMode, setIsManualMode] = useState(false);
   const [matchedSouls, setMatchedSouls] = useState<MatchedSoul[]>([]);
-  const [review, setReview] = useState<ReviewResult | null>(null);
   const [showDetail, setShowDetail] = useState(true);
   const [sessionDone, setSessionDone] = useState(false);
   const [isCancelled, setIsCancelled] = useState(false);
@@ -267,7 +259,6 @@ export function PossessionEntry() {
     setLog([]);
     setError("");
     setMatchedSouls([]);
-    setReview(null);
     setSessionDone(false);
     setStreamingContent("");
     setCurrentStreamSource("");
@@ -348,14 +339,13 @@ export function PossessionEntry() {
 
       addLog("开始分析任务...");
       setProgressLine("正在分析任务，入口分流中…");
-      const reviewer = localStorage.getItem("aionui-banner-lord") || undefined;
       // 若存在上一轮未完成的 SSE 连接，先 abort 避免并发累积
       if (abortRef.current) {
         abortRef.current.abort();
       }
       abortRef.current = new AbortController();
 
-      const data = await analyzeTask(task, reviewer, abortRef.current.signal, (event) => {
+      const data = await analyzeTask(task, abortRef.current.signal, (event) => {
         if (isCancelled) return;
 
         if (event.phase === "classifying") {
@@ -365,7 +355,7 @@ export function PossessionEntry() {
           setProgressLine("正在多因子匹配魂…");
         }
         if (event.phase === "matched" && event.souls && event.souls.length > 0) {
-          setPhase("reviewing");
+          setPhase("adjusting");
           setMatchedSouls(event.souls);
           if (!isManualMode) {
             setMode((event.mode || "conference") as PossessionMode);
@@ -374,18 +364,10 @@ export function PossessionEntry() {
           addLog(`推荐模式: ${getModeLabel(event.mode || "conference")}`);
           setProgressLine(`已匹配 ${event.souls.length} 个魂：${event.souls.map((s) => s.name).join("、")}`);
         }
-        if (event.phase === "reviewing") {
-          addLog(`🔍 审查官 ${event.reviewer} 正在审查魂组合…`);
-          setProgressLine(`审查官 ${event.reviewer} 正在审查魂组合…`);
-        }
-        if (event.phase === "review_done" && event.review) {
-          setReview(event.review);
+        if (event.phase === "review_done") {
           if (event.task_cards && Object.keys(event.task_cards).length > 0) {
             setTaskCards(event.task_cards);
           }
-          addLog(`🔍 审查完成 | 裁决: ${getVerdictLabel(event.review.verdict)}`);
-          (event.review.checks || []).forEach((c: string) => addLog(`   - ${c}`));
-          if (event.review.notes) addLog(`📝 备注: ${event.review.notes}`);
         }
         if (event.phase === "adjusting") {
           setPhase("adjusting");
@@ -548,14 +530,6 @@ export function PossessionEntry() {
 
   const getModeLabel = (m: string) => (MODE_LABELS_LONG as Record<string, string>)[m] || m;
 
-  const getVerdictLabel = (v: string) => {
-    const labels: Record<string, string> = {
-      "pass": "✅ 通过",
-      "conditional": "⚠️ 条件通过",
-      "reject": "❌ 拒绝"
-    };
-    return labels[v] || v;
-  };
 
   const copyLogs = () => {
     const text = log.join("\n");
@@ -581,7 +555,7 @@ export function PossessionEntry() {
   if (phase === "running" && sessionId) {
     return (
       <div className="max-w-5xl mx-auto space-y-4 animate-in fade-in duration-500" data-testid="possession-entry">
-        <SessionContextHeader task={task} mode={mode} matchedSouls={matchedSouls} review={review} />
+        <SessionContextHeader task={task} mode={mode} matchedSouls={matchedSouls} />
 
         <SessionRunner
           sessionId={sessionId}
@@ -1037,37 +1011,6 @@ export function PossessionEntry() {
                 {phase === "matching" && (
                   <div className="mt-4">
                     <SoulCarousel />
-                  </div>
-                )}
-
-                {review && (
-                  <div className="mt-4 space-y-3">
-                    <div className="flex items-center gap-2 text-sm">
-                      <ShieldCheck className="h-4 w-4 text-purple-500" />
-                      <span className="font-medium text-purple-600 dark:text-purple-400">
-                        {review.reviewer} 的审查
-                      </span>
-                      <span className={cn(
-                        "text-xs px-2 py-0.5 rounded-full",
-                        review.verdict === "pass" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400" :
-                        review.verdict === "conditional" ? "bg-amber-100 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400" :
-                        "bg-red-100 text-red-700 dark:bg-red-950/30 dark:text-red-400"
-                      )}>
-                        {getVerdictLabel(review.verdict)}
-                      </span>
-                    </div>
-                    {review.checks && review.checks.length > 0 && (
-                      <div className="text-xs text-muted-foreground space-y-1 pl-6">
-                        {review.checks.map((c: string, i: number) => (
-                          <div key={i}>• {c}</div>
-                        ))}
-                      </div>
-                    )}
-                    {review.notes && (
-                      <div className="text-xs text-muted-foreground pl-6">
-                        📝 {review.notes}
-                      </div>
-                    )}
                   </div>
                 )}
 

@@ -4,7 +4,7 @@ import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
-import { Sparkles, ShieldCheck, ChevronUp, ChevronDown, ArrowRightCircle } from "lucide-react";
+import { Sparkles, ChevronUp, ChevronDown } from "lucide-react";
 import { MODE_LABELS_LONG } from "@/config/possession-modes";
 import { useDomain } from "@/contexts/domain-context";
 
@@ -37,30 +37,15 @@ export interface MatchedSoulInfo {
   rationale: string;
 }
 
-export interface ReviewResult {
-  verdict: string;
-  checks: string[];
-  notes: string;
-  reviewer: string;
-}
 
 interface SessionContextHeaderProps {
   task: string;
   mode: string;
   matchedSouls: MatchedSoulInfo[];
-  review: ReviewResult | null;
 }
 
-function getVerdictLabel(v: string) {
-  const labels: Record<string, string> = {
-    "pass": "✅ 通过",
-    "conditional": "⚠️ 条件通过",
-    "reject": "❌ 拒绝"
-  };
-  return labels[v] || v;
-}
 
-export function SessionContextHeader({ task, mode, matchedSouls, review }: SessionContextHeaderProps) {
+export function SessionContextHeader({ task, mode, matchedSouls }: SessionContextHeaderProps) {
   const [showDetail, setShowDetail] = useState(true);
   const { agentNoun } = useDomain();
 
@@ -73,15 +58,6 @@ export function SessionContextHeader({ task, mode, matchedSouls, review }: Sessi
             <span>模式：{(MODE_LABELS_LONG as Record<string, string>)[mode] || mode}</span>
             <span>·</span>
             <span>{matchedSouls.length} {agentNoun}</span>
-            {review && (
-              <>
-                <span>·</span>
-                <span>审查：{review.reviewer}</span>
-                <span className={review.verdict === "pass" ? "text-green-600" : review.verdict === "conditional" ? "text-yellow-600" : "text-red-600"}>
-                  [{review.verdict}]
-                </span>
-              </>
-            )}
           </p>
         </div>
         <Button variant="ghost" size="sm" onClick={() => setShowDetail(!showDetail)} className="transition-all hover:bg-muted">
@@ -113,34 +89,6 @@ export function SessionContextHeader({ task, mode, matchedSouls, review }: Sessi
             </div>
           </div>
 
-          {review && (
-            <div>
-              <h4 className="font-medium text-muted-foreground mb-3 flex items-center gap-2">
-                <ShieldCheck className="h-4 w-4" />
-                审查 · {review.reviewer}
-              </h4>
-              <div className={`rounded-lg border p-3 ${
-                review.verdict === "pass" ? "border-green-200 bg-green-50 dark:bg-green-950/20" :
-                review.verdict === "conditional" ? "border-yellow-200 bg-yellow-50 dark:bg-yellow-950/20" :
-                "border-red-200 bg-red-50 dark:bg-red-950/20"
-              }`}>
-                <div className="font-medium mb-2">裁决: {getVerdictLabel(review.verdict)}</div>
-                <ul className="space-y-1">
-                  {review.checks.map((c, i) => (
-                    <li key={i} className="text-sm flex items-start gap-2">
-                      <ArrowRightCircle className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
-                      <span>{c}</span>
-                    </li>
-                  ))}
-                </ul>
-                {review.notes && (
-                  <p className="text-sm mt-2 italic text-muted-foreground border-t pt-2">
-                    📝 {review.notes}
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
         </div>
       )}
     </div>

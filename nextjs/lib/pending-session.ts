@@ -5,7 +5,6 @@ export interface PendingSessionMeta {
   task: string;
   mode: string | null;
   matchedSouls: { name: string; field: string; ismism_code: string; rationale: string }[];
-  review: { verdict: string; checks: string[]; notes: string; reviewer: string } | null;
   phases: string[];
   searchTopic: boolean;
   judgment: string;
