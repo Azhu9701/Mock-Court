@@ -7,7 +7,6 @@ import {
   fetchSessionDetail,
   fetchSessionDigest,
   fetchSessionAnnotations,
-  fetchSessionReview,
   triggerDistill,
   extractRecommendedSouls,
   deleteMessagesFromSeq,
@@ -21,7 +20,6 @@ import {
   User,
   ChevronDown,
   ChevronUp,
-  CheckCircle,
   Trash2,
   RefreshCw,
 } from "lucide-react";
@@ -33,7 +31,6 @@ import { SoulResponseCard } from "@/components/soul-response-card";
 import { SynthesisSection } from "@/components/synthesis-section";
 import { BreadcrumbSetter } from "@/components/breadcrumb-setter";
 import { MessageForkButton } from "@/components/message-fork-button";
-import { PostSessionReview } from "@/components/post-session-review";
 
 import { MODE_LABELS_LONG, MODE_COLORS_TEXT, type PossessionMode } from "@/config/possession-modes";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -61,8 +58,6 @@ export default function SessionDetailPage() {
   const [scrollToSeq, setScrollToSeq] = useState<number | null>(null);
 
   const [distilling, setDistilling] = useState(false);
-  const [reviewDone, setReviewDone] = useState(false);
-  const [reviewLoading, setReviewLoading] = useState(true);
 
   // Trigger follow-up from soul recommendation card (question + named soul)
   const [followUpTrigger, setFollowUpTrigger] = useState<{ question: string; soul?: string } | null>(null);
@@ -76,14 +71,6 @@ export default function SessionDetailPage() {
     }
     return [...names];
   }, [detail]);
-
-  // Check if this session already has a review
-  useEffect(() => {
-    fetchSessionReview(id)
-      .then((r: { effectiveness?: string } | null) => { if (mountedRef.current && r) setReviewDone(true); })
-      .catch(() => {})
-      .finally(() => { if (mountedRef.current) setReviewLoading(false); });
-  }, [id]);
 
   // Track whether auto-distill has been attempted for this session
   const autoDistilledRef = useRef(false);
@@ -316,26 +303,6 @@ export default function SessionDetailPage() {
         </div>
       )}
       <FollowUpInput sessionId={id} trigger={followUpTrigger} sessionSouls={sessionSoulNames} />
-
-      {/* Practice feedback — 实践开口・反馈闭环 */}
-      <div className="border-t pt-6 mt-6">
-        {reviewLoading ? null : reviewDone ? (
-          <div className="flex flex-col items-center gap-3 py-8 text-center">
-            <CheckCircle className="h-10 w-10 text-green-500" />
-            <div>
-              <h3 className="text-lg font-semibold">反馈闭环完成</h3>
-              <p className="text-sm text-muted-foreground mt-1">
-                你的反馈已记录。看魂吵架不是思考，去做才是。
-              </p>
-            </div>
-          </div>
-        ) : (
-          <PostSessionReview
-            sessionId={id}
-            onComplete={() => setReviewDone(true)}
-          />
-        )}
-      </div>
 
     </div>
   );
