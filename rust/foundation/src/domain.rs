@@ -237,7 +237,6 @@ fn default_terms() -> HashMap<String, String> {
     t.insert("synthesis_noun".into(), "辩证综合".into());
     t.insert("interrogation_verb".into(), "审讯".into());
     t.insert("interrogation_noun".into(), "入场审讯".into());
-    t.insert("banner_lord".into(), "幡主".into());
     t.insert("system_name".into(), "万民幡".into());
     t
 }

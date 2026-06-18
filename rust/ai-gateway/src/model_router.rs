@@ -16,7 +16,6 @@ pub struct RoutingDecision {
 pub enum RoutingRole {
     Soul,
     Synthesizer,
-    Reviewer,
     KnowledgeCard,
 }
 
@@ -48,9 +47,6 @@ impl ModelRouter {
             RoutingRole::Synthesizer => {
                 Self::pick_tier(&available, &[ModelTier::Max, ModelTier::Pro, ModelTier::Economy], "辩证综合官", true, Some(ReasoningEffort::ThinkMax))
             }
-            RoutingRole::Reviewer => {
-                Self::pick_tier(&available, &[ModelTier::Pro, ModelTier::Max, ModelTier::Economy], "幡主审查官", false, Some(ReasoningEffort::ThinkHigh))
-            }
             RoutingRole::Soul => {
                 Self::pick_tier(&available, &[ModelTier::Pro, ModelTier::Max, ModelTier::Economy], "魂分析", true, Some(ReasoningEffort::Think))
             }
@@ -67,7 +63,6 @@ impl ModelRouter {
     ) -> Option<RoutingDecision> {
         let (variant, effort) = match role {
             RoutingRole::Synthesizer => (DeepSeekVariant::ProThinkMax, ReasoningEffort::ThinkMax),
-            RoutingRole::Reviewer => (DeepSeekVariant::ProThink, ReasoningEffort::ThinkHigh),
             RoutingRole::Soul => (DeepSeekVariant::ProThink, ReasoningEffort::Think),
             RoutingRole::KnowledgeCard => (DeepSeekVariant::Flash, ReasoningEffort::NonThink),
         };
@@ -84,7 +79,6 @@ impl ModelRouter {
             use_cache_hint: cache_hint,
             chosen_for: match role {
                 RoutingRole::Synthesizer => "辩证综合官".to_string(),
-                RoutingRole::Reviewer => "幡主审查官".to_string(),
                 RoutingRole::Soul => "魂分析".to_string(),
                 RoutingRole::KnowledgeCard => "知识卡片提取".to_string(),
             },
@@ -101,7 +95,6 @@ impl ModelRouter {
 
         let variant = match role {
             RoutingRole::Synthesizer => DeepSeekVariant::ProThinkMax,
-            RoutingRole::Reviewer => DeepSeekVariant::ProThink,
             RoutingRole::Soul => DeepSeekVariant::ProThink,
             RoutingRole::KnowledgeCard => DeepSeekVariant::Flash,
         };
@@ -247,17 +240,6 @@ mod tests {
     }
 
     #[test]
-    fn test_reviewer_uses_prothink() {
-        let providers = create_test_providers();
-        let result = ModelRouter::route(&providers, RoutingRole::Reviewer);
-        
-        assert!(result.is_some());
-        let decision = result.unwrap();
-        assert_eq!(decision.provider, Provider::DeepSeek);
-        assert_eq!(decision.use_cache_hint, true);
-        assert_eq!(decision.reasoning_effort, Some(ReasoningEffort::ThinkHigh));
-        assert_eq!(decision.chosen_for, "幡主审查官");
-    }
 
     #[test]
     fn test_knowledge_card_uses_flash() {

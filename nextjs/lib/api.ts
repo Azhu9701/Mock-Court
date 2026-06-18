@@ -909,51 +909,9 @@ export function obsEmoji(type: string): string {
   return OBS_TYPE_EMOJI[type] ?? '\u{1F4CB}';
 }
 
-export interface ReviewData {
-  practice_commitment?: string;
-  practice_horizon?: string;
-  self_negation?: string;
-  empty_chair?: string;
-  effectiveness?: string;
-  effectiveness_note?: string;
-}
 
-export async function saveReview(
-  sessionId: string,
-  data: ReviewData,
-): Promise<{ ok: boolean; review_id: string }> {
-  return apiRequest<{ ok: boolean; review_id: string }>(
-    `/sessions/${sessionId}/review`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-      operation: 'saveReview',
-    },
-  );
-}
 
-export interface SessionReview {
-  id: string;
-  session_id: string;
-  most_unexpected: string;
-  already_known: string;
-  self_negation: string;
-  empty_chair: string;
-  effectiveness: string;
-  effectiveness_note: string;
-  practice_commitment: string;
-  practice_horizon: string;
-  interrogation_passed: boolean | null;
-  interrogation_reason: string | null;
-  created_at: string;
-}
 
-export async function fetchSessionReview(id: string): Promise<SessionReview | null> {
-  return apiRequest<SessionReview | null>(`/sessions/${id}/review`, {
-    operation: 'fetchSessionReview',
-  });
-}
 
 export async function fetchSessionDigest(id: string): Promise<SessionDigest> {
   return apiRequest<SessionDigest>(`/sessions/${id}/digest`, {

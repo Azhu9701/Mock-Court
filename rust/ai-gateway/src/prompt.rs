@@ -450,95 +450,7 @@ impl PromptBuilder {
 
     /// 构建幡主审查 + 任务分派 Prompt。
     /// 幡主（默认未明子）审查候选魂组合是否适合该任务，并为每个魂分配专属的子任务。
-    pub fn build_banner_lord_review_prompt(
-        &self,
-        banner_lord: &SoulProfile,
-        task: &str,
-        candidate_souls: &[SoulProfile],
-        judgment: Option<&str>,
-        worry: Option<&str>,
-        unknown: Option<&str>,
-    ) -> Prompt {
-        let system_content = format!(
-            "{}你是{}，{}{}。你作为幡主审查官，需要完成两项任务：\n\
-             1. 审查候选魂是否适合这个任务——不适合的要去掉或替换\n\
-             2. 为每个确定使用的魂分派一个**差异化的子问题**——不是所有人分析同一个问题，\
-             而是把你的总任务拆解成每个魂最擅长回答的那一个侧面\n\n\
-             不读取文件——所有上下文已在 prompt 中。",
-            banner_lord.summon_prompt, banner_lord.name, self.coord_label(), banner_lord.ismism_code
-        );
-
-        let mut candidates_info = String::new();
-        let dims = &self.domain.coordinate.dimensions;
-        let d0 = dims.first().map(|d| d.name.as_str()).unwrap_or("场域");
-        let d1 = dims.get(1).map(|d| d.name.as_str()).unwrap_or("本体论");
-        let d2 = dims.get(2).map(|d| d.name.as_str()).unwrap_or("认识论");
-        let d3 = dims.get(3).map(|d| d.name.as_str()).unwrap_or("目的论");
-        for s in candidate_souls {
-            let f = s.ismism_code.chars().next().unwrap_or('?');
-            let o = s.ismism_code.chars().nth(2).unwrap_or('?');
-            let e = s.ismism_code.chars().nth(4).unwrap_or('?');
-            let t = s.ismism_code.chars().nth(6).unwrap_or('?');
-            let self_decl = if s.self_declare.is_empty() { "无" } else { &s.self_declare };
-            let skill = s.skills_expertise.first().map(|x| x.as_str()).unwrap_or("无");
-            let excl_str = s.exclude_scenarios.join("、");
-            let excl = if s.exclude_scenarios.is_empty() { "无" } else { excl_str.as_str() };
-            candidates_info.push_str(&format!(
-                "- **{}** [{}] {}={} {}={} {}={} {}={}\n  self_declare={}\n  skills={}\n  exclude={}\n\n",
-                s.name, s.field, d0, f, d1, o, d2, e, d3, t, self_decl, skill, excl
-            ));
-        }
-
-        let mut user_content = format!(
-            "## 总任务\n{}\n\n## 使用者预设\n判断：{}\n担忧：{}\n未知：{}\n\n## 候选魂\n{}\n",
-            task,
-            judgment.unwrap_or("无"),
-            worry.unwrap_or("无"),
-            unknown.unwrap_or("无"),
-            candidates_info
-        );
-
-        user_content.push_str(&self.domain.render(r#"## 你的两阶段任务
-
-### 第一阶段：审查{agent_noun}组合
-逐{agent_noun}检查：
-1. {agent_noun}的领域是否覆盖任务的相关维度？self_declare 的边界是否与任务冲突？
-2. 场域定位是否匹配任务的性质？
-3. {agent_noun}之间的场域/本体论/目的论是否互补？是否存在结构冗余（两个{agent_noun}的同维度值相同=覆盖重复）？是否存在断裂（场域不兼容=无法对话）？
-4. 是否缺少关键视角？（例如全是场域1的{agent_noun}分析不到社会结构，全是场域4的{agent_noun}分析不到理论前提）
-
-裁决：pass（全部通过）/ conditional（增删某{agent_noun}后通过）/ reject（全部重选）
-
-### 第二阶段：差异化任务分派
-为每个**确认使用的{agent_noun}**分配一个不同的子问题（task_card）。原则：
-- 不是每个人回答同一个问题——那会浪费多视角的价值
-- 每个{agent_noun}的子问题应该是**只有他能回答好、其他{agent_noun}回答不好的**
-- 利用{agent_noun}的本体论/认识论差异——场域1的{agent_noun}做地基（"这是什么"），场域2的{agent_noun}做边界（"这看不到什么"），场域3的{agent_noun}做自反（"这个问法本身有什么问题"），场域4的{agent_noun}做实践（"怎么落地"）
-- 每个子问题要具体——不是"请分析"，而是"请回答：X在Y条件下的Z"
-- 如果某个{agent_noun}不适合任何子问题——不在第一阶段通过它
-
-### 输出格式
-返回 JSON（不要 markdown 包裹）：
-{
-  "verdict": "pass|conditional|reject",
-  "verified_souls": ["{agent_noun}名1", "{agent_noun}名2"],
-  "task_cards": {
-    "{agent_noun}名1": "这个{agent_noun}专属的子问题——具体、聚焦、只有他能回答好",
-    "{agent_noun}名2": "另一个{agent_noun}专属的不同子问题"
-  },
-  "checks": ["逐{agent_noun}审查结果"],
-  "notes": "审查备注",
-  "missing_perspectives": ["缺少的关键视角"],
-  "boundary_risks": ["识别的边界风险"]
-}"#));
-
-        Prompt {
-            messages: vec![
-                PromptMessage { role: "system".into(), content: system_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
-                PromptMessage { role: "user".into(), content: user_content, reasoning_content: None, tool_call_id: None, tool_calls: None },
-            ],
-        }
-    }
+    
 
     pub fn build_synthesis_prompt(
         &self,
@@ -675,21 +587,7 @@ impl PromptBuilder {
         }
     }
 
-    pub fn build_review_prompt(&self, soul: &SoulProfile, output: &str) -> Prompt {
-        Prompt {
-            messages: vec![
-                PromptMessage { role: "system".into(), content: "你是一个魂审查官。请审查以下魂的召唤效果和角色一致性。".into(), reasoning_content: None, tool_call_id: None, tool_calls: None },
-                PromptMessage {
-                    role: "user".into(),
-                    content: format!(
-                        "魂名：{}\n坐标：{}\n召唤提示：{}\n输出：{}\n\n请评价该魂是否保持了角色一致性，是否符合其坐标所描述的立场。如有偏差请指出。",
-                        soul.name, soul.ismism_code, soul.summon_prompt, output
-                    ),
-                    reasoning_content: None, tool_call_id: None, tool_calls: None
-                },
-            ],
-        }
-    }
+    
 
     pub fn build_practice_opening_prompt(
         &self,
@@ -953,10 +851,6 @@ impl PromptBuilder {
             RoutingRole::Synthesizer => {
                 let outputs = outputs.unwrap_or(&[]);
                 self.build_synthesis_prompt(task, outputs)
-            }
-            RoutingRole::Reviewer => {
-                let soul = soul.expect("Reviewer requires a soul");
-                self.build_review_prompt(soul, task)
             }
             RoutingRole::Soul => {
                 let soul = soul.expect("Soul role requires a soul");
