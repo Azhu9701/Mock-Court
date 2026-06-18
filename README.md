@@ -32,7 +32,7 @@
 
 ### 前置条件
 
-- [Docker](https://www.docker.com/) 或 [OrbStack](https://orbstack.dev/)（推荐）
+- [Docker](https://www.docker.com/) 或 [OrbStack](https://orbstack.dev/)（推荐 macOS 用户）
 - 或 Rust 1.75+ + Node.js 18+ + pnpm（源码模式）
 
 ### Docker 一键启动（推荐）
@@ -52,21 +52,45 @@ bash start-local.sh
 # 4. 访问 http://localhost:8088
 ```
 
-启动后包含 5 个服务：Caddy（反向代理 + 端口 8088）、API（Rust 后端）、Web（Next.js 前端）、SearXNG（联网搜索）。
+启动后包含 4 个服务：Caddy（反向代理 + 端口 8088）、API（Rust 后端）、Web（Next.js 前端）、SearXNG（联网搜索）。
 
-**国内用户加速构建（可选）：**
-```bash
-# 使用国内 crates.io 镜像加速 Rust 编译
-DOCKER_BUILDKIT=1 docker compose -f docker-compose.local.yml build --build-arg USE_CN_MIRROR=true
-```
+> 🤖 **推荐使用 AI Agent 辅助安装**：如果你遇到构建失败、网络问题或配置困惑，可以直接让 AI Agent（如 Claude、Kimi 等）访问你的项目目录，它会自动诊断并修复 Docker 构建、DNS 配置、依赖安装等常见问题。这比自己手动排查日志更高效。
 
 **常用命令：**
 
 ```bash
-docker compose -f docker-compose.local.yml logs -f   # 查看日志
-docker compose -f docker-compose.local.yml down      # 停止
-docker compose -f docker-compose.local.yml up --build -d  # 重新构建
+docker compose -f docker-compose.local.yml logs -f          # 查看实时日志
+docker compose -f docker-compose.local.yml down             # 停止所有服务
+docker compose -f docker-compose.local.yml up --build -d    # 重新构建并启动
+docker compose -f docker-compose.local.yml ps                 # 查看服务状态
 ```
+
+**国内用户加速构建（可选）：**
+
+如果你的 Docker 构建卡在下载 Rust crates 或 npm 包，使用国内镜像加速：
+
+```bash
+# 方式一：构建时指定国内镜像（USTC 镜像）
+docker compose -f docker-compose.local.yml build --build-arg USE_CN_MIRROR=true
+
+# 方式二：手动构建镜像（可复用缓存，避免每次重新编译）
+# 后端
+DOCKER_BUILDKIT=1 docker build --network=host --build-arg USE_CN_MIRROR=true \
+  -f Dockerfile.api -t soul-banner-api:latest .
+# 前端
+DOCKER_BUILDKIT=1 docker build --network=host -f Dockerfile.web -t soul-banner-web:latest .
+# 启动（使用已构建镜像，不重新 build）
+docker compose -f docker-compose.local.yml up -d --no-build
+```
+
+**常见问题：**
+
+| 问题 | 原因 | 解决 |
+|------|------|------|
+| 构建时 `lookup auth.docker.io: no such host` | DNS 被代理工具（Clash/Surge）劫持 | 关闭系统代理，或让 AI Agent 帮你配置 Docker 代理 |
+| 构建时 `npm install` 超时 | npm 包下载慢 | 使用 `docker build --network=host` 或配置 npm 镜像 |
+| 启动后 502 Bad Gateway | Caddy 容器 DNS 解析失败 | 重启 Caddy 容器：`docker compose -f docker-compose.local.yml restart caddy` |
+| API 启动慢/超时 | 容器健康检查使用 `wget` 但镜像未安装 | 不影响实际运行，可在 Dockerfile 中安装 `wget` 优化 |
 
 ### 源码安装
 
