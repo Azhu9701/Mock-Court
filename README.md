@@ -1,5 +1,10 @@
 # Snake Skin
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange?logo=rust)](https://www.rust-lang.org)
+[![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
+[![Docker](https://img.shields.io/badge/Docker-ready-blue?logo=docker)](https://www.docker.com)
+
 > 思辨不等于思考。消费观点是最精致的奶头乐。
 
 Snake Skin 是一个**多 AI 人格并行推理系统**——同时召唤多个具有独立世界观的思想家（称为"魂"），围绕同一个问题展开碰撞与综合。但它深知自己的危险：**辩证AI本身就是最高级的奶头乐**。看马克思和尼采吵架、庄子消解黑格尔的体系——这个过程太爽了，爽到你以为自己"想明白了"，其实你只是消费了一场表演。

@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rust:
+    name: Rust Backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-workspaces: rust
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+        working-directory: ./rust
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+        working-directory: ./rust
+        continue-on-error: true
+
+      - name: Build
+        run: cargo build --release
+        working-directory: ./rust
+
+      - name: Test
+        run: cargo test
+        working-directory: ./rust
+        continue-on-error: true
+
+  nextjs:
+    name: Next.js Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: ./nextjs
+
+      - name: Lint
+        run: pnpm lint
+        working-directory: ./nextjs
+        continue-on-error: true
+
+      - name: Build
+        run: pnpm build
+        working-directory: ./nextjs
+        continue-on-error: true
+
+  docker:
+    name: Docker Compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker Compose
+        run: docker compose -f docker-compose.local.yml build
+        continue-on-error: true

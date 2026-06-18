@@ -10,6 +10,7 @@ mod routes;
 mod state;
 mod worker_tools;
 mod store;
+mod web_fetch_tool;
 mod web_search_tool;
 mod ws;
 
@@ -23,6 +24,7 @@ use crate::collector::SoulCollector;
 use crate::rate_limiter::RateLimiter;
 use crate::state::AppState;
 use crate::store::AppStore;
+use crate::web_fetch_tool::WebFetchTool;
 use crate::web_search_tool::WebSearchTool;
 
 #[tokio::main]
@@ -194,6 +196,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.searxng_url.clone(),
         config.search_engine.clone(),
     )));
+    engine.tool_registry_mut().register(std::sync::Arc::new(WebFetchTool::new()));
 
     let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     tracing::info!("Coding tools working directory: {}", working_dir.display());

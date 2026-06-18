@@ -68,12 +68,20 @@ nohup.out
 data/souls-internal/
 
 # Runtime artifacts
-data/archive/
+# 忽略运行时数据但保留目录结构（.gitkeep）
+data/archive/**
+!data/archive/.gitkeep
+data/db/**
+!data/db/.gitkeep
 data/exports/
 data/default-model.json
-rust/data/archive/
-rust/data/souls/
+rust/data/archive/**
+!rust/data/.gitkeep
+rust/data/souls/**
 scripts/__pycache__/
+
+# 全局保留 .gitkeep 目录标记
+!.gitkeep
 
 # Build artifacts
 dist/
