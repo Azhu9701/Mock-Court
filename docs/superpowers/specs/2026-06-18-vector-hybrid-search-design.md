@@ -1,8 +1,9 @@
-# 向量 Hybrid 搜索设计
+# 向量 Hybrid 搜索设计 (v2)
 
 - **日期**:2026-06-18
 - **状态**:已确认,待实现
-- **范围**:`foundation` 新增向量召回 + hybrid 融合;`archive`/`api` 转发层适配;HTTP 接口签名零改动
+- **范围**:`foundation` 新增向量召回 + 跨表 RRF 融合;`archive`/`api` 转发层适配;HTTP `/knowledge/search` 扩展为跨表搜索
+- **vs v1 的变更**:① embedding 后端从进程内 ONNX 改为 **LMStudio HTTP(OpenAI 兼容)**;② 索引范围从 messages 扩展到 **messages + KnowledgeCard**;③ `/knowledge/search` 改为**跨表 RRF**
 
 ---
 
@@ -10,243 +11,342 @@
 
 ### 1.1 现状
 
-rust-agent 的 knowledge 搜索当前依赖 **SQLite FTS5 + trigram tokenizer**(`rust/foundation/src/sqlite.rs:622-683`),对 possession 会话产生的 message 内容做字面全文检索,并配合 `cjk_tokenize`(`sqlite.rs:586-599`)处理中文。
+rust-agent 的 knowledge 搜索当前依赖 **SQLite FTS5 + trigram tokenizer**(`rust/foundation/src/sqlite.rs:622-683`),配合 `cjk_tokenize`(`sqlite.rs:586-599`)处理中文。
 
-`rust/foundation/src/vector_search.rs` 存在一个 `SimpleVectorIndex` 内存脚手架(线性扫描余弦相似度),但**没有接入任何 embedding 模型,生产无人调用**——是预留的后路。
+但"知识库"在项目里**名不副实地分散在三套独立系统**:
+
+| 表面 | 数据源 | 当前搜索 | 实质 |
+|------|--------|---------|------|
+| `search_knowledge` | `messages.content` | FTS5 ✅ | **名字叫 knowledge 但搜的是聊天消息** |
+| `KnowledgeCard` | `knowledge_cards` 表 | **无搜索** ❌ 仅 filter 列表 | conference 合议后 LLM 蒸馏的 ≤500 字精华卡片 |
+| `KnowledgeTopic` | sessions+messages 派生视图 | **无搜索** ❌ 仅 filter 列表 | 非实表,实时 N+1 计算 |
+
+`rust/foundation/src/vector_search.rs` 存在 `SimpleVectorIndex` 内存脚手架(线性扫描余弦),**无 embedding 模型接入,生产无调用**。
 
 ### 1.2 问题
 
-FTS5 是字面匹配,**无法召回语义相近但字面不同的内容**。典型漏召回:
-
-- "如何让 AI 记住我" vs "长期记忆怎么实现" —— 同义改述,字面零重合
-- "persistent memory for LLM" vs "让大模型有记忆" —— 跨语言
-- 口语化、错别字、同义替换
-
-possession 会话中 soul 想"回忆过往类似对话"时,纯字面召回会漏掉大量相关历史。
+1. **FTS5 是字面匹配,无法语义召回**——同义改述、跨语言、口语化表达全部漏召
+2. **KnowledgeCard 完全无法搜索**——conference 蒸馏的高价值卡片只能按 `source_soul` filter 翻页,用户找不到
+3. 三个 surface 共用 "knowledge" 前缀却互相独立,用户体验割裂
 
 ### 1.3 目标
 
-在现有 FTS5 基础上**并联一条向量召回支路**,用 **RRF(Reciprocal Rank Fusion)** 融合两路 top-K 结果,实现教科书级 hybrid 搜索。embedding 走**进程内 ONNX 推理**(`bge-small-zh-v1.5`,512 维),存储复用现有 SQLite 库(**sqlite-vec 扩展**)。
+在现有 FTS5 基础上**并联向量召回**,覆盖 messages + KnowledgeCard 两个 surface,用 **RRF 跨表融合**;`/knowledge/search` 一个端点搜全部,返回带 `source` 字段区分来源。
 
-全链路失败时**静默降级到纯 FTS5**,行为与今天完全一致 → 老用户升级零风险。
+embedding 走 **LMStudio OpenAI 兼容接口**(项目已集成),跑 **Qwen3-Embedding-4B**(用户在 LMStudio 里 pull)。全链路失败时**静默降级纯 FTS5**,老用户行为零回归。
 
 ### 1.4 非目标
 
-- 不替换 FTS5(它是底线,不是被替代方)
-- 不改 soul 搜索(`registry/src/search.rs` 倒排索引 + ismism 最近邻目前够用)
-- 不引外部向量数据库(qdrant / lancedb / pgvector)
-- 不引外部 embedding API(OpenAI / Cohere / Ollama)
-- HTTP `/api/knowledge/search` 签名零改动,前端无需适配
+- 不替换 FTS5(它是底线)
+- **不索引 KnowledgeTopic**——它是从 messages 派生的视图,embedding 与 message 重叠,边际收益低;先做 message+card
+- 不引外部向量数据库(qdrant/lancedb/pgvector)
+- 不引新 embedding 二进制依赖(`ort`/`tokenizers`)——走 HTTP 复用现有 LMStudio 基建
 
 ---
 
-## 2. 关键决策(已与用户确认)
+## 2. 关键决策(已与用户确认,v2 修订点加 ⚠️)
 
-| # | 决策 | 选择 | 备选与理由 |
-|---|------|------|-----------|
-| 1 | embedding 来源 | **本地 ONNX(bge-small-zh-v1.5, 512 维)** | 否决 OpenAI API(联网/要钱/破相)、Ollama(多运维负担)。符合项目"单文件 SQLite + 零外部依赖"美学 |
-| 2 | 业务线 | **knowledge(聊天消息)hybrid 优先** | souls 数量小,现有倒排索引够用;knowledge 数据持续增长,FTS5 字面漏召回痛点最大 |
-| 3 | 索引粒度 | **按单条 message** | 跟 FTS5 表对齐(一行一消息);session 摘要会糊入无关内容,噪声大;写入路径改动最小 |
-| 4 | 向量存储 | **SQLite-vec(`vec0` 虚表,同库)** | 跟 FTS5 同库同事务同备份;否决内存线性扫描(重启重灌/规模瓶颈)、独立向量库(运维破相) |
-| 5 | 融合策略 | **RRF(k=60)** | BM25 负 rank 与 cosine [−1,1] 量纲不可比,硬归一化是 RAG 调参地狱;RRF 用 rank 不用 score,20 行 Rust 搞定 |
-| 6 | 默认开关 | **`vector_search.enabled: false`** | 零回归保证;模型到位 + 手动开启才生效 |
+| # | 决策 | 选择 | 理由 |
+|---|------|------|------|
+| 1 | ⚠️ **embedding 后端** | **LMStudio HTTP(OpenAI 兼容 `/v1/embeddings`)** | Qwen3-4B 不能进 Rust 进程(8-9GB 内存 / CPU 1-5s/条);项目已集成 LMStudio(`rust/ai-gateway/src/lmstudio.rs`),走 `http://localhost:1234`,换模型只改配置;不引 `ort`/`tokenizers` 重依赖 |
+| 2 | embedding 模型 | **Qwen3-Embedding-4B**(维度 2560,可配) | 用户指定;多语言、中文质量强于 bge-small |
+| 3 | 业务线 | **knowledge 优先** | souls 数量小现有够用;knowledge 数据持续增长,痛点最大 |
+| 4 | ⚠️ **索引范围** | **messages + KnowledgeCard** | v1 只覆盖 messages;调查发现 KnowledgeCard 完全无搜索,高价值却不可发现,纳入刻不容缓 |
+| 5 | 向量存储 | **SQLite-vec(`vec0` 虚表,同库)** | 跟 FTS5 同库同事务同备份;消息/卡片各一张 vec0 表(主键不冲突) |
+| 6 | 融合策略 | **RRF(k=60),跨表融合** | BM25 负 rank 与 cosine 量纲不可比,RRF 用 rank 不用 score,20 行 Rust |
+| 7 | ⚠️ **查询入口** | **扩展 `/knowledge/search` 跨表** | 一个端点搜 messages + cards,RRF 融合两源,返回带 `source` 字段;符合用户"一个搜索框"直觉 |
+| 8 | 默认开关 | **`vector_search.enabled: false`** | 零回归保证;LMStudio 在跑 + 手动开启才生效 |
 
 ---
 
 ## 3. 架构总览
 
 ```
-                    ┌─────────────────────────────────────────┐
-   GET /api/knowledge/search?q=...                  Hybrid Search
-   POST /api/knowledge/rebuild        ┌──────────────────────────┐
-                │                     │  ArchiveSystem           │
-                ▼                     │  .search_knowledge()     │
-   ┌────────────────────┐              │     │                    │
-   │ routes/knowledge.rs│──── call ────┼─────┤                    │
-   └────────────────────┘              │     ├─ FTS5 路径(现有)   │
-                                       │     │   search_fts()      │
-                                       │     │                     │
-                                       │     ├─ 向量路径(新增)    │
-                                       │     │   search_vector()   │
-                                       │     │     │               │
-                                       │     │     ▼               │
-                                       │     │   EmbeddingEngine   │
-                                       │     │   (ONNX bge-small)  │
-                                       │     │     │               │
-                                       │     │     ▼               │
-                                       │     │   sqlite-vec KNN    │
-                                       │     │   (vec0 虚表)        │
-                                       │     │                     │
-                                       │     └─► RRF Fuse (k=60)   │
-                                       │           │               │
-                                       │           ▼               │
-                                       │       Vec<KnowledgeResult│
-                                       └──────────────────────────┘
+                    ┌──────────────────────────────────────────────────┐
+   GET /api/knowledge/search?q=...                  Hybrid Search (跨表)
+   POST /api/knowledge/rebuild        ┌──────────────────────────────────┐
+                │                     │  ArchiveSystem                   │
+                ▼                     │  .search_knowledge_hybrid()      │
+   ┌────────────────────┐              │     │                             │
+   │ routes/knowledge.rs│──── call ────┼─────┤                             │
+   └────────────────────┘              │     ▼                             │
+                                       │  HybridSearcher                  │
+                                       │     │                             │
+                                       │     ├─[FTS5 路径]                  │
+                                       │     │   search_messages_fts()      │
+                                       │     │   search_cards_fts() ← 新表  │
+                                       │     │                              │
+                                       │     ├─[向量路径]                   │
+                                       │     │   EmbeddingClient (HTTP)     │
+                                       │     │     ↓ Qwen3-4B via LMStudio  │
+                                       │     │   search_message_vectors()   │
+                                       │     │   search_card_vectors()      │
+                                       │     │                              │
+                                       │     └─► RRF Fuse (k=60) 跨 4 路    │
+                                       │           │                        │
+                                       │           ▼                        │
+                                       │     Vec<KnowledgeResult + source> │
+                                       └──────────────────────────────────┘
 ```
 
-### 3.1 分层归属
+### 3.1 分层归属(严格遵循现有分层)
 
-严格遵循现有分层(foundation → archive → api):
-
-- **`foundation`**(存储底层 + 推理 + 融合)
-  - `SqliteDb` 扩展:vec0 表迁移 + KNN 查询
-  - 新增 `EmbeddingEngine`:ONNX 推理封装
-  - 新增 `HybridSearcher`:RRF 融合 + 降级控制
-- **`archive`**(服务层):`ArchiveSystem::search_knowledge` 内部从"只调 FTS5"升级为"调 HybridSearcher"
-- **`api`**(HTTP 层):`routes/knowledge.rs` 签名不变,返回结构不变 → **前端零改动**
+- **`foundation`**(底层 + 推理 + 融合)
+  - `SqliteDb` 扩展:两张 vec0 表 + 各自 KNN;新增 `cards_fts` 表(给 cards 补 FTS5)
+  - 新增 `EmbeddingClient`:HTTP 客户端,调 OpenAI 兼容 `/v1/embeddings`
+  - 新增 `HybridSearcher`:跨表 RRF 融合 + 降级控制
+- **`archive`**:`ArchiveSystem::search_knowledge_hybrid` 调 HybridSearcher
+- **`api`**:`routes/knowledge.rs` 签名小改(返回结构加 `source` 字段)
 
 ### 3.2 核心约束
 
-- 所有新代码进 `foundation`;api/archive 层只做转发,不感知 embedding/向量细节
-- `Storage` trait 加一个新方法 `search_knowledge_hybrid`,旧 `search_knowledge` 保留(向后兼容)
-- 单条 message → 一条 embedding,主键 `(session_id, seq)`,跟 `knowledge_fts` 对齐
 - 向量相关失败一律降级,**FTS5 是底线**
+- 两张 vec0 表主键不冲突:`message_embeddings(session_id, seq)` + `card_embeddings(card_id)`
+- 卡片写入同步 embed(conference 流程已经在 await,加一次 HTTP 调用即可,不像 message 那样需要异步 spawn)
+- 跨表 RRF 统一用 `(surface, key)` 二元组做去重 key
 
 ---
 
 ## 4. 组件细节
 
-三个新组件,全在 `foundation`,职责单一、可独立测试。
+### 4.1 `EmbeddingClient`(`foundation/src/embedding.rs`,新建)
 
-### 4.1 `EmbeddingEngine`(`foundation/src/embedding.rs`,新建)
-
-**职责**:把文本变成 512 维向量。封装 ONNX 推理,对外暴露 `embed` / `embed_batch`。
+**职责**:HTTP 客户端,调 OpenAI 兼容 `/v1/embeddings`,把文本变成 2560 维向量。**不加载任何模型文件**。
 
 ```rust
-pub struct EmbeddingEngine {
-    session: ort::Session,            // ONNX runtime session
-    tokenizer: tokenizers::Tokenizer, // HF tokenizer (bge-small-zh)
-    dim: usize,                       // 512
+pub struct EmbeddingClient {
+    http: reqwest::Client,
+    base_url: String,      // 默认 http://localhost:1234 (LMStudio)
+    api_key: Option<String>,
+    model: String,         // 默认 "qwen3-embedding:4b" 或 HF 路径
+    dim: usize,            // 2560,启动时探测一次
 }
 
-impl EmbeddingEngine {
-    pub fn load(model_dir: &Path) -> Result<Self>;   // 启动时加载一次
-    pub fn embed(&self, text: &str) -> Result<Embedding>;
-    pub fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>>;  // 重建索引用
-    pub fn dim(&self) -> usize { 512 }
+impl EmbeddingClient {
+    pub fn new(base_url: &str, api_key: Option<&str>, model: &str) -> Self;
+    pub async fn probe_dim(&self) -> Result<usize>;   // 启动时 embed("ping") 探测维度
+    pub async fn embed(&self, text: &str) -> Result<Embedding>;
+    pub async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>>;
+    pub fn dim(&self) -> usize;
 }
+```
+
+**请求体**(标准 OpenAI 格式):
+```json
+POST {base_url}/v1/embeddings
+{ "model": "qwen3-embedding:4b", "input": ["text1", "text2"] }
+→ { "data": [{ "embedding": [...] }, ...] }
 ```
 
 **关键决策**:
 
-- 模型文件放 `data/models/bge-small-zh-v1.5/`(`model.onnx` + `tokenizer.json`);**不自动下载**,避免运行时网络依赖。首次启动检测缺失则打印 `scripts/download-embedding-model.sh` 指引
-- **池化 + L2 归一化在 Rust 里做**(bge 系列要 mean-pool + normalize 才能正确 cosine),不依赖 ONNX 图内是否内置
-- `embed` 失败返回 `Err`,由上层决定降级——engine 自己不吞错
+- 复用 `reqwest`(项目已用),不引新 HTTP 依赖
+- **维度不硬编码**——`probe_dim` 在启动时 embed 一句 "ping" 探测实际维度(用户可能在 LMStudio 配 1024 输出维度),vec0 表创建用探测值
+- 失败返回 `Err`,由上层降级;client 自己不重试(embedding 不是关键路径,失败就降级)
+- 超时 10s(LMStudio GPU 推理通常 <500ms,留足余量)
 
 ### 4.2 `SqliteDb` 向量扩展(改 `foundation/src/sqlite.rs`)
 
-**职责**:vec0 虚表 + KNN 查询,与 FTS5 平级。
+**职责**:两张 vec0 表 + 两张 FTS5 表 + 各自 KNN/MATCH。
 
-**Schema 迁移**(加在 `migrate()`):
+#### 4.2.1 新增表
 
 ```sql
--- 启动时 load sqlite-vec 扩展,然后:
+-- 启动时 load sqlite-vec 扩展
+-- 消息向量(主键 session_id + seq)
 CREATE VIRTUAL TABLE IF NOT EXISTS message_embeddings USING vec0(
-    session_id TEXT,
-    seq        INTEGER,
-    embedding  float[512]
+    session_id TEXT, seq INTEGER, embedding float[{DIM}]
+);
+
+-- 卡片向量(主键 card_id)
+CREATE VIRTUAL TABLE IF NOT EXISTS card_embeddings USING vec0(
+    card_id TEXT, embedding float[{DIM}]
+);
+
+-- 卡片全文索引(给 KnowledgeCard 补 FTS5,现在没有)
+CREATE VIRTUAL TABLE IF NOT EXISTS cards_fts USING fts5(
+    card_id, title, content, tokenize='trigram'
 );
 ```
 
-**新方法**:
+`{DIM}` 用 `probe_dim` 探测值替换。
+
+#### 4.2.2 新方法
 
 ```rust
 impl SqliteDb {
-    fn ensure_vec0(conn: &Connection) -> Result<()>;   // load 扩展 + 建表(类比 ensure_fts5)
+    fn ensure_vec0(conn: &Connection, dim: usize) -> Result<()>;
+    fn ensure_cards_fts(conn: &Connection) -> Result<()>;   // 类比 ensure_fts5
 
-    pub fn index_embedding(
-        &self, session_id: &str, seq: i64, embedding: &[f32],
-    ) -> Result<()>;
+    // ── 写入 ──
+    pub fn index_message_embedding(&self, session_id: &str, seq: i64, emb: &[f32]) -> Result<()>;
+    pub fn index_card_embedding(&self, card_id: &str, emb: &[f32]) -> Result<()>;
+    pub fn index_card_fts(&self, card_id: &str, title: &str, content: &str) -> Result<()>;
 
-    pub fn search_vector(
-        &self, query_embedding: &[f32], limit: usize,
-    ) -> Result<Vec<VectorHit>>;   // KNN: MATCH + ORDER BY distance
+    // ── 向量 KNN ──
+    pub fn search_message_vectors(&self, q: &[f32], limit: usize) -> Result<Vec<VectorHit>>;
+    pub fn search_card_vectors(&self, q: &[f32], limit: usize) -> Result<Vec<VectorHit>>;
 
-    pub fn rebuild_vector_index(
-        &self, embeddings: &[(session_id, seq, Vec<f32>)],
-    ) -> Result<usize>;
+    // ── FTS5(卡片是新的)──
+    pub fn search_cards_fts(&self, query: &str, limit: usize) -> Result<Vec<CardFtsHit>>;
+    // 现有 search_knowledge 重命名为 search_messages_fts(内部方法,保持行为)
 
-    pub fn fetch_knowledge_by_keys(
-        &self, keys: &[(String, i64)],  // (session_id, seq)
-    ) -> Result<Vec<KnowledgeResult>>;  // 批量回表,RRF 融合后补全字段
+    // ── 重建 ──
+    pub fn rebuild_message_vectors(&self, embs: &[(String, i64, Vec<f32>)]) -> Result<usize>;
+    pub fn rebuild_card_vectors(&self, embs: &[(String, Vec<f32>)]) -> Result<usize>;
+    pub fn rebuild_cards_fts(&self) -> Result<usize>;
+
+    // ── 回表 ──
+    pub fn fetch_messages_by_keys(&self, keys: &[(String, i64)]) -> Result<Vec<KnowledgeResult>>;
+    pub fn fetch_cards_by_ids(&self, ids: &[String]) -> Result<Vec<KnowledgeResult>>;
 }
 
 pub struct VectorHit {
-    pub session_id: String,
-    pub seq: i64,
-    pub distance: f32,   // sqlite-vec 返回 L2 距离,RRF 只用 rank
+    pub key: String,       // message: "session_id|seq";card: "card_id"
+    pub distance: f32,
 }
 ```
 
 **关键决策**:
 
-- `sqlite-vec` 用 `rusqlite` 的 `load_extension` API 加载;扩展二进制(`.dylib`/`.so`/`.dll`)随项目分发到 `rust/foundation/extensions/`,不依赖系统装
-- KNN 走 `vec0` 标准 `WHERE embedding MATCH ? ORDER BY distance LIMIT ?`,线性扫描(当前数据量级够用,未来可换 IVF)
-- embedding 写入**不在 `append_message` 同步做**(避免阻塞消息写入),改成上层 spawn 异步任务
+- `sqlite-vec` 扩展二进制(`.dylib`/`.so`/`.dll`)随项目分发到 `rust/foundation/extensions/`
+- KNN 走 `WHERE embedding MATCH ? ORDER BY distance LIMIT ?`
+- **`insert_knowledge_card` 加 FTS hook**——conference 创建卡片后,同步写 `cards_fts`(纯 DB 操作,在 Storage 层内完成)
+- **卡片 embedding 不在 `insert_knowledge_card` 内**——DB 层不依赖 HTTP;embedding 由服务层 `ArchiveSystem::index_knowledge_card` 异步 spawn(见 §5.2)
 
 ### 4.3 `HybridSearcher`(`foundation/src/hybrid_search.rs`,新建)
 
-**职责**:FTS5 + 向量两路召回,RRF 融合。
+**职责**:跨表 RRF 融合 4 路召回(messages FTS + messages vec + cards FTS + cards vec),统一返回带 `source` 字段。
 
 ```rust
 pub struct HybridSearcher {
     db: Arc<SqliteDb>,
-    embedding: Arc<EmbeddingEngine>,
+    embedding: Arc<EmbeddingClient>,
+    enabled: Arc<AtomicBool>,   // 运行期开关,失败降级时翻 false
+}
+
+#[derive(Serialize)]
+pub struct HybridResult {
+    #[serde(flatten)]
+    pub inner: KnowledgeResult,
+    pub source: ResultSource,   // Message | Card
 }
 
 impl HybridSearcher {
-    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<KnowledgeResult>> {
-        // 1. 并行召回两路 top-K (K = min(limit * 3, 200),召回冗余且有上限)
-        // 2. RRF 融合:score = 1/(60+rank_fts+1) + 1/(60+rank_vec+1)
-        // 3. 去重(按 session_id+seq)+ 排序 + 取 top-limit
-        // 4. 回 messages 表批量补全 → KnowledgeResult
+    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<HybridResult>> {
+        let k = std::cmp::min(limit * 3, 200);
+
+        // 1. embed query(失败则向量两路全空,RRF 退化纯 FTS5)
+        let query_vec = if self.enabled.load() {
+            self.embedding.embed(query).await.ok()
+        } else { None };
+
+        // 2. 并行召回 4 路(tokio::join!)
+        let (msg_fts, msg_vec, card_fts, card_vec) = tokio::try_join!(
+            self.db.search_messages_fts(query, k),
+            self.db.search_message_vectors_opt(query_vec.as_ref(), k),
+            self.db.search_cards_fts(query, k),
+            self.db.search_card_vectors_opt(query_vec.as_ref(), k),
+        )?;
+
+        // 3. 跨表 RRF(key 用 (surface, id) 二元组,天然不冲突)
+        let fused = rrf_fuse_cross_table(
+            vec![("message", msg_fts), ("card", card_fts)],
+            vec![("message", msg_vec), ("card", card_vec)],
+            limit,
+        );
+
+        // 4. 分组回表(批量,避免 N+1)
+        let msg_keys: Vec<_> = fused.iter().filter(|(s,_,_)| *s=="message")
+            .map(|(_,k,_)| parse_msg_key(k)).collect();
+        let card_ids: Vec<_> = fused.iter().filter(|(s,_,_)| *s=="card")
+            .map(|(_,k,_)| k.clone()).collect();
+        let (msgs, cards) = tokio::try_join!(
+            self.db.fetch_messages_by_keys(&msg_keys),
+            self.db.fetch_cards_by_ids(&card_ids),
+        )?;
+
+        // 5. 按 RRF 顺序拼装 + 标 source
+        Ok(assemble_in_order(fused, msgs, cards))
     }
 }
 ```
 
-**RRF 融合实现**(~20 行,纯函数,易测):
+**跨表 RRF 实现**(~30 行,纯函数):
 
 ```rust
-fn rrf_fuse(fts: Vec<VectorHit>, vec_hits: Vec<VectorHit>, limit: usize) -> Vec<(Key, f32)> {
-    let mut scores: HashMap<Key, f32> = HashMap::new();
-    for (rank, h) in fts.iter().enumerate() {
-        *scores.entry(h.key()).or_default() += 1.0 / (60 + rank as f32 + 1.0);
+fn rrf_fuse_cross_table(
+    fts_routes: Vec<(&str, Vec<VectorHit>)>,
+    vec_routes: Vec<(&str, Vec<VectorHit>)>,
+    limit: usize,
+) -> Vec<(String, String, f32)> {   // (surface, key, score)
+    let mut scores: HashMap<(String, String), f32> = HashMap::new();
+    for (surface, hits) in &fts_routes {
+        for (rank, h) in hits.iter().enumerate() {
+            *scores.entry((surface.to_string(), h.key.clone())).or_default()
+                += 1.0 / (60 + rank as f32 + 1.0);
+        }
     }
-    for (rank, h) in vec_hits.iter().enumerate() {
-        *scores.entry(h.key()).or_default() += 1.0 / (60 + rank as f32 + 1.0);
+    for (surface, hits) in &vec_routes {
+        for (rank, h) in hits.iter().enumerate() {
+            *scores.entry((surface.to_string(), h.key.clone())).or_default()
+                += 1.0 / (60 + rank as f32 + 1.0);
+        }
     }
-    let mut all: Vec<_> = scores.into_iter().collect();
-    all.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    let mut all: Vec<_> = scores.into_iter()
+        .map(|((s,k), v)| (s, k, v))
+        .collect();
+    all.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
     all.into_iter().take(limit).collect()
 }
 ```
 
-**降级逻辑全在这一层**:
+**降级控制全在这一层**:
 
-- `embedding.embed(query)` 失败 → `warn!` + 向量路返回空,RRF 自然退化纯 FTS5
-- `db.search_vector()` 失败 → 同上降级
-- 两路都失败(FTS5 也挂)→ 返回 `Err`,HTTP 报 500
+- `embedding.embed(query)` 失败 → `warn!` + 向量两路返回空,RRF 退化纯 FTS5(数学等价)
+- 任一 `search_*` DB 失败 → 该路返回空,其余继续
+- 4 路全失败 → 返回 `Err` → HTTP 500
+- `enabled=false`(运行期) → 跳过 embed,只跑 FTS5 两路
 
 ### 4.4 `Storage` trait 扩展(`foundation/src/storage.rs`)
 
-加一个方法,不动旧的:
-
 ```rust
+// 新增:返回带 source 的跨表结果
 async fn search_knowledge_hybrid(&self, query: &str, limit: usize)
-    -> Result<Vec<KnowledgeResult>>;
+    -> Result<Vec<crate::hybrid_search::HybridResult>>;
+
+// 新增:卡片写入后触发 FTS+embedding(由 conference 调)
+async fn index_knowledge_card(&self, card_id: &str, title: &str, content: &str) -> Result<()>;
+
+// 旧 search_knowledge 保留(行为不变,内部委托 hybrid 但只取 message source)
+async fn search_knowledge(&self, query: &str, limit: usize) -> Result<Vec<KnowledgeResult>>;
 ```
 
-`api/src/store.rs` 的 impl 调 `HybridSearcher::search`;旧 `search_knowledge` 保留(行为等价,可内部委托 hybrid)。
+### 4.5 返回结构扩展
+
+现有 `KnowledgeResult` 加可选 `source` 字段(向后兼容,serde 默认 Message):
+
+```rust
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct KnowledgeResult {
+    pub soul_name: Option<String>,
+    pub content_snippet: String,
+    pub mode: String,
+    pub task_summary: String,
+    pub created_at: String,
+    pub session_id: String,
+    #[serde(default = "default_source")]
+    pub source: String,   // "message" | "card",默认 "message"
+    pub card_id: Option<String>,   // 仅 card source 有值
+    pub tags: Option<Vec<String>>, // 仅 card source 有值
+}
+```
 
 ---
 
 ## 5. 数据流
 
-三条数据流:**写入**(实时)、**查询**(实时)、**重建**(离线)。
-
-### 5.1 写入路径(实时,每条新消息)
-
-**触发点**:`append_message`(FTS5 已在此同步写,向量在**同一事务外**异步挂)。
+### 5.1 写入路径 — Messages(实时,异步 spawn)
 
 ```
 possession 写一条 message
@@ -259,124 +359,138 @@ SqliteDb::append_message(msg)
         └─[异步 spawn] 向量写入(新增)
                 │
                 ▼
-        EmbeddingEngine::embed(msg.content)  (~10ms CPU)
+        EmbeddingClient::embed(msg.content)  HTTP→LMStudio
                 │
                 ▼
-        SqliteDb::index_embedding(session_id, seq, vec)
+        SqliteDb::index_message_embedding(session_id, seq, vec)
                 │
                 ▼
-        INSERT INTO message_embeddings
-                │
-                ▼
-        [失败?] warn! + 丢弃,不影响消息主流程
+        [失败?] warn! + 丢弃,不影响主流程
 ```
 
 **关键决策**:
+- 异步 spawn(消息是关键路径,embedding 失败不阻塞对话)
+- 幂等:写入前 `DELETE WHERE session_id=? AND seq=?`
+- 空/极短消息跳过
+- spawn 拿 `Arc<EmbeddingClient>` + `Arc<SqliteDb>`
 
-- **异步 spawn,不阻塞消息写入**——消息是用户对话关键路径,embedding 失败不能拖垮对话。失败只记日志,该条暂时无向量(FTS5 仍索引)
-- **幂等写入**——vec0 允许重复 insert,写入前 `DELETE WHERE session_id=? AND seq=?` 再 INSERT,防重复 spawn 产生重复向量
-- **空/极短消息跳过**——跟 FTS5 现有 `if !msg.content.is_empty()` 一致
-- spawn 任务拿 `Arc<EmbeddingEngine>` + `Arc<SqliteDb>`,不持有 request 生命周期
+### 5.2 写入路径 — KnowledgeCards(同步,conference 流程内)
 
-### 5.2 查询路径(实时,HTTP `/api/knowledge/search`)
+```
+conference.rs:card_fut 完成 → store.insert_knowledge_card()
+        │
+        ▼
+[新增] ArchiveSystem::index_knowledge_card(card_id, title, content)
+        │
+        ├─[同步] store.index_card_fts(card_id, title, content)   ← Storage 层,纯 DB
+        │
+        └─[异步 spawn] EmbeddingClient::embed(title + "\n" + content)
+                │
+                ▼
+        store.index_card_embedding(card_id, vec)
+                │
+                ▼
+        [失败?] warn! + 卡片仍可被 cards_fts 搜到(降级)
+```
 
-**调用链(签名零改动)**:
+**关键决策**:
+- **FTS 同步、embedding 异步 spawn**——与 message 路径一致;卡片写入虽非高频,但 conference 流程是关键路径,HTTP embed 延迟不应阻塞卡片入库
+- **服务层协调**——`ArchiveSystem::index_knowledge_card` 持有 `EmbeddingClient` + `Storage`,负责"FTS sync + embedding async"的编排;Storage trait 本身不感知 HTTP(见 §4.4)
+- **embed 文本 = `title + "\n" + content`**——title 是任务描述,提供 query 语义锚点
+- `update_knowledge_card` 也要触发 re-index(conference 生成时走 insert 路径;用户手改走 update 路径,两条都调 `ArchiveSystem::index_knowledge_card`)
+
+### 5.3 查询路径(实时,`/api/knowledge/search`)
 
 ```
 GET /api/knowledge/search?q=xxx&limit=20
         │
         ▼
-routes/knowledge.rs::search()            ← 不改
+routes/knowledge.rs::search()            ← 改:调 search_knowledge_hybrid
         │
         ▼
-ArchiveSystem::search_knowledge()        ← 内部改:调 hybrid 而非裸 FTS5
+HybridSearcher::search(query, limit)
         │
-        ▼
-HybridSearcher::search(query, limit)     ← 新
+        ├─[并行 try_join!]──────────────────────────┐
+        │                                            │
+        ▼                                            ▼
+   embed(query) → query_vec            search_messages_fts(query, k=60)
+        │                                            │
+        ▼                                            ▼
+   search_message_vectors(vec, k=60)    search_cards_fts(query, k=60)
+        │                                            │
+        ▼                                            ▼
+   search_card_vectors(vec, k=60)       (FTS5 IO,与 embed 并行)
         │
-        ├─[并行 tokio::join!]─────────────┐
-        │                                 │
-        ▼                                 ▼
-EmbeddingEngine::embed(query)      SqliteDb::search_fts(query, K=60)
-        │                                 │   (现有 search_knowledge 逻辑,提取成内部方法)
-        ▼                                 │
-SqliteDb::search_vector(vec, K=60)        │
-        │                                 │
-        └─────────────┬───────────────────┘
-                      ▼
-              RRF 融合(k=60)
-                      │
-                      ▼
-           去重 + top-20 keys
-                      │
-                      ▼
-   SqliteDb::fetch_knowledge_by_keys()  ← 新:批量回表补 content/soul/mode
-                      │
-                      ▼
-              Vec<KnowledgeResult>
-                      │
-                      ▼
-        HTTP 返回(结构跟现在一模一样)
+        └─────────────────┬──────────────────────────┘
+                          ▼
+                跨表 RRF(k=60)
+                          │
+                          ▼
+               去重 + top-20 (surface,key)
+                          │
+                          ├─ message keys → fetch_messages_by_keys (批量)
+                          └─ card_ids    → fetch_cards_by_ids (批量)
+                          │
+                          ▼
+               Vec<KnowledgeResult + source>
+                          │
+                          ▼
+        HTTP 返回(结构向后兼容,前端读 source 区分)
 ```
 
 **关键决策**:
+- **K = min(limit × 3, 200)**
+- **跨表去重**:`(surface, key)` 二元组天然不冲突,RRF 直接累加
+- **降级**:embed/vector 失败 → 向量两路空,RRF 退化 FTS5 两路
+- **高亮**:message 走 FTS5 带 `<b>`;card 走 FTS5 也带 `<b>`;向量路回表都不带高亮(可接受代价)
 
-- **两路并行**(`tokio::join!`)——FTS5 是 IO,embedding 是 CPU,并行压延迟到 max(两路)而非 sum
-- **K = min(limit × 3, 200)**(默认 60)——RRF 需召回冗余,但加上限防极端 `limit` 导致无效召回。融合后裁到 limit
-- **降级发生在这一层**:embedding/vector 失败 → 向量路空,RRF 数学上等价纯 FTS5
-- **回表**用 `SELECT ... FROM messages WHERE (session_id, seq) IN (...)` 批量,避免 N+1
-- **高亮行为**:`content_snippet` 在 FTS5 路径带 `<b>` 高亮(FTS5 `snippet()` 产生),向量路回表的消息**不带高亮**(纯 content 截断到 200 字符,跟空 query 分支一致)。这是可接受的代价——hybrid 召回的语义命中本就没有明确的"命中词"可标。前端如需高亮可自行处理,本次不改
-
-### 5.3 重建路径(离线,`POST /api/knowledge/rebuild`)
-
-**触发**:手动调重建 API(与现有 `rebuild_fts` 并列),或首次启用向量时全量灌库。
+### 5.4 重建路径(`POST /api/knowledge/rebuild`)
 
 ```
 POST /api/knowledge/rebuild
         │
         ▼
-ArchiveSystem::rebuild_all()   ← 新方法,串行调 FTS5 + 向量
+ArchiveSystem::rebuild_all()   ← 新,串行 4 步
         │
-        ├─[1] SqliteDb::rebuild_fts()             ← 现有
-        │
-        └─[2] SqliteDb::rebuild_vector_index()
+        ├─[1] rebuild_fts()                    ← 现有 messages FTS
+        ├─[2] rebuild_cards_fts()              ← 新
+        ├─[3] rebuild_message_vectors()        ← 新,流式分批 embed
+        └─[4] rebuild_card_vectors()           ← 新,卡片少,一次性
                 │
-                ▼
+                ▼ (message 重建:每批 256 条 embed_batch)
         SELECT session_id, seq, content FROM messages WHERE content != ''
                 │
-                ▼ (流式分批,每批 256 条,控制内存)
-        EmbeddingEngine::embed_batch(batch)
+                ▼
+        EmbeddingClient::embed_batch(batch)  HTTP→LMStudio
                 │
                 ▼
-        事务批量 INSERT INTO message_embeddings
+        批量 INSERT INTO message_embeddings
                 │
                 ▼
-        返回总条数 { "indexed_fts": N, "indexed_vector": M }
+        返回 { indexed_fts, indexed_cards_fts, indexed_message_vectors, indexed_card_vectors }
 ```
 
 **关键决策**:
+- **分批 256**(messages),卡片数量少一次性 embed_batch
+- **单事务批插**
+- **响应结构扩展**:4 个计数,前端按需展示
+- **不并发**:重建是重 HTTP 任务(LMStudio 单卡),串行最稳
 
-- **分批 256 条**——ONNX batch 推理比单条快 5-10x,但全量一次性灌会把 1w 条 embedding 撑爆内存;256 是 CPU/内存平衡点
-- **单事务批插**——每批一个 transaction,1w 条 = 40 个事务,比逐条快两个数量级
-- **响应结构变**:`{"indexed": N}` → `{"indexed_fts": N, "indexed_vector": M}`。重建是 admin 操作,破兼容可接受
-- **不并发**——重建是重 CPU 任务,与在线 embedding spawn 抢 CPU 会拖垮查询;串行最稳
-
-### 5.4 配置开关(放 `config/default.yaml`)
+### 5.5 配置开关(`config/default.yaml`)
 
 ```yaml
-# 向量搜索(实验性,默认关,降级到纯 FTS5)
 vector_search:
-  enabled: false              # true 才加载 ONNX 模型 + 启用向量写入/查询
-  model_dir: "./data/models/bge-small-zh-v1.5"
-  rebuild_on_startup: false   # 首启/模型升级时全量灌库
+  enabled: false
+  embedding:
+    base_url: "http://localhost:1234"   # LMStudio;也支持 vLLM/Ollama OpenAI 兼容
+    api_key: null                        # LMStudio 通常不需要
+    model: "qwen3-embedding:4b"          # LMStudio 里 pull 的模型名
+    timeout_secs: 10
+    batch_size: 256
+  rebuild_on_startup: false
 ```
 
-**`enabled: false` 时**:
-
-- `EmbeddingEngine` 不加载(省内存)
-- `append_message` 不 spawn embedding
-- `search_knowledge` 直接走旧 FTS5 路径
-- **行为跟现在 100% 一致** → 老用户升级零风险
+**`enabled: false` 时**:不构造 EmbeddingClient,不触发任何向量路径,行为跟现在 100% 一致。
 
 ---
 
@@ -384,26 +498,21 @@ vector_search:
 
 ### 6.1 失败矩阵
 
-按"**失败点 × 影响 × 行为**"显式列出,降级边界清晰:
+| # | 失败点 | 影响 | 行为 | 日志 |
+|---|--------|------|------|------|
+| 1 | 启动 sqlite-vec load 失败 | 向量整体不可用 | 运行期 `enabled=false`,服务正常起 | `error!` + banner `[vector: DISABLED]` |
+| 2 | 启动 `probe_dim` HTTP 失败(LMStudio 没起/模型没 pull) | 同上 | 同上;打印 "请在 LMStudio pull qwen3-embedding:4b" 指引 | `error!` |
+| 3 | message 写入 embed 失败 | 单条无向量 | 丢弃,FTS5 仍索引 | `warn!`(限频) |
+| 4 | card 写入 embed 失败 | 卡片无向量 | 卡片仍可被 cards_fts 搜到 | `warn!` |
+| 5 | 查询 embed 失败 | 该次查询退化 FTS5 两路 | 向量两路空,RRF 降级 | `warn!` |
+| 6 | 任一 search_* DB 失败 | 该路空 | 其余继续 | `warn!` |
+| 7 | 全部 4 路失败 | 查询彻底失败 | `Err` → HTTP 500 | `error!` |
+| 8 | 重建某批 embed 失败 | 该批跳过 | 计入 failed 计数,不中断 | `warn!` |
+| 9 | `enabled=false` | 全部向量路径不触发 | 等价当前行为 | 无 |
 
-| # | 失败点 | 影响范围 | 行为 | 日志 |
-|---|--------|---------|------|------|
-| 1 | 启动时 sqlite-vec 扩展 load 失败 | 向量功能整体不可用 | `vector_search.enabled` 强制降级 false,服务正常起 | `error!` + 启动 banner `[vector: DISABLED]` |
-| 2 | 启动时 ONNX 模型文件缺失 | 向量功能整体不可用 | 同上;打印 download 脚本指引 | `error!` |
-| 3 | `EmbeddingEngine::load` 推理初始化失败 | 同上 | 同上 | `error!` |
-| 4 | 写入路径 `embed()` 失败 | 单条消息无向量 | 丢弃,FTS5 仍索引该条 | `warn!`(限频) |
-| 5 | 写入路径 `index_embedding()` DB 失败 | 同上 | 同上 | `warn!` |
-| 6 | 查询路径 `embed(query)` 失败 | 该次查询退化纯 FTS5 | 向量路返回空,RRF 自然降级 | `warn!` |
-| 7 | 查询路径 `search_vector()` DB 失败 | 同上 | 同上 | `warn!` |
-| 8 | 查询路径 `search_fts()` 失败 | 该次查询彻底失败 | 返回 `Err` → HTTP 500 | `error!` |
-| 9 | 重建路径某批 embed 失败 | 该批跳过,继续下一批 | 计入 `failed` 计数,不中断 | `warn!` |
-| 10 | `vector_search.enabled=false` | 全部向量路径不触发 | 等价当前行为 | 无(静默) |
+**核心原则**:**FTS5 是底线,向量是增益**。最坏退化纯 FTS5。
 
-**核心原则**:**FTS5 是底线,向量是增益**。任何向量相关失败都不让"搜索"本身不可用,最坏退化到今天的纯 FTS5。
-
-**启动顺序约定**(澄清 #1/#2/#3 的交互):配置加载后,若 `vector_search.enabled=true`,启动流程**先尝试 load sqlite-vec 扩展 → 再尝试 `EmbeddingEngine::load`**,任一失败则把运行期 `vector_enabled` 标志位翻成 `false`(配置值不变,只是运行期降级),并打 `error!` 日志 + 启动 banner 标注 `[vector: DISABLED]`。之后所有写入/查询路径检查运行期标志位,与 `enabled=false` 行为一致。
-
-**warn! 限频**:写入路径连续失败(模型彻底坏)用简单计数器——每 100 条只打一条日志,带"已抑制 N 条"字段,避免日志风暴。
+**warn! 限频**:连续失败每 100 条只打一条,带"已抑制 N 条"。
 
 ### 6.2 `FoundationError` 扩展(`foundation/src/error.rs`)
 
@@ -414,8 +523,8 @@ pub enum FoundationError {
     #[error("sqlite-vec extension not available: {0}")]
     VectorExtensionUnavailable(String),
 
-    #[error("embedding model not found at {path}")]
-    EmbeddingModelNotFound { path: String },
+    #[error("embedding service unavailable at {url}: {detail}")]
+    EmbeddingServiceUnavailable { url: String, detail: String },
 
     #[error("embedding inference failed: {0}")]
     EmbeddingInferenceFailed(String),
@@ -425,64 +534,70 @@ pub enum FoundationError {
 }
 ```
 
-**不新增** `VectorSearchError`(现有枚举)会被废弃——它本来无生产用例,新代码统一用 `FoundationError`,错误类型单一。
+**废弃** `VectorSearchError`(现有枚举,无生产用例)。
+
+### 6.3 启动顺序约定
+
+配置加载后,若 `vector_search.enabled=true`:
+1. **先 load sqlite-vec 扩展** → 失败则运行期 `enabled=false`
+2. **再 `EmbeddingClient::probe_dim()`** embed("ping") → 失败(连不上/模型没 pull)则 `enabled=false`
+3. 两步都成功 → 用探测维度建两张 vec0 表,`enabled=true`
+
+配置值不变,只是运行期降级。启动 banner 标注 `[vector: ENABLED dim=2560]` 或 `[vector: DISABLED reason=...]`。
 
 ---
 
 ## 7. 测试策略
 
-分三层,每层都快、不依赖外部模型。
-
 ### 7.1 层 1:单元测试(纯函数,秒级)
 
-放各模块 `#[cfg(test)]`,`cargo test` 直接跑。
-
-- **`hybrid_search.rs::rrf_fuse`** — 纯函数测试
-  - 两路命中同一 key → 分数叠加(>单路)
-  - 一路空 → 退化成另一路排序
-  - limit 截断正确
-  - rank 从 0 开始,k=60 边界(`1/(60+0+1)` 精确值)
+- **`hybrid_search.rs::rrf_fuse_cross_table`**:
+  - 4 路全命中 → 分数正确累加
+  - 向量两路全空 → 退化 FTS5 两路排序
+  - 单路空 → 其余继续
+  - 跨表 key 不冲突(message "session|seq" vs card "uuid")
+  - limit 截断
 - **`sqlite.rs::cjk_tokenize`** — 现有,保留
-- **`embedding.rs`** 池化/归一化数学函数(mean-pool、L2-norm)单独抽函数测,不跑 ONNX
 
 ### 7.2 层 2:集成测试(SQLite + vec0 + mock embedding,秒级)
 
-`tests/hybrid_search_integration.rs` —— 用**真的 SQLite + vec0**(sqlite-vec 能 load),embedding 用 **mock**(`MockEmbeddingEngine` 返回确定性伪向量,如文本 hash → 512 维)。
+`tests/hybrid_search_integration.rs` —— 真 SQLite + vec0,embedding 用 **mock**(`MockEmbeddingClient`,HTTP 不实际调用,返回确定性伪向量)。
 
 测什么:
+- 写 5 条 message + 2 张 card → `message_embeddings` 5 行 + `card_embeddings` 2 行 + `cards_fts` 2 行
+- 跨表查询 → 返回混合结果,`source` 字段正确区分 message/card
+- embed mock 注入失败 → 退化 FTS5 两路(用必命中的关键词验证)
+- message vector 失败 → card 路继续
+- 重建 → 4 个计数正确
+- 卡片 update → card_embeddings 重新 embed
 
-- 写入 5 条消息 → 向量表有 5 行
-- 查询 → 返回 `Vec<KnowledgeResult>`,字段齐全
-- embedding engine 失败(mock 注入 error)→ 返回结果退化为纯 FTS5(用 FTS5 必命中的关键词验证)
-- `search_vector` 失败(mock DB 报错)→ 同上降级
-- 重建 → `indexed_vector` 计数正确,重建前后查询结果一致
+**为什么 mock**:真 LMStudio + Qwen3-4B 要 8GB VRAM,CI 跑不起;测试关心**融合逻辑 + 降级**,不是 embedding 质量。
 
-**为什么 mock embedding**:真 ONNX 模型 100MB,CI 跑不起;测试关心的是**融合逻辑 + 降级**,不是 embedding 质量(那是模型的事)。
+### 7.3 层 3:真模型 smoke 测试(手动,`#[ignore]`)
 
-### 7.3 层 3:真模型 smoke 测试(手动,可选)
+`tests/smoke_real_model.rs`,本地 LMStudio 在跑时 `cargo test -- --ignored`:
 
-`tests/smoke_real_model.rs`,用 `#[ignore]` 标注,本地有模型时 `cargo test -- --ignored` 跑。
+- `embed("如何让 AI 记住我")` 与 `embed("长期记忆怎么实现")` cosine > 0.6
+- `embed("如何让 AI 记住我")` 与 `embed("今天天气真好")` cosine < 0.3
+- 端到端:写 message + card,hybrid 查询语义召回(同义改述)
+- 卡片内容"意识哲学的困境" → 搜 "心灵哲学问题" 能命中
 
-- 加载真 bge-small-zh ONNX
-- `embed("如何让 AI 记住我")` 与 `embed("长期记忆怎么实现")` 的 cosine > 0.6(语义相近)
-- `embed("如何让 AI 记住我")` 与 `embed("今天天气真好")` 的 cosine < 0.3(语义无关)
-- 端到端:写几条消息,hybrid 查询能语义召回(同义改述 query)
-
-**不进 CI**,仅开发时验证模型没装错。
+**不进 CI**。
 
 ---
 
-## 8. 验收标准(Definition of Done)
+## 8. 验收标准(DoD)
 
 1. `cargo test` 全绿(层 1 + 层 2)
 2. `cargo build --release` 通过
-3. `vector_search.enabled=false` 时,所有现有测试 + 行为不变(零回归)
-4. `vector_search.enabled=true` + 模型在位时:
-   - 写消息 → 向量表新增一行
-   - 搜索 → 返回 hybrid 结果
-   - 故意删模型文件 → 搜索降级纯 FTS5,不报错
-5. 重建 API 返回 `{indexed_fts, indexed_vector}`
-6. smoke 测试手动跑过(语义召回验证)
+3. `vector_search.enabled=false` 时所有现有测试 + 行为不变(零回归)
+4. `vector_search.enabled=true` + LMStudio 在跑 + qwen3-embedding:4b 已 pull:
+   - 写 message → `message_embeddings` 新增一行
+   - conference 生成 card → `card_embeddings` + `cards_fts` 新增一行
+   - `/knowledge/search` 返回混合 message + card 结果,带 `source` 字段
+   - 故意停 LMStudio → 搜索降级纯 FTS5,不报错
+5. 重建 API 返回 4 个计数
+6. smoke 测试手动跑过(语义召回 + 跨表混合验证)
 
 ---
 
@@ -490,28 +605,52 @@ pub enum FoundationError {
 
 | 文件 | 改动 |
 |------|------|
-| `rust/foundation/src/embedding.rs` | 新建 — ONNX 推理封装 |
-| `rust/foundation/src/hybrid_search.rs` | 新建 — RRF 融合 + 降级 |
-| `rust/foundation/src/sqlite.rs` | 加 `ensure_vec0` / `index_embedding` / `search_vector` / `rebuild_vector_index` / `fetch_knowledge_by_keys`;`search_knowledge` 拆出 `search_fts` 内部方法 |
-| `rust/foundation/src/storage.rs` | trait 加 `search_knowledge_hybrid` |
-| `rust/foundation/src/lib.rs` | 导出 `embedding` / `hybrid_search` 模块 |
-| `rust/foundation/src/config.rs` | 加 `embedding_model_dir` / `vector_enabled` / `vector_rebuild_on_startup` 配置 |
-| `rust/foundation/src/error.rs` | 加 4 个向量相关 error variant;废弃 `VectorSearchError` |
-| `rust/foundation/Cargo.toml` | 加 `ort` / `tokenizers` / `rusqlite`(vec0 load_extension) |
-| `rust/foundation/extensions/` | 新建目录,放 sqlite-vec `.dylib`/`.so`/`.dll` |
-| `rust/api/src/store.rs` | impl `search_knowledge_hybrid`,注入 `HybridSearcher` |
-| `rust/api/src/state.rs` | `AppState` 持有 `HybridSearcher`(条件构造) |
-| `rust/api/src/main.rs` | 启动时按 `vector_enabled` 条件构造 engine + searcher |
-| `rust/archive/src/lib.rs` | `search_knowledge` 内部委托 hybrid(若 searcher 存在) |
+| `rust/foundation/src/embedding.rs` | 新建 — HTTP EmbeddingClient(非 ONNX) |
+| `rust/foundation/src/hybrid_search.rs` | 新建 — 跨表 RRF + 降级 |
+| `rust/foundation/src/sqlite.rs` | 加 2 张 vec0 表 + cards_fts 表;加 KNN/FTS/重建/回表方法;现有 `search_knowledge` 重构出 `search_messages_fts` |
+| `rust/foundation/src/storage.rs` | trait 加 `search_knowledge_hybrid` / `index_knowledge_card` |
+| `rust/foundation/src/lib.rs` | 导出新模块 |
+| `rust/foundation/src/config.rs` | 加 `VectorSearchConfig`(base_url/api_key/model/timeout/batch_size) |
+| `rust/foundation/src/models.rs` | `KnowledgeResult` 加 `source` / `card_id` / `tags` 字段 |
+| `rust/foundation/src/error.rs` | 加 4 个向量 error variant;废弃 `VectorSearchError` |
+| `rust/foundation/Cargo.toml` | 加 `reqwest`(若未在 workspace);**不加** `ort`/`tokenizers` |
+| `rust/foundation/extensions/` | 新建,放 sqlite-vec `.dylib`/`.so`/`.dll` |
+| `rust/api/src/store.rs` | impl `search_knowledge_hybrid` / `index_knowledge_card`;注入 `HybridSearcher` |
+| `rust/api/src/state.rs` | `AppState` 持有 `Option<Arc<HybridSearcher>>` |
+| `rust/api/src/main.rs` | 启动按配置条件构造 client + searcher + probe_dim |
+| `rust/api/src/routes/knowledge.rs` | `search` 改调 `search_knowledge_hybrid`;`rebuild` 改调 4 步重建 |
+| `rust/archive/src/lib.rs` | 加 `search_knowledge_hybrid` / `index_knowledge_card` 转发 |
+| `rust/possession/src/modes/conference.rs` | `insert_knowledge_card` 后调 `index_knowledge_card`(FTS+embed) |
 | `config/default.yaml` | 加 `vector_search` 配置块 |
-| `scripts/download-embedding-model.sh` | 新建 — 拉 bge-small-zh ONNX 模型 |
+| `nextjs/components/knowledge-browser.tsx` | 读 `source` 字段区分 message/card 显示(可选,后端先兼容) |
 
 ---
 
 ## 10. 风险与边界
 
-- **首次引入 `ort` + `tokenizers` 重依赖**,编译时间会增加(~30s),运行时按需加载,不启用 vector 时无开销
-- **sqlite-vec 扩展跨平台分发**:`.dylib`(macOS)/`.so`(Linux)/`.dll`(Windows)随仓库走,放 `rust/foundation/extensions/`。CI 要能找到——这是最可能踩坑的地方,writing-plans 阶段单独列步骤验证
-- **WAL 模式下 vec0 并发**:sqlite-vec 跟主库同文件同 WAL,写入并发度受 SQLite 单写者限制。写入路径已异步串行 spawn(共用 channel),不抢锁
-- **embedding 模型升级**(如以后换 bge-m3)→ 维度 512→1024,需 drop+rebuild 向量表。`rebuild_vector_index` 已支持全量重建,但 schema 维度硬编码 512,升级需改代码 + 重建。此限制写进文档
-- **ONNX 推理线程**:bge-small-zh 单条约 5-15ms CPU,写入路径异步 spawn 不阻塞;但重建路径全量灌库时会占满 CPU,应避免在高峰期触发(文档提示)
+- **LMStudio 必须在跑**——向量功能依赖外部服务;但项目本来就把 LMStudio 当 LLM 后端,不算新增依赖
+- **Qwen3-4B VRAM**——需 8-9GB(FP16)或 3-4GB(Q4);用户机器需有足够 GPU。文档提示
+- **首次启用必须 rebuild**——历史 messages/cards 无向量,启用后调 `/knowledge/rebuild` 全量灌库。rebuild 1w messages + LMStudio Qwen3-4B ≈ 20-40 分钟(GPU),需避开高峰
+- **sqlite-vec 跨平台分发**——`.dylib`/`.so`/`.dll` 随仓库,writing-plans 单独验证 CI 能 load
+- **WAL + vec0 并发**——同库单写者;message 异步 spawn 串行,card 同步在 conference 流程内,不抢锁
+- **embedding 模型升级**——维度变(如换 Qwen3-8B 或调输出维度)→ drop 两张 vec0 表 + rebuild。schema 用 `probe_dim` 探测值,不硬编码,降低此风险
+- **HTTP 延迟**——LMStudio loopback embed ~50-500ms,查询路径并行掩盖;message 写入异步掩盖;均可接受
+- **向后兼容**——`KnowledgeResult` 新字段 serde 默认值,旧前端不读 source 也能正常显示 message 结果
+
+---
+
+## 附录 A:v1 → v2 变更摘要
+
+| 维度 | v1 | v2 |
+|------|----|----|
+| embedding 后端 | 进程内 ONNX(bge-small-zh) | **LMStudio HTTP(Qwen3-4B)** |
+| 重依赖 | +`ort` +`tokenizers` | **无新增**(reqwest 已用) |
+| 模型分发 | 仓库塞 100MB ONNX + 下载脚本 | **不塞**,LMStudio 自管 |
+| 索引范围 | messages only | **messages + KnowledgeCard** |
+| FTS5 表 | 1 张(knowledge_fts) | **2 张**(+ cards_fts) |
+| vec0 表 | 1 张 | **2 张**(message/card 各一) |
+| 查询入口 | /search 只搜 messages | **/search 跨表 RRF** |
+| 返回结构 | KnowledgeResult | **+ source / card_id / tags** |
+| 重建计数 | 2 个(fts/vector) | **4 个**(msg_fts/card_fts/msg_vec/card_vec) |
+| 融合函数 | rrf_fuse(2 路) | **rrf_fuse_cross_table(4 路)** |
+| RRF 去重 key | (session_id, seq) | **(surface, key) 二元组** |
