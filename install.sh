@@ -19,8 +19,8 @@ log_err()  { echo -e "${RED}[ERROR]${NC} $1"; }
 print_banner() {
     echo ""
     echo "============================================================"
-    echo "  Snake Skin — 万民幡"
-    echo "  多 AI 人格并行推理系统"
+    echo "  Snake Skin"
+    echo "  AI 模拟仲裁庭"
     echo "============================================================"
     echo ""
 }
@@ -136,7 +136,7 @@ cleanup() {
 trap cleanup SIGINT SIGTERM EXIT
 
 echo "========================================"
-echo "  Snake Skin — 万民幡"
+echo "  Snake Skin"
 echo "========================================"
 echo ""
 

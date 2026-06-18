@@ -8,7 +8,7 @@ LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || echo "")
 
 echo "========================================"
 echo "  Snake Skin"
-echo "  蛇皮指数 · 思辨消费跟踪"
+echo "  模拟仲裁庭 · 劳动争议"
 echo "========================================"
 
 cleanup() {
