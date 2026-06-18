@@ -1,6 +1,5 @@
 # 模拟仲裁庭
 
-> 仓库名：[soul-banner-lite](https://github.com/Azhu9701/soul-banner-lite)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange?logo=rust)](https://www.rust-lang.org)
