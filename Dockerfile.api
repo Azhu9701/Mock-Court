@@ -29,8 +29,8 @@ COPY --from=builder /app/api /app/api
 RUN mkdir -p /app/data/archive /app/data/souls /app/config
 
 # 若构建时 souls 目录存在则复制进去（兼容本地构建），否则运行时再挂载
-COPY config/ /app/config/ 2>/dev/null || true
-COPY data/souls/ /app/data/souls/ 2>/dev/null || true
+RUN if [ -d config/ ] && [ "$(ls -A config/ 2>/dev/null)" ]; then cp -r config/. /app/config/; fi
+RUN if [ -d data/souls/ ] && [ "$(ls -A data/souls/ 2>/dev/null)" ]; then cp -r data/souls/. /app/data/souls/; fi
 
 EXPOSE 3096
 

@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useParams, notFound } from "next/navigation";
 import { fetchSoul, type SoulProfile } from "@/lib/api";
-import { IsmismRadar } from "@/components/ismism-radar";
 import { SoulPrompt } from "@/components/soul-prompt";
 import { PracticeObservations } from "@/components/practice-observations";
 import { SummonButton } from "@/components/summon-button";

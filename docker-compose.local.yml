@@ -47,6 +47,7 @@ services:
 
   # ── Rust 后端 API ─────────────────────────────────
   api:
+    image: soul-banner-api:latest
     build:
       context: .
       dockerfile: Dockerfile.api
@@ -89,6 +90,7 @@ services:
 
   # ── Next.js 前端 ────────────────────────────────────
   web:
+    image: soul-banner-web:latest
     build:
       context: .
       dockerfile: Dockerfile.web
