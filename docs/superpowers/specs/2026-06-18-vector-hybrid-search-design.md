@@ -1,9 +1,10 @@
-# 向量 Hybrid 搜索设计 (v2)
+# 向量 Hybrid 搜索设计 (v2.1)
 
 - **日期**:2026-06-18
 - **状态**:已确认,待实现
 - **范围**:`foundation` 新增向量召回 + 跨表 RRF 融合;`archive`/`api` 转发层适配;HTTP `/knowledge/search` 扩展为跨表搜索
 - **vs v1 的变更**:① embedding 后端从进程内 ONNX 改为 **LMStudio HTTP(OpenAI 兼容)**;② 索引范围从 messages 扩展到 **messages + KnowledgeCard**;③ `/knowledge/search` 改为**跨表 RRF**
+- **vs v2 的变更(v2.1)**:embedding 模型从 Qwen3-Embedding-4B 换为 **BGE-M3**(568M,维度 1024,8192 上下文,三模式能力)。理由:进程内/HTTP 部署双灵活、8192 token 对长 message 友好、多语言、未来可探索用其 sparse 模式补充 FTS5。架构主体不变,只改配置与维度
 
 ---
 
@@ -33,7 +34,7 @@ rust-agent 的 knowledge 搜索当前依赖 **SQLite FTS5 + trigram tokenizer**(
 
 在现有 FTS5 基础上**并联向量召回**,覆盖 messages + KnowledgeCard 两个 surface,用 **RRF 跨表融合**;`/knowledge/search` 一个端点搜全部,返回带 `source` 字段区分来源。
 
-embedding 走 **LMStudio OpenAI 兼容接口**(项目已集成),跑 **Qwen3-Embedding-4B**(用户在 LMStudio 里 pull)。全链路失败时**静默降级纯 FTS5**,老用户行为零回归。
+embedding 走 **LMStudio OpenAI 兼容接口**(项目已集成),跑 **BGE-M3**(568M,1024 维,8192 token 上下文,三模式能力)。全链路失败时**静默降级纯 FTS5**,老用户行为零回归。
 
 ### 1.4 非目标
 
@@ -48,8 +49,8 @@ embedding 走 **LMStudio OpenAI 兼容接口**(项目已集成),跑 **Qwen3-Embe
 
 | # | 决策 | 选择 | 理由 |
 |---|------|------|------|
-| 1 | ⚠️ **embedding 后端** | **LMStudio HTTP(OpenAI 兼容 `/v1/embeddings`)** | Qwen3-4B 不能进 Rust 进程(8-9GB 内存 / CPU 1-5s/条);项目已集成 LMStudio(`rust/ai-gateway/src/lmstudio.rs`),走 `http://localhost:1234`,换模型只改配置;不引 `ort`/`tokenizers` 重依赖 |
-| 2 | embedding 模型 | **Qwen3-Embedding-4B**(维度 2560,可配) | 用户指定;多语言、中文质量强于 bge-small |
+| 1 | ⚠️ **embedding 后端** | **LMStudio HTTP(OpenAI 兼容 `/v1/embeddings`)** | 项目已集成 LMStudio(`rust/ai-gateway/src/lmstudio.rs`),走 `http://localhost:1234`,换模型只改配置;不引 `ort`/`tokenizers` 重依赖 |
+| 2 | ⚠️ **embedding 模型** | **BGE-M3**(568M,维度 1024,8192 token 上下文) | vs Qwen3-4B:进程内/HTTP 部署双灵活、8192 token 对长 message 友好、100+ 多语言、原生 dense+sparse+multi-vector 三模式(未来可探索替代 FTS5);中文质量长期霸榜,Qwen3-4B 仅在 benchmark 略胜但用户感知不到 |
 | 3 | 业务线 | **knowledge 优先** | souls 数量小现有够用;knowledge 数据持续增长,痛点最大 |
 | 4 | ⚠️ **索引范围** | **messages + KnowledgeCard** | v1 只覆盖 messages;调查发现 KnowledgeCard 完全无搜索,高价值却不可发现,纳入刻不容缓 |
 | 5 | 向量存储 | **SQLite-vec(`vec0` 虚表,同库)** | 跟 FTS5 同库同事务同备份;消息/卡片各一张 vec0 表(主键不冲突) |
@@ -78,7 +79,7 @@ embedding 走 **LMStudio OpenAI 兼容接口**(项目已集成),跑 **Qwen3-Embe
                                        │     │                              │
                                        │     ├─[向量路径]                   │
                                        │     │   EmbeddingClient (HTTP)     │
-                                       │     │     ↓ Qwen3-4B via LMStudio  │
+                                       │     │     ↓ BGE-M3 via LMStudio     │
                                        │     │   search_message_vectors()   │
                                        │     │   search_card_vectors()      │
                                        │     │                              │
@@ -111,15 +112,15 @@ embedding 走 **LMStudio OpenAI 兼容接口**(项目已集成),跑 **Qwen3-Embe
 
 ### 4.1 `EmbeddingClient`(`foundation/src/embedding.rs`,新建)
 
-**职责**:HTTP 客户端,调 OpenAI 兼容 `/v1/embeddings`,把文本变成 2560 维向量。**不加载任何模型文件**。
+**职责**:HTTP 客户端,调 OpenAI 兼容 `/v1/embeddings`,把文本变成 1024 维向量(BGE-M3 默认输出)。**不加载任何模型文件**。
 
 ```rust
 pub struct EmbeddingClient {
     http: reqwest::Client,
     base_url: String,      // 默认 http://localhost:1234 (LMStudio)
     api_key: Option<String>,
-    model: String,         // 默认 "qwen3-embedding:4b" 或 HF 路径
-    dim: usize,            // 2560,启动时探测一次
+    model: String,         // 默认 "bge-m3"(LMStudio pull 的名字)
+    dim: usize,            // 1024,启动时探测一次
 }
 
 impl EmbeddingClient {
@@ -134,16 +135,17 @@ impl EmbeddingClient {
 **请求体**(标准 OpenAI 格式):
 ```json
 POST {base_url}/v1/embeddings
-{ "model": "qwen3-embedding:4b", "input": ["text1", "text2"] }
+{ "model": "bge-m3", "input": ["text1", "text2"] }
 → { "data": [{ "embedding": [...] }, ...] }
 ```
 
 **关键决策**:
 
 - 复用 `reqwest`(项目已用),不引新 HTTP 依赖
-- **维度不硬编码**——`probe_dim` 在启动时 embed 一句 "ping" 探测实际维度(用户可能在 LMStudio 配 1024 输出维度),vec0 表创建用探测值
+- **维度不硬编码**——`probe_dim` 在启动时 embed 一句 "ping" 探测实际维度(BGE-M3 默认 1024,但留口子兼容未来换模型)。vec0 表创建用探测值
+- **BGE-M3 长文本处理**——8192 token 上下文足够覆盖绝大多数 message;极少数超长 message(>8192)由 LMStudio 内部截断,我们不预处理
 - 失败返回 `Err`,由上层降级;client 自己不重试(embedding 不是关键路径,失败就降级)
-- 超时 10s(LMStudio GPU 推理通常 <500ms,留足余量)
+- 超时 10s(LMStudio BGE-M3 GPU 推理通常 <100ms,CPU ~200ms,留足余量)
 
 ### 4.2 `SqliteDb` 向量扩展(改 `foundation/src/sqlite.rs`)
 
@@ -484,7 +486,7 @@ vector_search:
   embedding:
     base_url: "http://localhost:1234"   # LMStudio;也支持 vLLM/Ollama OpenAI 兼容
     api_key: null                        # LMStudio 通常不需要
-    model: "qwen3-embedding:4b"          # LMStudio 里 pull 的模型名
+    model: "bge-m3"                      # LMStudio 里 pull 的模型名(BAAI/bge-m3)
     timeout_secs: 10
     batch_size: 256
   rebuild_on_startup: false
@@ -501,7 +503,7 @@ vector_search:
 | # | 失败点 | 影响 | 行为 | 日志 |
 |---|--------|------|------|------|
 | 1 | 启动 sqlite-vec load 失败 | 向量整体不可用 | 运行期 `enabled=false`,服务正常起 | `error!` + banner `[vector: DISABLED]` |
-| 2 | 启动 `probe_dim` HTTP 失败(LMStudio 没起/模型没 pull) | 同上 | 同上;打印 "请在 LMStudio pull qwen3-embedding:4b" 指引 | `error!` |
+| 2 | 启动 `probe_dim` HTTP 失败(LMStudio 没起/模型没 pull) | 同上 | 同上;打印 "请在 LMStudio pull bge-m3" 指引 | `error!` |
 | 3 | message 写入 embed 失败 | 单条无向量 | 丢弃,FTS5 仍索引 | `warn!`(限频) |
 | 4 | card 写入 embed 失败 | 卡片无向量 | 卡片仍可被 cards_fts 搜到 | `warn!` |
 | 5 | 查询 embed 失败 | 该次查询退化 FTS5 两路 | 向量两路空,RRF 降级 | `warn!` |
@@ -541,9 +543,9 @@ pub enum FoundationError {
 配置加载后,若 `vector_search.enabled=true`:
 1. **先 load sqlite-vec 扩展** → 失败则运行期 `enabled=false`
 2. **再 `EmbeddingClient::probe_dim()`** embed("ping") → 失败(连不上/模型没 pull)则 `enabled=false`
-3. 两步都成功 → 用探测维度建两张 vec0 表,`enabled=true`
+3. 两步都成功 → 用探测维度建两张 vec0 表(BGE-M3 预期 1024),`enabled=true`
 
-配置值不变,只是运行期降级。启动 banner 标注 `[vector: ENABLED dim=2560]` 或 `[vector: DISABLED reason=...]`。
+配置值不变,只是运行期降级。启动 banner 标注 `[vector: ENABLED dim=1024]` 或 `[vector: DISABLED reason=...]`。
 
 ---
 
@@ -571,7 +573,7 @@ pub enum FoundationError {
 - 重建 → 4 个计数正确
 - 卡片 update → card_embeddings 重新 embed
 
-**为什么 mock**:真 LMStudio + Qwen3-4B 要 8GB VRAM,CI 跑不起;测试关心**融合逻辑 + 降级**,不是 embedding 质量。
+**为什么 mock**:真 LMStudio + BGE-M3 要 ~2-3GB VRAM,CI 跑不起;测试关心**融合逻辑 + 降级**,不是 embedding 质量。
 
 ### 7.3 层 3:真模型 smoke 测试(手动,`#[ignore]`)
 
@@ -591,7 +593,7 @@ pub enum FoundationError {
 1. `cargo test` 全绿(层 1 + 层 2)
 2. `cargo build --release` 通过
 3. `vector_search.enabled=false` 时所有现有测试 + 行为不变(零回归)
-4. `vector_search.enabled=true` + LMStudio 在跑 + qwen3-embedding:4b 已 pull:
+4. `vector_search.enabled=true` + LMStudio 在跑 + bge-m3 已 pull:
    - 写 message → `message_embeddings` 新增一行
    - conference 生成 card → `card_embeddings` + `cards_fts` 新增一行
    - `/knowledge/search` 返回混合 message + card 结果,带 `source` 字段
@@ -629,17 +631,20 @@ pub enum FoundationError {
 ## 10. 风险与边界
 
 - **LMStudio 必须在跑**——向量功能依赖外部服务;但项目本来就把 LMStudio 当 LLM 后端,不算新增依赖
-- **Qwen3-4B VRAM**——需 8-9GB(FP16)或 3-4GB(Q4);用户机器需有足够 GPU。文档提示
-- **首次启用必须 rebuild**——历史 messages/cards 无向量,启用后调 `/knowledge/rebuild` 全量灌库。rebuild 1w messages + LMStudio Qwen3-4B ≈ 20-40 分钟(GPU),需避开高峰
+- **BGE-M3 资源占用**——568M 模型,LMStudio 加载约需 ~2-3GB VRAM(FP16)或可纯 CPU 跑(~200ms/条);远低于 Qwen3-4B 的 8-9GB,消费级机器友好。8192 token 上下文足以覆盖绝大多数 message,超长内容由 LMStudio 截断
+- **首次启用必须 rebuild**——历史 messages/cards 无向量,启用后调 `/knowledge/rebuild` 全量灌库。rebuild 1w messages + LMStudio BGE-M3(GPU)≈ 5-15 分钟,(CPU)≈ 30-60 分钟,需避开高峰
 - **sqlite-vec 跨平台分发**——`.dylib`/`.so`/`.dll` 随仓库,writing-plans 单独验证 CI 能 load
 - **WAL + vec0 并发**——同库单写者;message 异步 spawn 串行,card 同步在 conference 流程内,不抢锁
-- **embedding 模型升级**——维度变(如换 Qwen3-8B 或调输出维度)→ drop 两张 vec0 表 + rebuild。schema 用 `probe_dim` 探测值,不硬编码,降低此风险
-- **HTTP 延迟**——LMStudio loopback embed ~50-500ms,查询路径并行掩盖;message 写入异步掩盖;均可接受
+- **embedding 模型升级**——维度变(如换 Qwen3-4B 或调输出维度)→ drop 两张 vec0 表 + rebuild。schema 用 `probe_dim` 探测值,不硬编码,降低此风险
+- **HTTP 延迟**——LMStudio loopback embed,BGE-M3 GPU ~50-100ms / CPU ~200ms,查询路径并行掩盖;message 写入异步掩盖;均可接受
+- **BGE-M3 三模式未充分利用**(未来机会)——当前只用 dense 模式;BGE-M3 原生支持 sparse(词法)+ multi-vector(ColBERT),未来可探索用 sparse 替代/补充 FTS5,或用 multi-vector 提升长文档召回。本 spec 不实施,留作 v3 演进方向
 - **向后兼容**——`KnowledgeResult` 新字段 serde 默认值,旧前端不读 source 也能正常显示 message 结果
 
 ---
 
-## 附录 A:v1 → v2 变更摘要
+## 附录 A:版本变更摘要
+
+### v1 → v2
 
 | 维度 | v1 | v2 |
 |------|----|----|
@@ -654,3 +659,17 @@ pub enum FoundationError {
 | 重建计数 | 2 个(fts/vector) | **4 个**(msg_fts/card_fts/msg_vec/card_vec) |
 | 融合函数 | rrf_fuse(2 路) | **rrf_fuse_cross_table(4 路)** |
 | RRF 去重 key | (session_id, seq) | **(surface, key) 二元组** |
+
+### v2 → v2.1(本次)
+
+| 维度 | v2 | v2.1 |
+|------|----|----|
+| embedding 模型 | Qwen3-Embedding-4B | **BGE-M3** |
+| 维度 | 2560 | **1024** |
+| 最大上下文 | 32768 token | 8192 token(对 message 场景足够) |
+| VRAM 占用 | 8-9GB(FP16) | **~2-3GB(FP16)/可纯 CPU** |
+| 多语言 | 多语言 | **100+ 语言,长期中文霸榜** |
+| 检索模式 | dense only | **dense + sparse + multi-vector(本版仅用 dense)** |
+| 架构改动 | — | **无**(只改 model 名 + 维度,代码主体不变) |
+
+**v2.1 净收益**:部署更灵活(进程内/HTTP 双可行)、资源占用更低、未来有 sparse/multi-vector 演进空间,代价是 benchmark 上略逊 Qwen3-4B 几个点(用户无感)。
