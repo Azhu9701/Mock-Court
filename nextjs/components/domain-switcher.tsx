@@ -32,7 +32,7 @@ export function DomainSwitcher() {
       .catch(() => {
         // fallback：至少显示当前领域
         setOptions([
-          { profile: "philosophy", label: "万民幡", available: true },
+          { profile: "court", label: "模拟仲裁庭", available: true },
           { profile: "legal", label: "法律智囊团", available: true },
         ]);
       });

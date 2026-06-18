@@ -1047,9 +1047,9 @@ async fn get_domain_info(
 
     Ok(Json(DomainInfo {
         profile: detect_current_profile(&domain.terms.get("system_name").cloned().unwrap_or_default()),
-        system_name: domain.terms.get("system_name").cloned().unwrap_or_else(|| "Snake Skin".into()),
-        agent_noun: domain.terms.get("agent_noun").cloned().unwrap_or_else(|| "魂".into()),
-        synthesis_verb: domain.terms.get("synthesis_verb").cloned().unwrap_or_else(|| "辩证综合".into()),
+        system_name: domain.terms.get("system_name").cloned().unwrap_or_else(|| "模拟仲裁庭".into()),
+        agent_noun: domain.terms.get("agent_noun").cloned().unwrap_or_else(|| "庭审参与者".into()),
+        synthesis_verb: domain.terms.get("synthesis_verb").cloned().unwrap_or_else(|| "法庭裁决".into()),
         dimensions: domain.coordinate.dimensions.iter().map(|d| d.name.clone()).collect(),
         available,
         enabled_modes: domain.enabled_modes.clone(),
@@ -1118,9 +1118,9 @@ async fn set_domain(
 
     Ok(Json(DomainInfo {
         profile: body.profile,
-        system_name: domain.terms.get("system_name").cloned().unwrap_or_else(|| "Snake Skin".into()),
-        agent_noun: domain.terms.get("agent_noun").cloned().unwrap_or_else(|| "魂".into()),
-        synthesis_verb: domain.terms.get("synthesis_verb").cloned().unwrap_or_else(|| "辩证综合".into()),
+        system_name: domain.terms.get("system_name").cloned().unwrap_or_else(|| "模拟仲裁庭".into()),
+        agent_noun: domain.terms.get("agent_noun").cloned().unwrap_or_else(|| "庭审参与者".into()),
+        synthesis_verb: domain.terms.get("synthesis_verb").cloned().unwrap_or_else(|| "法庭裁决".into()),
         dimensions: domain.coordinate.dimensions.iter().map(|d| d.name.clone()).collect(),
         available,
         enabled_modes: domain.enabled_modes.clone(),

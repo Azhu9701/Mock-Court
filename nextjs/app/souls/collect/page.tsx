@@ -45,7 +45,7 @@ export default function CollectPage() {
       <div className="flex items-center gap-3">
         <Link href="/souls"><Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button></Link>
         <div>
-          <h1 className="text-2xl font-bold">收魂</h1>
+          <h1 className="text-2xl font-bold">收集角色</h1>
           <p className="text-sm text-muted-foreground">AI 辅助收集人物 raw 素材</p>
         </div>
       </div>
@@ -54,7 +54,7 @@ export default function CollectPage() {
         <div className="space-y-4">
           <div className="rounded-lg border p-6 space-y-4">
             <p className="text-sm text-muted-foreground">
-              收魂仪轨：输入人物名 → AI 从 6 维度搜索收集信息（生平/思想/方法论/代表作/影响争议/ismism 定位）
+              收集角色：输入人物名 → AI 从 6 维度搜索收集信息（生平/思想/方法论/代表作/影响争议/ismism 定位）
             </p>
             <div className="flex gap-2">
               <Input
@@ -70,7 +70,7 @@ export default function CollectPage() {
               />
               <Button onClick={onCollect} disabled={loading || !name.trim()} data-testid="collect-btn">
                 {loading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Search className="h-4 w-4 mr-1" />}
-                {loading ? "收集中..." : "开始收魂"}
+                {loading ? "收集中..." : "开始收集"}
               </Button>
             </div>
             {loading && (
@@ -100,7 +100,7 @@ export default function CollectPage() {
           </div>
 
           <div className="flex gap-2">
-            <Button variant="outline" onClick={() => { setCollected(false); setRawMaterial(""); }}>重新收魂</Button>
+            <Button variant="outline" onClick={() => { setCollected(false); setRawMaterial(""); }}>重新收集</Button>
             <Button onClick={onRefine} className="flex-1" data-testid="go-refine-btn">
               <Sparkles className="h-4 w-4 mr-1" /> 送交炼化
             </Button>

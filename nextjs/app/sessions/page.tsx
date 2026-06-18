@@ -17,7 +17,7 @@ export default function SessionsPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">会话历史</h1>
-        <p className="text-sm text-muted-foreground mt-1">浏览所有附体会话记录</p>
+        <p className="text-sm text-muted-foreground mt-1">浏览所有庭审会话记录</p>
       </div>
       {loading ? (
         <Skeleton className="h-96 rounded-xl" />

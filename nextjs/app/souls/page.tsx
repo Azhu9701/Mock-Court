@@ -21,18 +21,18 @@ export default function SoulListPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">魂览</h1>
-          <p className="text-sm text-muted-foreground mt-1">Soul</p>
+          <h1 className="text-2xl font-bold">角色档案</h1>
+          <p className="text-sm text-muted-foreground mt-1">角色列表</p>
         </div>
         <div className="flex gap-2">
           <Link href="/souls/collect">
             <Button variant="outline" size="sm" data-testid="collect-soul-btn">
-              <Search className="h-4 w-4 mr-1" />收魂
+              <Search className="h-4 w-4 mr-1" />添加角色
             </Button>
           </Link>
           <Link href="/souls/refine">
             <Button variant="outline" size="sm" data-testid="refine-soul-btn">
-              <Wand2 className="h-4 w-4 mr-1" />炼化
+              <Wand2 className="h-4 w-4 mr-1" />编辑角色
             </Button>
           </Link>
         </div>

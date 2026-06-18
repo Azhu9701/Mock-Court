@@ -62,7 +62,7 @@ export function SoulCarousel() {
       <div className="flex items-center justify-center py-8">
         <div className="flex items-center gap-2 text-sm text-muted-foreground animate-pulse">
           <Sparkles className="h-4 w-4" />
-          加载魂录...
+          加载角色档案...
         </div>
       </div>
     );
@@ -71,7 +71,7 @@ export function SoulCarousel() {
   if (souls.length === 0) {
     return (
       <div className="text-center py-4 text-sm text-muted-foreground">
-        暂无魂可用
+        暂无角色可用
       </div>
     );
   }

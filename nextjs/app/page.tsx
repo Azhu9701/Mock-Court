@@ -14,7 +14,7 @@ export default function Home() {
   return (
     <div className="max-w-2xl mx-auto py-16 space-y-12">
       <div className="text-center space-y-4">
-        <h1 className="text-4xl font-bold tracking-tight">Snake Skin</h1>
+        <h1 className="text-4xl font-bold tracking-tight">模拟仲裁庭</h1>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

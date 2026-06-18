@@ -5,13 +5,13 @@ import { BreadcrumbProvider } from "@/contexts/breadcrumb-context";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Snake Skin",
-  description: "Snake Skin — snake skin",
+  title: "模拟仲裁庭",
+  description: "AI 模拟仲裁庭 — 劳动争议多角色并行庭审系统",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Snake Skin",
+    title: "模拟仲裁庭",
   },
   icons: {
     icon: "/icon.svg",
