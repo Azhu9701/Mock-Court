@@ -29,12 +29,33 @@
 
 ## 快速开始
 
+### 🚀 最快方式：让 Agent 替你安装（推荐）
+
+如果你已安装 [Kimi Code](https://www.kimi.com/) 或 [Claude Code](https://docs.anthropic.com/en/docs/agents/claude-code) 等终端 Agent，只需一行命令让它接管安装：
+
+```bash
+# 在项目目录中，直接让 Agent 自动完成克隆 → 配置 → 构建 → 启动全流程
+kimi code  # 或 claude
+# 然后输入："请帮我安装并启动这个项目的 Docker 部署"
+```
+
+Agent 会自动处理：
+- 检查 Docker 环境
+- 生成 `.env` 配置文件
+- 处理代理/网络问题（如 Clash/Surge 的 DNS 劫持）
+- 构建 Rust 后端和 Next.js 前端镜像
+- 启动所有服务
+
+> 💡 这比自己手动排查 `docker build` 日志、修复 DNS 配置、处理 `npm install` 超时快得多。Agent 直接操作你的本地终端，所见即所得。
+
 ### 前置条件
 
 - [Docker](https://www.docker.com/) 或 [OrbStack](https://orbstack.dev/)（推荐 macOS 用户）
 - 或 Rust 1.75+ + Node.js 18+ + pnpm（源码模式）
 
-### Docker 一键启动（推荐）
+### Docker 手动安装
+
+如果你没有安装 Agent，按以下步骤手动部署：
 
 ```bash
 # 1. 克隆项目
