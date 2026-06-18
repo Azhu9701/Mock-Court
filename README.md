@@ -1,4 +1,4 @@
-# 模拟仲裁庭（Snake Skin）
+# 模拟仲裁庭
 
 > 仓库名：[soul-banner-lite](https://github.com/Azhu9701/soul-banner-lite)
 
