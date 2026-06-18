@@ -41,6 +41,7 @@ services:
       - ./config:/app/config:ro
       - ./data/souls:/app/data/souls:ro
     environment:
+      - WANMINFAN_SERVER_HOST=0.0.0.0
       - RUST_LOG=${RUST_LOG:-info}
       - AI_RELAY_URL=${AI_RELAY_URL:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}

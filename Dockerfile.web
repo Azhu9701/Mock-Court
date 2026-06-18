@@ -9,9 +9,31 @@ RUN pnpm install --frozen-lockfile --ignore-scripts && \
 
 COPY nextjs/ ./
 
-# 删除 turbopack.root 配置，因为 Docker 中 WORKDIR /app 会导致 root 指向 /
+# 删除 turbopack 配置，因为 Docker 中该配置会导致构建问题
+# 使用 node 脚本精确删除整个 turbopack 块（包括嵌套大括号）
 RUN if [ -f next.config.ts ]; then \
-      sed -i '/turbopack:/,/root:/d' next.config.ts 2>/dev/null || true; \
+      node -e " \
+        const fs = require('fs'); \
+        const c = fs.readFileSync('next.config.ts', 'utf8').split('\n'); \
+        const o = []; \
+        let i = 0; \
+        while (i < c.length) { \
+          const l = c[i]; \
+          if (l.includes('turbopack:')) { \
+            let d = (l.match(/\{/g) || []).length - (l.match(/\}/g) || []).length; \
+            i++; \
+            while (i < c.length && d > 0) { \
+              d += (c[i].match(/\{/g) || []).length - (c[i].match(/\}/g) || []).length; \
+              i++; \
+            } \
+            if (i < c.length && c[i].trim().startsWith('},')) i++; \
+            continue; \
+          } \
+          o.push(c[i]); \
+          i++; \
+        } \
+        fs.writeFileSync('next.config.ts', o.join('\n')); \
+      "; \
     fi
 
 ARG NEXT_PUBLIC_API_URL=/api/v1
