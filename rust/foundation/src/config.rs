@@ -57,8 +57,13 @@ impl Config {
             api_token: cfg.get_string("api_token").ok()
                 .or_else(|| std::env::var("WANMINFAN_API_TOKEN").ok())
                 .filter(|t| !t.is_empty()),
-            cors_origins: cfg.get_string("cors_origins")
-                .map(|s| s.split(',').map(|o| o.trim().to_string()).collect())
+            cors_origins: cfg
+                .get::<Vec<String>>("cors_origins")
+                .or_else(|_| {
+                    // 兼容旧式逗号分隔字符串写法
+                    cfg.get_string("cors_origins")
+                        .map(|s| s.split(',').map(|o| o.trim().to_string()).collect())
+                })
                 .unwrap_or_else(|_| vec!["http://localhost:3000".into()]),
             domain: Self::load_domain(),
         })

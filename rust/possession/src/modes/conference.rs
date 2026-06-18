@@ -18,6 +18,20 @@ use super::topology;
 const MAX_PARALLEL_SOULS: usize = 10;
 const SOUL_TIMEOUT_SECS: u64 = 180;
 
+/// 按 UTF-8 字符边界安全截断字符串到不超过 `max_bytes` 字节。
+/// 避免直接 `&s[..n]` 切到多字节字符中间导致 panic。
+fn truncate_char_boundary(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    // floor_char_boundary 在 1.82 才稳定，这里用 char_indices 手动回退到上一个边界
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// 增强的合议模式
 pub async fn run(
     store: &dyn Storage,
@@ -308,7 +322,7 @@ pub async fn run(
                 let card_prompt = Prompt {
                     messages: vec![PromptMessage {
                         role: "user".into(),
-                        content: format!("从以下辩证综合报告中提取最核心的 ≤500 字的卡片：\n\n{}", if card_content.len() > 3000 { &card_content[..3000] } else { &card_content }),
+                        content: format!("从以下辩证综合报告中提取最核心的 ≤500 字的卡片：\n\n{}", truncate_char_boundary(&card_content, 3000)),
                         reasoning_content: None,
                         ..Default::default()
             }],
@@ -492,8 +506,10 @@ async fn run_soul_with_tools(
     let name = soul_name.to_string();
     let mut used_providers: Vec<foundation::Provider> = vec![provider.clone()];
     let mut current_provider = provider.clone();
+    // 追踪最后一轮 assistant 实际产出的文本，用于循环超限时降级返回（而非丢弃）
+    let mut last_assistant_content = String::new();
 
-    for _round in 0..max_rounds {
+    for round in 0..max_rounds {
         let req = foundation::LLMRequest {
             provider: current_provider.clone(),
             prompt: foundation::Prompt { messages: history.clone() },
@@ -574,6 +590,11 @@ async fn run_soul_with_tools(
         // 工具调用成功执行 → 标记 provider 健康
         gw.mark_provider_healthy(&current_provider);
 
+        // 记录本轮 assistant 实际产出的文本（用于循环超限时降级返回）
+        if !output.content.trim().is_empty() {
+            last_assistant_content = output.content.clone();
+        }
+
         // 先追加 assistant 消息（含所有 tool_calls 和原始文本），再逐个追加 tool 结果
         history.push(foundation::PromptMessage {
             role: "assistant".to_string(),
@@ -641,7 +662,34 @@ async fn run_soul_with_tools(
                 }
             }
                 }
+
+        // 最后一轮工具调用结束后，注入收尾引导：要求模型停止调工具、直接输出最终陈述
+        if round + 1 == max_rounds - 1 {
+            history.push(foundation::PromptMessage {
+                role: "user".to_string(),
+                content: "你已经收集了足够的信息。现在请停止调用任何工具，直接输出你的最终陈述。不要再使用 search_labor_law / calculate_severance / generate_evidence_checklist / WebSearch，把已掌握的事实和法条整理成完整的发言。".to_string(),
+                reasoning_content: None,
+                tool_calls: None,
+                tool_call_id: None,
+            });
+        }
             }
+
+    // 循环超限：降级返回最后一轮 assistant 实际产出的文本，而非完全丢弃
+    if !last_assistant_content.trim().is_empty() {
+        tracing::warn!(
+            "Soul '{}' exceeded {} tool rounds, returning last assistant content ({} chars) as degraded output",
+            name, max_rounds, last_assistant_content.len()
+        );
+        let warn_msg = format!("（已达到工具调用上限 {} 轮，以下为已生成的陈述）", max_rounds);
+        return SoulOutput {
+            soul_name: name,
+            content: format!("{}\n\n{}", last_assistant_content, warn_msg),
+            usage: foundation::UsageStats::default(),
+            error: None,
+            tool_calls: Vec::new(),
+        };
+    }
 
     let error_msg = format!("Tool call loop exceeded {} rounds", max_rounds);
     ws.broadcast_soul(

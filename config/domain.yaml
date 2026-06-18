@@ -14,7 +14,8 @@ terms:
   synthesis_verb: "法庭裁决"
   synthesis_noun: "法庭裁决"
   interrogation_verb: "庭前质证"
-  interrogation_noun: "庭前质证"  system_name: "模拟仲裁庭"
+  interrogation_noun: "庭前质证"
+  system_name: "模拟仲裁庭"
   coord_label: "庭审坐标"
 
 coordinate:
