@@ -161,22 +161,6 @@ impl SqliteDb {
             CREATE INDEX IF NOT EXISTS idx_session_obs_type    ON session_observations(obs_type);
             CREATE INDEX IF NOT EXISTS idx_session_obs_created ON session_observations(created_at DESC);
 
-            CREATE TABLE IF NOT EXISTS session_reviews (
-                id              TEXT PRIMARY KEY,
-                session_id      TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-                most_unexpected TEXT NOT NULL DEFAULT '',
-                already_known   TEXT NOT NULL DEFAULT '',
-                self_negation   TEXT NOT NULL DEFAULT '',
-                empty_chair     TEXT NOT NULL DEFAULT '',
-                effectiveness   TEXT NOT NULL DEFAULT '',
-                effectiveness_note TEXT NOT NULL DEFAULT '',
-                interrogation_passed INTEGER,
-                interrogation_reason TEXT,
-                created_at      TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-            CREATE INDEX IF NOT EXISTS idx_reviews_session ON session_reviews(session_id);
-            CREATE INDEX IF NOT EXISTS idx_reviews_created  ON session_reviews(created_at DESC);
-
             CREATE TABLE IF NOT EXISTS annotations (
                 id              TEXT PRIMARY KEY,
                 session_id      TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -201,8 +185,6 @@ impl SqliteDb {
         for sql in &[
             "ALTER TABLE sessions ADD COLUMN digest_summary TEXT",
             "ALTER TABLE sessions ADD COLUMN digest_at TEXT",
-            "ALTER TABLE session_reviews ADD COLUMN practice_commitment TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE session_reviews ADD COLUMN practice_horizon TEXT NOT NULL DEFAULT ''",
         ] {
             let _ = conn.execute_batch(sql);
         }
@@ -1389,106 +1371,4 @@ impl SqliteDb {
         })
     }
 
-    // ── Session Reviews (实践反馈闭环) ──
-
-    pub fn insert_session_review(&self, review: &SessionReview) -> Result<()> {
-        self.with_conn(|conn| {
-            conn.execute(
-                "INSERT OR REPLACE INTO session_reviews \
-                 (id, session_id, most_unexpected, already_known, self_negation, \
-                  empty_chair, effectiveness, effectiveness_note, \
-                  practice_commitment, practice_horizon, \
-                  interrogation_passed, interrogation_reason, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-                params![
-                    review.id,
-                    review.session_id,
-                    review.most_unexpected,
-                    review.already_known,
-                    review.self_negation,
-                    review.empty_chair,
-                    review.effectiveness,
-                    review.effectiveness_note,
-                    review.practice_commitment,
-                    review.practice_horizon,
-                    review.interrogation_passed.map(|b| b as i32),
-                    review.interrogation_reason,
-                    review.created_at.to_rfc3339(),
-                ],
-            )?;
-            Ok(())
-        })
-    }
-
-    pub fn get_session_review(&self, session_id: &str) -> Result<Option<SessionReview>> {
-        self.with_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, session_id, most_unexpected, already_known, self_negation, \
-                        empty_chair, effectiveness, effectiveness_note, \
-                        practice_commitment, practice_horizon, \
-                        interrogation_passed, interrogation_reason, created_at \
-                 FROM session_reviews WHERE session_id = ?1 LIMIT 1"
-            )?;
-            let mut rows = stmt.query(params![session_id])?;
-            if let Some(row) = rows.next()? {
-                let created_at: String = row.get(12)?;
-                Ok(Some(SessionReview {
-                    id: row.get(0)?,
-                    session_id: row.get(1)?,
-                    most_unexpected: row.get(2)?,
-                    already_known: row.get(3)?,
-                    self_negation: row.get(4)?,
-                    empty_chair: row.get(5)?,
-                    effectiveness: row.get(6)?,
-                    effectiveness_note: row.get(7)?,
-                    practice_commitment: row.get(8)?,
-                    practice_horizon: row.get(9)?,
-                    interrogation_passed: row.get::<_, Option<i32>>(10)?.map(|v| v != 0),
-                    interrogation_reason: row.get(11)?,
-                    created_at: DateTime::parse_from_rfc3339(&created_at)
-                        .map(|dt| dt.with_timezone(&Utc))
-                        .unwrap_or_else(|_| Utc::now()),
-                }))
-            } else {
-                Ok(None)
-            }
-        })
-    }
-
-    pub fn get_recent_reviews(&self, limit: u32) -> Result<Vec<SessionReview>> {
-        self.with_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, session_id, most_unexpected, already_known, self_negation, \
-                        empty_chair, effectiveness, effectiveness_note, \
-                        practice_commitment, practice_horizon, \
-                        interrogation_passed, interrogation_reason, created_at \
-                 FROM session_reviews ORDER BY created_at DESC LIMIT ?1"
-            )?;
-            let rows = stmt.query_map(params![limit], |row| {
-                let created_at: String = row.get(12)?;
-                Ok(SessionReview {
-                    id: row.get(0)?,
-                    session_id: row.get(1)?,
-                    most_unexpected: row.get(2)?,
-                    already_known: row.get(3)?,
-                    self_negation: row.get(4)?,
-                    empty_chair: row.get(5)?,
-                    effectiveness: row.get(6)?,
-                    effectiveness_note: row.get(7)?,
-                    practice_commitment: row.get(8)?,
-                    practice_horizon: row.get(9)?,
-                    interrogation_passed: row.get::<_, Option<i32>>(10)?.map(|v| v != 0),
-                    interrogation_reason: row.get(11)?,
-                    created_at: DateTime::parse_from_rfc3339(&created_at)
-                        .map(|dt| dt.with_timezone(&Utc))
-                        .unwrap_or_else(|_| Utc::now()),
-                })
-            })?;
-            let mut results = Vec::new();
-            for row in rows {
-                results.push(row?);
-            }
-            Ok(results)
-        })
-    }
 }

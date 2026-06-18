@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use foundation::{
     Annotation, BlindSpot, BlindSpotFilter, CallFilter, CallRecord, HealthStatus, KnowledgeCard,
     KnowledgeCardFilter, KnowledgeResult, KnowledgeTopic, Message, Registry, Result, RevisionProposal,
-    Session, SessionFilter, SessionObservation, SessionReview, SessionSummary, SoulProfile,
+    Session, SessionFilter, SessionObservation, SessionSummary, SoulProfile,
     SoulRevision, SoulRevisionFilter, Storage, ProposalStatus,
 };
 
@@ -224,15 +224,4 @@ impl Storage for AppStore {
         self.db.get_annotations(session_id)
     }
 
-    async fn insert_session_review(&self, review: &SessionReview) -> Result<()> {
-        self.db.insert_session_review(review)
-    }
-
-    async fn get_session_review(&self, session_id: &str) -> Result<Option<SessionReview>> {
-        self.db.get_session_review(session_id)
-    }
-
-    async fn get_recent_reviews(&self, limit: u32) -> Result<Vec<SessionReview>> {
-        self.db.get_recent_reviews(limit)
-    }
 }

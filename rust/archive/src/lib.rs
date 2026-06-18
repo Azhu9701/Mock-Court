@@ -76,27 +76,6 @@ pub struct BoundaryReview {
     pub recommendation: String,
 }
 
-/// 享乐指数统计 — 度量思辨消费 vs 实践转化
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PleasureStats {
-    /// 享乐指数 0-100，越高越消费型
-    pub pleasure_index: f64,
-    /// 实践型会话数
-    pub effective_sessions: usize,
-    /// 意向型会话数
-    pub partial_sessions: usize,
-    /// 消费型会话数
-    pub invalid_sessions: usize,
-    /// 总已审查会话数
-    pub total_reviewed: usize,
-    /// 浪费在消费型+意向型会话上的 token
-    pub wasted_tokens: u64,
-    /// 总 token（仅已审查会话）
-    pub total_tokens: u64,
-    /// 享乐浪费率 = wasted / total
-    pub waste_ratio: f64,
-}
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ExportBundle {
     pub exported_at: DateTime<Utc>,
@@ -297,9 +276,6 @@ impl ArchiveSystem {
         detect_unsummoned_souls_impl(&*self.store, threshold_days).await
     }
 
-    pub async fn get_pleasure_stats(&self) -> Result<PleasureStats> {
-        compute_pleasure_stats(&*self.store).await
-    }
 
     pub async fn detect_low_effectiveness(
         &self,
@@ -352,17 +328,6 @@ impl ArchiveSystem {
         self.store.get_annotations(session_id).await
     }
 
-    pub async fn insert_session_review(&self, review: &foundation::SessionReview) -> Result<()> {
-        self.store.insert_session_review(review).await
-    }
-
-    pub async fn get_session_review(&self, session_id: &str) -> Result<Option<foundation::SessionReview>> {
-        self.store.get_session_review(session_id).await
-    }
-
-    pub async fn get_recent_reviews(&self, limit: u32) -> Result<Vec<foundation::SessionReview>> {
-        self.store.get_recent_reviews(limit).await
-    }
 
     pub async fn insert_knowledge_card(&self, card: &foundation::KnowledgeCard) -> Result<()> {
         self.store.insert_knowledge_card(card).await

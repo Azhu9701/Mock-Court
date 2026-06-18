@@ -21,7 +21,6 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/low-effectiveness", get(low_effectiveness))
         .route("/audit", get(audit_all))
         .route("/audit/:name", get(audit_soul))
-        .route("/pleasure-stats", get(pleasure_stats))
 }
 
 #[derive(Debug, Deserialize)]
@@ -105,11 +104,6 @@ async fn low_effectiveness(
 
 // ── Pleasure Stats ──
 
-async fn pleasure_stats(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<archive::PleasureStats>, (axum::http::StatusCode, Json<ApiError>)> {
-    state.archive.get_pleasure_stats().await.map(Json).map_err(map_api_error)
-}
 
 // ── Audit ──
 

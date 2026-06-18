@@ -72,10 +72,6 @@ pub trait Storage: Send + Sync {
     async fn insert_annotations(&self, annotations: &[Annotation]) -> Result<()>;
     async fn get_annotations(&self, session_id: &str) -> Result<Vec<Annotation>>;
 
-    // Session Reviews (实践反馈闭环)
-    async fn insert_session_review(&self, review: &SessionReview) -> Result<()>;
-    async fn get_session_review(&self, session_id: &str) -> Result<Option<SessionReview>>;
-    async fn get_recent_reviews(&self, limit: u32) -> Result<Vec<SessionReview>>;
 
     // Health
     async fn health_check(&self) -> Result<HealthStatus>;

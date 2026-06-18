@@ -853,55 +853,6 @@ async fn analyze_task(
             (s, composite, if ismism_prox > 0.4 { "ismism" } else if kw_hits > 0 { "keyword" } else if ft_score > 0.2 { "semantic" } else { "fallback" })
         }).collect();
 
-        // ── 实践反馈加权 ──
-        let recent_reviews = state.archive.get_recent_reviews(5).await.unwrap_or_default();
-        let mut review_boosts: std::collections::HashMap<String, (f64, String)> = std::collections::HashMap::new();
-
-        // Pre-compute lowercase names/fields/domains once per soul
-        let soul_lower: Vec<(String, String, Vec<String>)> = scored.iter()
-            .map(|(s, _, _)| (s.name.to_lowercase(), s.field.to_lowercase(), s.domains.iter().map(|d| d.to_lowercase()).collect()))
-            .collect();
-
-        for review in &recent_reviews {
-            let chair_lower = review.empty_chair.to_lowercase();
-            for (i, (s, _, _)) in scored.iter().enumerate() {
-                if chair_lower.contains(&soul_lower[i].0) {
-                    let boost = (0.15_f64, format!("反馈「缺失发言权」提到 {}", s.name));
-                    review_boosts.entry(s.name.clone()).or_insert(boost);
-                }
-            }
-            if !review.most_unexpected.is_empty() {
-                let unexpected_lower = review.most_unexpected.to_lowercase();
-                for (i, (s, _, _)) in scored.iter().enumerate() {
-                    if review_boosts.contains_key(&s.name) { continue; }
-                    let (name_lower, field_lower, domains_lower) = &soul_lower[i];
-                    let _ = name_lower;
-                    let field_hit = field_lower.split(|c: char| c == ',' || c == '，' || c == '|')
-                        .any(|f| unexpected_lower.contains(f.trim()));
-                    let domain_hit = domains_lower.iter()
-                        .any(|d| unexpected_lower.contains(d.as_str()));
-                    if field_hit || domain_hit {
-                        review_boosts.entry(s.name.clone())
-                            .or_insert((0.08, format!("反馈「最没想到」主题匹配 {}", s.name)));
-                    }
-                }
-            }
-        }
-
-        // Apply review boosts to composite scores
-        let mut boost_reasons: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-        for (i, (s, score, _match_type)) in scored.iter_mut().enumerate() {
-            if let Some((boost, reason)) = review_boosts.get(&s.name) {
-                *score += boost;
-                boost_reasons.insert(s.name.clone(), reason.clone());
-                // 如果之前是 fallback，改成 review_boost 类型
-                if *_match_type == "fallback" {
-                    *_match_type = "review_boost";
-                }
-            }
-            _ = i;
-        }
-
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| b.0.summon_count.cmp(&a.0.summon_count)));
 
@@ -929,13 +880,11 @@ async fn analyze_task(
                 .filter(|kw| task_lower.contains(&kw.to_lowercase()))
                 .count();
             let ismism_prox = ismism_proximity_score(&task_ismism, s);
-            let review_note = boost_reasons.get(&s.name).cloned().unwrap_or_default();
-            let rationale = match *match_type {
+                        let rationale = match *match_type {
                 "keyword" => format!("命中 {} 个关键词 | 坐标邻近度 {:.0}% | 综合分 {:.3}", kw_hits, ismism_prox*100.0, composite),
                 "ismism" => format!("坐标邻近度 {:.0}% | 综合分 {:.3}", ismism_prox*100.0, composite),
                 "semantic" => format!("全文相关性 | 坐标邻近度 {:.0}% | 综合分 {:.3}", ismism_prox*100.0, composite),
-                "review_boost" => format!("🔄 {} | 综合分 {:.3}", review_note, composite),
-                _ => format!("综合相关性 | 坐标邻近度 {:.0}% | 综合分 {:.3}", ismism_prox*100.0, composite),
+                                _ => format!("综合相关性 | 坐标邻近度 {:.0}% | 综合分 {:.3}", ismism_prox*100.0, composite),
             };
             SoulMatch {
                 name: s.name.clone(),

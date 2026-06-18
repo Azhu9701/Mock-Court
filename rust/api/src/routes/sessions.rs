@@ -7,7 +7,7 @@ use axum::{Json, Router};
 use axum::http::{header, StatusCode};
 use archive::SessionDetail;
 use chrono::{DateTime, Utc};
-use foundation::{Annotation, MessageRole, Session, SessionFilter, SessionObservation, SessionReview, SessionStatus, SessionSummary};
+use foundation::{Annotation, MessageRole, Session, SessionFilter, SessionObservation, SessionStatus, SessionSummary};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{map_api_error, ApiError};
@@ -25,8 +25,6 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/:id/fork", put(fork_session))
         .route("/:id/export/markdown", get(export_session_markdown))
         .route("/:id/messages/:seq", delete(delete_messages_from_seq))
-        .route("/reviews/profile", get(get_user_profile))
-        .route("/:id/review", get(get_session_review).post(save_review))
 }
 
 #[derive(Debug, Deserialize)]
@@ -201,118 +199,10 @@ fn format_session_as_markdown(detail: &SessionDetail) -> String {
     md
 }
 
-#[derive(Debug, Deserialize)]
-struct ReviewRequest {
-    most_unexpected: Option<String>,
-    already_known: Option<String>,
-    self_negation: Option<String>,
-    empty_chair: Option<String>,
-    effectiveness: Option<String>,
-    effectiveness_note: Option<String>,
-    practice_commitment: Option<String>,
-    practice_horizon: Option<String>,
-    #[serde(default)]
-    interrogation_passed: Option<bool>,
-    #[serde(default)]
-    interrogation_reason: Option<String>,
-}
 
-async fn save_review(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(body): Json<ReviewRequest>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
-    let mu = body.most_unexpected.clone().unwrap_or_default();
-    let ak = body.already_known.clone().unwrap_or_default();
-    let sn = body.self_negation.clone().unwrap_or_default();
-    let ec = body.empty_chair.clone().unwrap_or_default();
-    let ef = body.effectiveness.clone().unwrap_or_default();
-    let en = body.effectiveness_note.clone().unwrap_or_default();
-    let pc = body.practice_commitment.clone().unwrap_or_default();
-    let ph = body.practice_horizon.clone().unwrap_or_default();
 
-    let review_content = serde_json::json!({
-        "type": "review",
-        "most_unexpected": mu,
-        "already_known": ak,
-        "self_negation": sn,
-        "empty_chair": ec,
-        "effectiveness": ef,
-        "effectiveness_note": en,
-        "practice_commitment": pc,
-        "practice_horizon": ph,
-    });
 
-    let review_id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now();
 
-    // 写入 reviews 表（独立持久化，供匹配/蒸馏/画像消费）
-    let review = foundation::SessionReview {
-        id: review_id,
-        session_id: id.clone(),
-        most_unexpected: mu,
-        already_known: ak,
-        self_negation: sn,
-        empty_chair: ec,
-        effectiveness: ef,
-        effectiveness_note: en,
-        practice_commitment: pc,
-        practice_horizon: ph,
-        interrogation_passed: body.interrogation_passed,
-        interrogation_reason: body.interrogation_reason.clone(),
-        created_at: now,
-    };
-    if let Err(e) = state.archive.insert_session_review(&review).await {
-        tracing::error!("Failed to write session review: {}", e);
-    }
-
-    // 保留 [REVIEW] message 作为兼容（历史数据也可见）
-    let msg = foundation::Message {
-        id: uuid::Uuid::new_v4().to_string(),
-        session_id: id,
-        role: MessageRole::System,
-        soul_name: None,
-        content: format!("[REVIEW]{}", review_content),
-        seq: 999,
-        created_at: now,
-    };
-    state.archive.append_message(&msg).await.map_err(map_api_error)?;
-    Ok(Json(serde_json::json!({ "ok": true, "review_id": review.id })))
-}
-
-/// GET /sessions/reviews/profile
-/// 使用者画像 — 聚合所有 review 数据，产出模式摘要
-async fn get_user_profile(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
-    let reviews = state.archive.get_recent_reviews(50).await.map_err(map_api_error)?;
-    if reviews.is_empty() {
-        return Ok(Json(serde_json::json!({"reviews": 0})));
-    }
-
-    let total = reviews.len();
-    let effective = reviews.iter().filter(|r| r.effectiveness == "effective").count();
-    let ineffective = reviews.iter().filter(|r| r.effectiveness == "invalid").count();
-
-    let top_negations = top_phrases(reviews.iter().map(|r| r.self_negation.as_str()), 5);
-    let top_chairs = top_phrases(reviews.iter().map(|r| r.empty_chair.as_str()), 5);
-
-    Ok(Json(serde_json::json!({
-        "total_reviews": total,
-        "effective_rate": if total > 0 { effective as f64 / total as f64 } else { 0.0 },
-        "ineffective_count": ineffective,
-        "top_shaken_presets": top_negations.iter().map(|(w, c)| serde_json::json!({"phrase": w, "count": c})).collect::<Vec<_>>(),
-        "top_missing_voices": top_chairs.iter().map(|(w, c)| serde_json::json!({"phrase": w, "count": c})).collect::<Vec<_>>(),
-    })))
-}
-
-async fn get_session_review(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<Option<SessionReview>>, (StatusCode, Json<ApiError>)> {
-    let review = state.archive.get_session_review(&id).await.map_err(map_api_error)?;
-    Ok(Json(review))
-}
 
 // ── Session Digest (claude-mem 3-layer access) ──
 
@@ -410,19 +300,4 @@ async fn delete_messages_from_seq(
     Ok(Json(serde_json::json!({ "deleted": deleted })))
 }
 
-fn top_phrases<'a>(texts: impl Iterator<Item = &'a str>, limit: usize) -> Vec<(&'a str, u32)> {
-    let mut counts: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
-    for text in texts {
-        if text.is_empty() { continue; }
-        for word in text.split(|c: char| c == '，' || c == '。' || c == '、' || c == '；') {
-            let w = word.trim();
-            if w.len() >= 2 && w.len() <= 30 {
-                *counts.entry(w).or_default() += 1;
-            }
-        }
-    }
-    let mut top: Vec<_> = counts.into_iter().collect();
-    top.sort_by(|a, b| b.1.cmp(&a.1));
-    top.truncate(limit);
-    top
-}
+
