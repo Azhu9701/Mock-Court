@@ -14,7 +14,7 @@ export function SummonButton({ soulName }: SummonButtonProps) {
     >
       <Button size="sm">
         <Play className="mr-1 h-4 w-4" />
-        召唤此魂
+        召唤此角色
       </Button>
     </Link>
   );

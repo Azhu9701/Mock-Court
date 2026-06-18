@@ -44,7 +44,7 @@ export function SoulFilterBar({ totalCount }: SoulFilterBarProps) {
       <div className="relative flex-1">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input
-          placeholder="搜索魂名、领域、标签..."
+          placeholder="搜索角色名、领域、标签..."
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -52,11 +52,11 @@ export function SoulFilterBar({ totalCount }: SoulFilterBarProps) {
           }}
           className="pl-9"
           data-testid="soul-search-input"
-          aria-label="搜索魂"
+          aria-label="搜索角色"
         />
       </div>
       <span className="text-sm text-muted-foreground whitespace-nowrap">
-        共 {totalCount} 魂
+        共 {totalCount} 角色
       </span>
     </div>
   );

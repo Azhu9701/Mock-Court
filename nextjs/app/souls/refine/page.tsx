@@ -52,7 +52,7 @@ export default function RefinePage() {
         {!material && (
           <div className="rounded-lg bg-muted p-4 text-sm space-y-1">
             <p><strong>如何获取 Raw 素材？</strong></p>
-            <p>1. 从 <Link href="/souls/collect" className="text-primary underline">收魂</Link> 页面自动收集</p>
+            <p>1. 从 <Link href="/souls/collect" className="text-primary underline">收集角色</Link> 页面自动收集</p>
             <p>2. 手动粘贴以下格式的素材（生平/思想/方法论/代表作/影响）</p>
           </div>
         )}
@@ -130,7 +130,7 @@ export default function RefinePage() {
         <Button variant="outline" onClick={() => setRefined(null)}>重新炼化</Button>
         <Link href={`/souls/${encodeURIComponent(profile.name)}`} className="flex-1">
           <Button className="w-full" data-testid="view-soul-btn">
-            <Check className="h-4 w-4 mr-1" /> 查看魂详情
+            <Check className="h-4 w-4 mr-1" /> 查看角色详情
           </Button>
         </Link>
       </div>

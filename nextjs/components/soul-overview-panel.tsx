@@ -21,7 +21,7 @@ export function SoulOverviewPanel({
       data-testid="soul-overview-panel"
     >
       <h3 className="text-xs font-semibold text-muted-foreground px-2 mb-2">
-        魂列表
+        角色列表
       </h3>
       {entries.map(([name, msg]) => (
         <button

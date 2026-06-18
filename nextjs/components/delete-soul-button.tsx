@@ -31,7 +31,7 @@ export function DeleteSoulButton({ soulName, variant = "icon", className }: Dele
           className={className}
         >
           <Trash2 className="h-4 w-4 mr-1" />
-          散魂
+          删除角色
         </Button>
         <DeleteSoulConfirmDialog
           soulName={soulName}
@@ -53,8 +53,8 @@ export function DeleteSoulButton({ soulName, variant = "icon", className }: Dele
           setOpen(true);
         }}
         className="rounded-md p-1.5 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-        title="散魂"
-        aria-label="散魂"
+        title="删除角色"
+        aria-label="删除角色"
       >
         <Trash2 className="h-4 w-4" />
       </button>

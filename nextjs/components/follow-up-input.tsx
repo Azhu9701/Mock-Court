@@ -40,7 +40,7 @@ interface LocalMsg {
   id: string;
   streaming?: boolean;
   error?: string;
-  /** 当通过推荐魂召唤时，记录魂名以便用魂卡片渲染 */
+  /** 当通过推荐角色召唤时，记录角色名以便用角色卡片渲染 */
   soulName?: string;
 }
 
@@ -634,7 +634,7 @@ export default function FollowUpInput({
             )}
             <Textarea
               ref={textareaRef}
-              placeholder={attachments.length > 0 ? "可加附注，或直接发送附件（Shift+Enter 换行）" : "输入追问... (@魂名 召唤特定魂，Enter 发送，Shift+Enter 换行)"}
+              placeholder={attachments.length > 0 ? "可加附注，或直接发送附件（Shift+Enter 换行）" : "输入追问... (@角色名 召唤特定角色，Enter 发送，Shift+Enter 换行)"}
               value={followUp}
               onChange={(e) => {
                 setFollowUp(e.target.value);

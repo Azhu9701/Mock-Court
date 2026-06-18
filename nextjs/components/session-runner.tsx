@@ -162,8 +162,8 @@ function RequireApiKeyView() {
     <div className="flex flex-col items-center justify-center flex-1 gap-4 p-8">
       <div className="max-w-md text-center space-y-4">
         <Key className="h-10 w-10 text-yellow-500 mx-auto" />
-        <h3 className="text-lg font-semibold">魂无法回应</h3>
-        <p className="text-sm text-muted-foreground">需要配置 LLM API Key 才能驱动魂</p>
+        <h3 className="text-lg font-semibold">角色无法回应</h3>
+        <p className="text-sm text-muted-foreground">需要配置 LLM API Key 才能驱动角色</p>
         <div className="text-xs text-left space-y-1 bg-muted rounded-lg p-3 font-mono">
           <p>export ANTHROPIC_API_KEY=sk-ant-...</p>
           <p>export OPENAI_API_KEY=sk-...</p>

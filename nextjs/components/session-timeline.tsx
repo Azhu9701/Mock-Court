@@ -258,9 +258,9 @@ export function SessionTimeline({ sessions: initialSessions }: SessionTimelinePr
       <div data-testid="session-timeline" className="flex flex-col items-center justify-center py-12">
         <Brain className="h-12 w-12 text-muted-foreground mb-4" />
         <h3 className="text-sm font-semibold text-muted-foreground">暂无会话记录</h3>
-        <p className="text-xs text-muted-foreground mt-1">开始你的第一次附体之旅</p>
+        <p className="text-xs text-muted-foreground mt-1">开始你的第一次庭审之旅</p>
         <Link href="/possess" className="mt-4 text-xs text-primary hover:underline">
-          前往附体
+          前往庭审
         </Link>
       </div>
     );

@@ -249,7 +249,7 @@ export default function SessionDetailPage() {
       {annotations.length > 0 && (
         <div className="rounded-xl border bg-gradient-to-br from-purple-50/40 to-indigo-50/20 dark:from-purple-950/15 dark:to-indigo-950/5 p-5 space-y-4">
           <h3 className="text-sm font-semibold flex items-center gap-2">
-            魂间互批 · {annotations.length} 条 marginalia
+            角色间互批 · {annotations.length} 条 marginalia
           </h3>
           <div className="space-y-3">
             {annotations.map((a) => (
@@ -382,7 +382,7 @@ function FullConversation({
 
   const recommendedSouls = useMemo(() => {
     if (initSynths.length === 0) return [];
-    // 只从第一轮综合提取推荐魂，追问回复可能包含 **加粗** 文本被误匹配
+    // 只从第一轮综合提取推荐角色，追问回复可能包含 **加粗** 文本被误匹配
     return extractRecommendedSouls(initSynths[0].content);
   }, [initSynths]);
 
@@ -466,7 +466,7 @@ function FullConversation({
         </div>
       ))}
 
-      {/* 综合官推荐补充魂 — 紧贴辩证综合下方 */}
+      {/* 综合官推荐补充角色 — 紧贴裁决说理下方 */}
       {recommendedSouls.length > 0 && (
         <SoulRecommendationCard recommendations={recommendedSouls} onSummonSoul={onSummonSoul} sessionSouls={sessionSoulNames} />
       )}

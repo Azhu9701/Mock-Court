@@ -12,7 +12,7 @@ export function SoulCardGrid({ souls }: SoulCardGridProps) {
         className="flex flex-col items-center justify-center py-20 text-muted-foreground"
         data-testid="soul-empty-state"
       >
-        <p className="text-lg">未找到匹配的魂</p>
+        <p className="text-lg">未找到匹配的角色</p>
         <p className="text-sm mt-1">尝试调整筛选条件</p>
       </div>
     );

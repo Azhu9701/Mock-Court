@@ -47,7 +47,7 @@ export function ArticleModal({ isOpen, onClose, title, ismismCode, content }: Ar
   }, [cleanedContent]);
 
   const handleDownload = useCallback(() => {
-    const safeName = title.replace(/[\\/:*?"<>|]/g, "_").slice(0, 80) || "魂回应";
+    const safeName = title.replace(/[\\/:*?"<>|]/g, "_").slice(0, 80) || "角色回应";
     const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

@@ -41,9 +41,9 @@ export function DeleteSoulConfirmDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-testid="delete-soul-dialog">
         <DialogHeader>
-          <DialogTitle>散魂确认</DialogTitle>
+          <DialogTitle>删除角色确认</DialogTitle>
           <DialogDescription className="pt-2">
-            魂曰：「{soulName}」将被散离，此操作不可撤回。
+            角色「{soulName}」将被删除，此操作不可撤回。
           </DialogDescription>
         </DialogHeader>
         <div className="flex justify-end gap-2">
@@ -56,7 +56,7 @@ export function DeleteSoulConfirmDialog({
             disabled={deleting}
             data-testid="confirm-delete-btn"
           >
-            {deleting ? "散离中..." : "散魂"}
+            {deleting ? "删除中..." : "删除角色"}
           </Button>
         </div>
       </DialogContent>

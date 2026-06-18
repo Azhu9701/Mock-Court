@@ -77,7 +77,7 @@ function RecommendationItem({
       {loading && (
         <div className="ml-7 text-[11px] text-muted-foreground flex items-center gap-1.5">
           <Loader2 className="h-3 w-3 animate-spin text-amber-500" />
-          <span>{progressMsg || "收魂炼化中…"}</span>
+          <span>{progressMsg || "收集角色中…"}</span>
         </div>
       )}
 
@@ -101,7 +101,7 @@ function RecommendationItem({
             ) : (
               <>
                 <UserPlus className="h-3 w-3" />
-                收魂炼化
+                收集角色
               </>
             )}
           </button>
@@ -159,7 +159,7 @@ export function SoulRecommendationCard({
   };
 
   const handleCreate = async (name: string) => {
-    updateTask(name, { loading: true, error: "", progress: "正在启动收魂炼化任务…" });
+    updateTask(name, { loading: true, error: "", progress: "正在启动收集角色任务…" });
 
     try {
       const accepted = await autoCreateSoul(name);
@@ -167,7 +167,7 @@ export function SoulRecommendationCard({
 
       const { abort } = watchAutoCreate(accepted.task_id, name, (evt) => {
         if (evt.phase === 'error') {
-          updateTask(name, { loading: false, error: evt.message || "收魂炼化失败" });
+          updateTask(name, { loading: false, error: evt.message || "收集角色失败" });
           return;
         }
         if (evt.message) {
@@ -180,7 +180,7 @@ export function SoulRecommendationCard({
       });
       abortRef.current.set(name, abort);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : (typeof e === "string" ? e : "收魂炼化失败");
+      const msg = e instanceof Error ? e.message : (typeof e === "string" ? e : "收集角色失败");
       updateTask(name, { loading: false, error: msg });
       console.error(`[soul-recommendation] autoCreateSoul(${name}) failed:`, e);
     }
@@ -205,15 +205,15 @@ export function SoulRecommendationCard({
     <div className="mt-4 p-4 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/30 dark:bg-amber-950/20">
       <div className="flex items-center gap-2 mb-3">
         <h3 className="text-sm font-semibold text-amber-700 dark:text-amber-300">
-          综合官推荐补充魂
+          综合官推荐补充角色
         </h3>
         <span className="text-xs text-muted-foreground">
           {filtered.length} 个
-          {recommendations.length !== filtered.length && `（已排除 ${recommendations.length - filtered.length} 个已参会魂）`}
+          {recommendations.length !== filtered.length && `（已排除 ${recommendations.length - filtered.length} 个已出庭角色）`}
         </span>
       </div>
       {filtered.length === 0 ? (
-        <p className="text-xs text-muted-foreground">综合官推荐补充的魂均已参会。</p>
+        <p className="text-xs text-muted-foreground">综合官推荐补充的角色均已出庭。</p>
       ) : (
         <div className="space-y-2">
         {filtered.map((rec) => {
@@ -235,7 +235,7 @@ export function SoulRecommendationCard({
               {(taskState[rec.name] || {}).error && (
                 <div className="mt-1 ml-10 px-3 py-2 rounded-md border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/20">
                   <p className="text-xs text-red-600 dark:text-red-400 leading-relaxed break-words">
-                    收魂炼化失败：{(taskState[rec.name] || {}).error}
+                    收集角色失败：{(taskState[rec.name] || {}).error}
                   </p>
                 </div>
               )}

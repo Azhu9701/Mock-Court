@@ -95,7 +95,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   };
 
   const handleClearAll = async (type: "sessions" | "souls" | "archive") => {
-    const labels = { sessions: "所有会话", souls: "所有魂", archive: "所有归档" };
+    const labels = { sessions: "所有会话", souls: "所有角色", archive: "所有归档" };
     const setters = { sessions: setClearingSessions, souls: setClearingSouls, archive: setClearingArchive };
     if (!confirm(`确定要删除${labels[type]}吗？此操作不可恢复。`)) return;
     setters[type](true);
@@ -177,7 +177,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 <div>
                   <p className="text-xs font-medium">重建知识索引</p>
                   <p className="text-[10px] text-muted-foreground">
-                    重新索引所有魂输出和会话记录，用于全文搜索
+                    重新索引所有角色输出和会话记录，用于全文搜索
                   </p>
                 </div>
                 <Button
@@ -233,7 +233,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                     清除所有会话
                   </p>
                   <p className="text-[10px] text-muted-foreground">
-                    删除所有附体会话记录，不可恢复
+                    删除所有庭审会话记录，不可恢复
                   </p>
                 </div>
                 <Button
@@ -255,10 +255,10 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 <div>
                   <p className="text-xs font-medium flex items-center gap-1">
                     <AlertTriangle className="h-3 w-3 text-destructive" />
-                    清除所有魂
+                    清除所有角色
                   </p>
                   <p className="text-[10px] text-muted-foreground">
-                    删除所有魂及其 prompt 和有效性数据
+                    删除所有角色及其 prompt 和有效性数据
                   </p>
                 </div>
                 <Button
@@ -364,7 +364,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground flex items-center gap-1.5">
                   <Search className="h-3.5 w-3.5" />
-                  WebSocket (附体)
+                  WebSocket (庭审)
                 </span>
                 <span className="text-muted-foreground">
                   {API_BASE.replace("http://", "ws://").replace("https://", "wss://").replace("/api/v1", "")}

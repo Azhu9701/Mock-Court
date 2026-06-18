@@ -76,7 +76,7 @@ export function ConferenceView({ messages, synthesis, collisions, toolCalls }: C
         </div>
       )}
 
-      {/* 魂面板区 */}
+      {/* 角色面板区 */}
       {isCourt ? (
         <CourtLayout names={names} messages={messages} collisions={collisions} toolCalls={toolCalls} openModal={openModal} />
       ) : (
@@ -176,7 +176,7 @@ function CourtLayout({
         </div>
       )}
 
-      {/* 其他魂（如有） */}
+      {/* 其他角色（如有） */}
       {others.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
           {others.map(name => (
@@ -188,7 +188,7 @@ function CourtLayout({
   );
 }
 
-/** 魂面板按钮——复用逻辑 */
+/** 角色面板按钮——复用逻辑 */
 function SoulPanelButton({
   name, messages, collisions, toolCalls, openModal,
 }: {

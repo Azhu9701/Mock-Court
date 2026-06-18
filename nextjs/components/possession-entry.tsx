@@ -35,8 +35,8 @@ type Phase = "input" | "interrogation" | "classifying" | "matching"  | "adjustin
 
 const PHASES: { key: Phase; icon: React.ComponentType<{ className?: string }>; label: string; desc: string }[] = [
   { key: "classifying", icon: Brain, label: "入口分流", desc: "分析任务类型" },
-  { key: "matching", icon: Sparkles, label: "匹配魂", desc: "智能匹配思想者" },
-  { key: "adjusting", icon: Zap, label: "调整", desc: "优化魂搭配" },
+  { key: "matching", icon: Sparkles, label: "匹配角色", desc: "智能匹配思想者" },
+  { key: "adjusting", icon: Zap, label: "调整", desc: "优化角色搭配" },
   { key: "starting", icon: Play, label: "启动", desc: "启动讨论会话" },
 ];
 
@@ -48,12 +48,12 @@ interface MatchedSoul {
 }
 
 
-const LOG_FILTERS = ["全部", "关键", "魂匹配", "审查"] as const;
+const LOG_FILTERS = ["全部", "关键", "角色匹配", "审查"] as const;
 type LogFilter = typeof LOG_FILTERS[number];
 
 function classifyLogType(line: string): "key" | "soul" | "review" | "other" {
   if (line.includes("🚀") || line.includes("🎉") || line.includes("❌") || line.includes("⏹️")) return "key";
-  if (line.includes("魂") || line.includes("匹配")) return "soul";
+  if (line.includes("角色") || line.includes("匹配")) return "soul";
   if (line.includes("审查")) return "review";
   return "other";
 }
@@ -182,7 +182,7 @@ export function PossessionEntry() {
           addLog("📝 审查官改写议题：" + verdict.refined_task);
           setTask(verdict.refined_task);
         }
-        // 保存审查官 Q&A 供注入魂共享上下文
+        // 保存审查官 Q&A 供注入角色共享上下文
         const qaText = igQuestions
           .map((q, i) => `Q${i + 1}: ${q.text}\nA${i + 1}: ${igAnswers[i]?.trim() || "（未答）"}`)
           .join("\n\n");
@@ -312,8 +312,8 @@ export function PossessionEntry() {
       // Fast path: souls pre-selected via URL (e.g. from soul-recommendation card)
       // → skip analyzeTask and start session directly with these souls
       if (prefilledSouls.length > 0) {
-        addLog(`🎯 已预选魂：${prefilledSouls.join("、")}`);
-        setProgressLine(`正在启动附体会话（已预选 ${prefilledSouls.length} 个魂）…`);
+        addLog(`🎯 已预选角色：${prefilledSouls.join("、")}`);
+        setProgressLine(`正在启动庭审会话（已预选 ${prefilledSouls.length} 个角色）…`);
         setPhase("starting");
         setMode("conference");
 
@@ -333,7 +333,7 @@ export function PossessionEntry() {
         setSessionId(session_id);
         setPhase("running");
         triggerSessionsUpdate();
-        addLog("🎉 附体会话已启动");
+        addLog("🎉 庭审会话已启动");
         return;
       }
 
@@ -352,7 +352,7 @@ export function PossessionEntry() {
           setProgressLine("入口分流完成，正在算法匹配…");
         }
         if (event.phase === "matching") {
-          setProgressLine("正在多因子匹配魂…");
+          setProgressLine("正在多因子匹配角色…");
         }
         if (event.phase === "matched" && event.souls && event.souls.length > 0) {
           setPhase("adjusting");
@@ -360,9 +360,9 @@ export function PossessionEntry() {
           if (!isManualMode) {
             setMode((event.mode || "conference") as PossessionMode);
           }
-          addLog(`✅ 匹配完成: ${event.souls.length} 个魂`);
+          addLog(`✅ 匹配完成: ${event.souls.length} 个角色`);
           addLog(`推荐模式: ${getModeLabel(event.mode || "conference")}`);
-          setProgressLine(`已匹配 ${event.souls.length} 个魂：${event.souls.map((s) => s.name).join("、")}`);
+          setProgressLine(`已匹配 ${event.souls.length} 个角色：${event.souls.map((s) => s.name).join("、")}`);
         }
         if (event.phase === "review_done") {
           if (event.task_cards && Object.keys(event.task_cards).length > 0) {
@@ -371,8 +371,8 @@ export function PossessionEntry() {
         }
         if (event.phase === "adjusting") {
           setPhase("adjusting");
-          addLog("🔄 审查未通过 → 重新调整魂组合...");
-          setProgressLine("审查未通过，正在调整魂组合…");
+          addLog("🔄 审查未通过 → 重新调整角色组合...");
+          setProgressLine("审查未通过，正在调整角色组合…");
         }
         if (event.phase === "analysis_content") {
           if (!isStreamingRef.current) {
@@ -397,7 +397,7 @@ export function PossessionEntry() {
             setIsStreaming(false);
             addLog(`📝 ${event.source} 生成完成`);
             // 保留 streamingContent 和 currentStreamSource 不清空
-            // 让魂卡片持续显示"已完成"状态，直到阶段切换自然消失
+            // 让角色卡片持续显示"已完成"状态，直到阶段切换自然消失
           } else if (event.content) {
             // 节流：写入 ref 缓冲，50ms 后批量 flush 到 React state
             streamBufferRef.current += event.content;
@@ -419,7 +419,7 @@ export function PossessionEntry() {
       if (data.entry_type === "practice_opening") {
         setPhase("starting");
         setProgressLine("检测到实践者在场，启动实践开口流程…");
-        addLog("✨ 启动实践开口附体会话...");
+        addLog("✨ 启动实践开口庭审会话...");
         try {
           const { session_id } = await startPossession({
             mode: "practice_opening",
@@ -430,7 +430,7 @@ export function PossessionEntry() {
           setSessionId(session_id);
           setMode("practice_opening");
           setPhase("running");
-          addLog("🎉 实践开口附体会话已启动");
+          addLog("🎉 实践开口庭审会话已启动");
           setProgressLine("实践开口进行中…");
           triggerSessionsUpdate();
         } catch (e: unknown) {
@@ -458,8 +458,8 @@ export function PossessionEntry() {
       }
       setMode(finalMode);
       setPhase("starting");
-      addLog("🚀 启动附体会话...");
-      setProgressLine("正在启动附体会话…");
+      addLog("🚀 启动庭审会话...");
+      setProgressLine("正在启动庭审会话…");
 
       const { session_id } = await startPossession({
         mode: finalMode, task, souls: souls.map((s: any) => s.name),
@@ -475,8 +475,8 @@ export function PossessionEntry() {
 
       setSessionId(session_id);
       setPhase("running");
-      addLog("🎉 附体会话已启动");
-      setProgressLine("附体会话已启动，魂正在思考…");
+      addLog("🎉 庭审会话已启动");
+      setProgressLine("庭审会话已启动，角色正在思考…");
       triggerSessionsUpdate();
     } catch (e: unknown) {
       console.error("=== 发生错误:", e);
@@ -545,7 +545,7 @@ export function PossessionEntry() {
 
   const filteredLogs = log.filter((l) => {
     if (logFilter === "全部") return true;
-    const typeMap: Record<string, string> = { "关键": "key", "魂匹配": "soul", "审查": "review" };
+    const typeMap: Record<string, string> = { "关键": "key", "角色匹配": "soul", "审查": "review" };
     return classifyLogType(l) === typeMap[logFilter];
   });
 
@@ -596,7 +596,7 @@ export function PossessionEntry() {
                 <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
                   <Sparkles className="h-4 w-4 text-amber-500 shrink-0" />
                   <span className="text-xs text-amber-700 dark:text-amber-300">
-                    <strong>已预选魂：</strong>{prefilledSouls.join("、")} · 跳过自动匹配，直接以此召唤合议
+                    <strong>已预选角色：</strong>{prefilledSouls.join("、")} · 跳过自动匹配，直接以此召唤合议
                   </span>
                 </div>
               )}
@@ -1043,7 +1043,7 @@ export function PossessionEntry() {
                 </Button>
               </div>
 
-              {/* 魂卡片——agent 思考过程的流式展示 */}
+              {/* 角色卡片——agent 思考过程的流式展示 */}
               {(isStreaming || streamingContent) && currentStreamSource && (
                 <div className="rounded-xl border border-purple-200 dark:border-purple-800/50 bg-card overflow-hidden shadow-md animate-in fade-in slide-in-from-bottom-2 duration-300">
                   <div className="flex items-center gap-3 px-4 py-3 border-b border-purple-100 dark:border-purple-900/30 bg-purple-50/50 dark:bg-purple-950/20">
@@ -1145,7 +1145,7 @@ export function PossessionEntry() {
                     {phase === "starting" && (
                       <p className="text-primary animate-pulse flex items-center gap-2">
                         <Loader2 className="h-3 w-3 animate-spin" />
-                        正在启动附体会话…
+                        正在启动庭审会话…
                       </p>
                     )}
                     <div ref={logEndRef} />

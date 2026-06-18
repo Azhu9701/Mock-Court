@@ -25,7 +25,7 @@ export function SoulEffectivenessTable({ stats }: SoulEffectivenessTableProps) {
   if (stats.length === 0) {
     return (
       <div data-testid="effectiveness-table">
-        <h3 className="text-sm font-semibold mb-3">魂有效性</h3>
+        <h3 className="text-sm font-semibold mb-3">角色有效性</h3>
         <p className="text-sm text-muted-foreground">暂无调用数据</p>
       </div>
     );
@@ -33,9 +33,9 @@ export function SoulEffectivenessTable({ stats }: SoulEffectivenessTableProps) {
 
   return (
     <div data-testid="effectiveness-table">
-      <h3 className="text-sm font-semibold mb-3">魂有效性</h3>
+      <h3 className="text-sm font-semibold mb-3">角色有效性</h3>
       <div className="flex items-center gap-3 px-2 py-1 text-xs text-muted-foreground border-b mb-1">
-        <span className="w-24 font-medium">魂名</span>
+        <span className="w-24 font-medium">角色名</span>
         <span className="w-12 text-right">次数</span>
         <span className="flex-1">有效率</span>
         <span className="w-16 text-right">Tokens</span>

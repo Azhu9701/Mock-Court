@@ -94,7 +94,7 @@ export function SoulPanel({
               {showTooltip && (
                 <div className="absolute top-full left-0 mt-1 z-10 bg-background border rounded-lg shadow-lg p-3 text-xs whitespace-nowrap">
                   <p className="font-medium text-muted-foreground">主义主义坐标</p>
-                  <p className="text-muted-foreground mt-1">点击查看魂详情</p>
+                  <p className="text-muted-foreground mt-1">点击查看角色详情</p>
                 </div>
               )}
             </div>

@@ -22,7 +22,7 @@ export function SingleView({ messages }: SingleViewProps) {
       ))}
       {entries.length === 0 && (
         <p className="text-center text-muted-foreground py-10">
-          等待魂的回应...
+          等待角色回应...
         </p>
       )}
     </div>

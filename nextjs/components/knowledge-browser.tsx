@@ -17,7 +17,7 @@ import { ModeBarChart } from "@/components/mode-bar-chart";
 type TabKey = "cards" | "topics" | "search";
 
 const MODE_LABELS: Record<string, string> = {
-  single: "单魂",
+  single: "单角色",
   conference: "合议",
   debate: "辩论",
   relay: "接力",
@@ -164,7 +164,7 @@ export function KnowledgeBrowser() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleSearchKeyDown}
-            placeholder="搜索魂输出、综合报告、会话记录..."
+            placeholder="搜索角色输出、综合报告、会话记录..."
             className="w-full rounded-lg border bg-background pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
           />
         </div>
