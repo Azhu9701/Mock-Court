@@ -6,7 +6,6 @@ import { ConferenceView } from "@/components/conference-view";
 import { DebateView } from "@/components/debate-view";
 import { RelayView } from "@/components/relay-view";
 import { SingleView } from "@/components/single-view";
-import { LearnView } from "@/components/learn-view";
 import { Brain, Loader2, AlertTriangle, Key, ArrowRight, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -275,7 +274,11 @@ export function SessionRunner({ sessionId, mode, matchedSouls, taskTitle, onDone
             {mode === "debate" && <DebateView messages={messages} />}
             {mode === "relay" && <RelayView messages={messages} />}
             {mode === "single" && <SingleView messages={messages} />}
-            {mode === "learn" && <LearnView messages={messages} />}
+            {mode === "learn" && (
+              <div className="p-6 text-center text-muted-foreground">
+                学习模式已移除
+              </div>
+            )}
           </div>
         )}
       </div>

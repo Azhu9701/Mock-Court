@@ -1,4 +1,5 @@
 services:
+  # ── 反向代理 + HTTPS（Caddy）───────────────────────
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -6,21 +7,22 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     environment:
-      - DOMAIN=${DOMAIN}
+      - DOMAIN=${DOMAIN:?错误：必须设置 DOMAIN 环境变量，例如 DOMAIN=example.com}
     networks:
       - banner
 
+  # ── 认证服务（Tinyauth）────────────────────────────
   tinyauth:
     image: ghcr.io/steveiliop56/tinyauth:v3
     restart: unless-stopped
     environment:
-      - SECRET=${TINYAUTH_SECRET}
+      - SECRET=${TINYAUTH_SECRET:?错误：必须设置 TINYAUTH_SECRET}
       - APP_URL=https://auth.${DOMAIN}
-      - USERS=${TINYAUTH_ADMIN_USER}:${TINYAUTH_ADMIN_PASSWORD_HASH}
+      - USERS=${TINYAUTH_ADMIN_USER:?错误：必须设置 TINYAUTH_ADMIN_USER}:${TINYAUTH_ADMIN_PASSWORD_HASH:?错误：必须设置 TINYAUTH_ADMIN_PASSWORD_HASH}
       - GITHUB_CLIENT_ID=${TINYAUTH_GITHUB_CLIENT_ID:-}
       - GITHUB_CLIENT_SECRET=${TINYAUTH_GITHUB_CLIENT_SECRET:-}
       - GOOGLE_CLIENT_ID=${TINYAUTH_GOOGLE_CLIENT_ID:-}
@@ -28,6 +30,7 @@ services:
     networks:
       - banner
 
+  # ── Rust 后端 API ─────────────────────────────────
   api:
     build:
       context: .
@@ -35,27 +38,31 @@ services:
     restart: unless-stopped
     volumes:
       - api_data:/app/data
+      - ./config:/app/config:ro
+      - ./data/souls:/app/data/souls:ro
     environment:
-      - AI_RELAY_URL=${AI_RELAY_URL}
-      - OPENAI_API_KEY=${AGENT_PROXY_KEY}
-      - OPENAI_MODEL=gpt-4o
-      - DEEPSEEK_API_KEY=${AGENT_PROXY_KEY}
-      - DEEPSEEK_MODEL=deepseek-v4-pro
-      - CLAUDE_API_KEY=${AGENT_PROXY_KEY}
-      - CLAUDE_MODEL=claude-opus-4-7
+      - RUST_LOG=${RUST_LOG:-info}
+      - AI_RELAY_URL=${AI_RELAY_URL:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-chat}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4}
     networks:
       - banner
 
+  # ── Next.js 前端 ────────────────────────────────────
   web:
     build:
       context: .
       dockerfile: Dockerfile.web
       args:
-        - NEXT_PUBLIC_API_URL=https://api.${DOMAIN}
+        - NEXT_PUBLIC_API_URL=https://api.${DOMAIN}/api/v1
     restart: unless-stopped
     environment:
       - NODE_ENV=production
-      - NEXT_PUBLIC_API_URL=https://api.${DOMAIN}
+      - NEXT_PUBLIC_API_URL=https://api.${DOMAIN}/api/v1
     networks:
       - banner
 

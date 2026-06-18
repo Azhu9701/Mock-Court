@@ -58,8 +58,6 @@ export default function SoulDetailPage() {
         </div>
       )}
 
-      <IsmismRadar ismismCode={profile.ismism_code} />
-
       <SoulPrompt prompt={profile.summon_prompt} soulName={profile.name} />
 
       <SoulModelConfig soulName={profile.name} currentModel={profile.model} />

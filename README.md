@@ -30,7 +30,7 @@
 
 ### 前置条件
 
-- [Docker](https://www.docker.com/) 或 [OrbStack](https://orbstack.dev/)（推荐 Docker 模式）
+- [Docker](https://www.docker.com/) 或 [OrbStack](https://orbstack.dev/)（推荐）
 - 或 Rust 1.75+ + Node.js 18+ + pnpm（源码模式）
 
 ### Docker 一键启动（推荐）
@@ -40,15 +40,23 @@
 git clone https://github.com/Azhu9701/soul-banner-lite.git
 cd soul-banner-lite
 
-# 2. 一键构建并启动（首次约 15-20 分钟编译 Rust）
-bash scripts/start-local.sh
+# 2. 复制环境变量模板并编辑（填入 API Key 或 LM Studio 配置）
+cp .env.example .env
+# 编辑 .env 填入你的配置（详见下方「接入 AI」部分）
 
-# 3. 访问 http://localhost:8088
+# 3. 一键构建并启动（首次约 15-20 分钟编译 Rust）
+bash start-local.sh
+
+# 4. 访问 http://localhost:8088
 ```
 
-`start-local.sh` 会自动生成 `.env` 文件。首次启动后编辑 `.env` 填入 API Key 或本地 LM Studio 配置。
+启动后包含 5 个服务：Caddy（反向代理 + 端口 8088）、API（Rust 后端）、Web（Next.js 前端）、SearXNG（联网搜索）。
 
-启动后包含 5 个服务：Caddy（反向代理 + 端口 8088）、API（Rust 后端）、Web（Next.js 前端）、SearXNG（联网搜索）、Cloudflare Tunnel（可选公网访问）。
+**国内用户加速构建（可选）：**
+```bash
+# 使用国内 crates.io 镜像加速 Rust 编译
+DOCKER_BUILDKIT=1 docker compose -f docker-compose.local.yml build --build-arg USE_CN_MIRROR=true
+```
 
 **常用命令：**
 
@@ -63,7 +71,7 @@ docker compose -f docker-compose.local.yml up --build -d  # 重新构建
 ```bash
 cp .env.example .env    # 编辑 .env 填入 API Key 或 LM Studio 配置
 bash install.sh         # 一键安装：依赖检查、编译、构建、生成启动脚本
-bash start.sh           # 开发模式启动（终端 1：API 3096，终端 2：前端 3000）
+bash scripts/start-local.sh   # 源码模式启动（终端 1：API 3096，终端 2：前端 3000）
 ```
 
 ### 接入 AI
@@ -71,23 +79,28 @@ bash start.sh           # 开发模式启动（终端 1：API 3096，终端 2：
 **方式 A：本地算力（LM Studio — 零 API 费用）**
 
 1. 安装 [LM Studio](https://lmstudio.ai)，加载模型（推荐 Qwen3.5-14B）
-2. 启动本地服务器（默认端口 1234）
-3. 打开 `/models` 页面，选择「LM Studio」，填入模型名和地址
-4. 点击「设为活跃」
+2. 启动本地服务器（默认端口 1234，允许所有 IP 访问）
+3. 编辑 `.env`：确保 `LMSTUDIO_HOST=http://host.docker.internal:1234`（Docker 默认）
+4. 打开应用 `/models` 页面，选择「LM Studio」，填入模型名
+5. 点击「设为活跃」
+
+> 💡 提示：如果你不在 Docker 中运行，使用 `LMSTUDIO_HOST=http://<你的IP>:1234`。可用 `./update-ip.sh` 自动更新。
 
 **方式 B：云端 API（DeepSeek / Claude / OpenAI）**
 
-将 API Key 写入 `data/apikeys.json`（已 `.gitignore` 排除）：
+编辑 `.env`，填入对应 Key（三选一即可）：
 
-```json
-{
-  "deepseek": "your-deepseek-api-key",
-  "openai": "your-openai-api-key",
-  "claude": "your-claude-api-key"
-}
+```bash
+# 方式 A：分别配置各平台
+OPENAI_API_KEY=sk-your-openai-key
+DEEPSEEK_API_KEY=sk-your-deepseek-key
+CLAUDE_API_KEY=sk-your-claude-key
+
+# 方式 B：使用统一代理 Key
+AGENT_PROXY_KEY=sk-your-proxy-key
 ```
 
-或在 `/models` 页面选择对应 provider 并「设为活跃」。
+或在应用 `/models` 页面选择对应 provider 并「设为活跃」。
 
 ---
 

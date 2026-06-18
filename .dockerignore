@@ -8,6 +8,15 @@ scripts/
 harmonyos/
 dist/
 .env
+.env.local
 *.log
 **/node_modules/
 **/.next/
+
+# 运行时数据（构建时不应打包进镜像）
+data/archive/
+data/db/
+data/apikeys.json
+data/call-records.yaml
+data/registry.yaml
+data/wanminfan.db

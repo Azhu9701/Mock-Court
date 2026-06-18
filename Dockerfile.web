@@ -4,16 +4,18 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 
 WORKDIR /app
 COPY nextjs/package.json nextjs/pnpm-lock.yaml ./
-RUN pnpm install --no-frozen-lockfile --ignore-scripts && \
+RUN pnpm install --frozen-lockfile --ignore-scripts && \
     pnpm rebuild esbuild sharp
 
 COPY nextjs/ ./
 
-# turbopack.root: ".." 在 Docker WORKDIR /app 下指向 /，会导致构建问题
-RUN sed -i '/turbopack:/,/root:/d' next.config.ts 2>/dev/null || true
+# 删除 turbopack.root 配置，因为 Docker 中 WORKDIR /app 会导致 root 指向 /
+RUN if [ -f next.config.ts ]; then \
+      sed -i '/turbopack:/,/root:/d' next.config.ts 2>/dev/null || true; \
+    fi
 
-ARG NEXT_PUBLIC_API_URL=http://localhost:3096/api/v1
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_API_URL=/api/v1
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 
 RUN npx next build
 
