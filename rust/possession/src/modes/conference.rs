@@ -210,9 +210,11 @@ pub async fn run(
         .collect();
 
     if !synthesis_outputs.is_empty() {
+        let synthesis_noun = prompt_builder.domain().terms.get("synthesis_noun")
+            .cloned().unwrap_or_else(|| "辩证综合".into());
         let _ = system_tx.try_send(WsEvent {
             event_type: WsEventType::SynthesisStarted,
-            payload: "辩证综合开始...".into(),
+            payload: format!("{}开始...", synthesis_noun),
             reasoning_content: None,
             soul_name: None,
             seq: 0,

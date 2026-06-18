@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use foundation::{Result, ToolDefinition, ToolCall};
 
-const DEFAULT_MAX_TOOL_ROUNDS: usize = 3;
+const DEFAULT_MAX_TOOL_ROUNDS: usize = 5;
 const CODING_MAX_TOOL_ROUNDS: usize = 20;
 
 pub fn parse_soul_tools(tools_str: &str) -> Vec<String> {

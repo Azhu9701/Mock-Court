@@ -6,6 +6,8 @@ import remarkGfm from "remark-gfm";
 import { Brain, AlertCircle, CheckCircle2, Zap, ChevronRight, ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useCleanContent } from "@/hooks/use-clean-content";
+import { ToolCallList } from "@/components/tool-call-indicator";
+import type { ToolCallEvent } from "@/hooks/use-websocket";
 
 interface SoulPanelProps {
   name: string;
@@ -17,6 +19,7 @@ interface SoulPanelProps {
   isExpanded?: boolean;
   onToggleExpand?: () => void;
   roleLabel?: string;
+  toolCalls?: ToolCallEvent[];
 }
 
 export function SoulPanel({
@@ -29,6 +32,7 @@ export function SoulPanel({
   isExpanded = false,
   onToggleExpand,
   roleLabel,
+  toolCalls,
 }: SoulPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showTooltip, setShowTooltip] = useState(false);
@@ -129,6 +133,13 @@ export function SoulPanel({
           />
         </div>
       </div>
+
+      {/* 工具调用 */}
+      {toolCalls && toolCalls.length > 0 && (
+        <div className="px-3 py-1.5 border-b bg-amber-50/50">
+          <ToolCallList toolCalls={toolCalls} soulName={name} />
+        </div>
+      )}
 
       {/* 内容区域 */}
       <div

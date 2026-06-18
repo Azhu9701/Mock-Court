@@ -78,11 +78,11 @@ export function ConferenceView({ messages, synthesis, collisions, toolCalls }: C
 
       {/* 魂面板区 */}
       {isCourt ? (
-        <CourtLayout names={names} messages={messages} collisions={collisions} openModal={openModal} />
+        <CourtLayout names={names} messages={messages} collisions={collisions} toolCalls={toolCalls} openModal={openModal} />
       ) : (
         <div className="flex-1 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 p-3 overflow-hidden">
           {names.map((name) => (
-            <SoulPanelButton key={name} name={name} messages={messages} collisions={collisions} openModal={openModal} />
+            <SoulPanelButton key={name} name={name} messages={messages} collisions={collisions} toolCalls={toolCalls} openModal={openModal} />
           ))}
         </div>
       )}
@@ -113,11 +113,12 @@ export function ConferenceView({ messages, synthesis, collisions, toolCalls }: C
 
 /** 法庭布局——审判长上位，原告/被告分列两侧，证人居中 */
 function CourtLayout({
-  names, messages, collisions, openModal,
+  names, messages, collisions, toolCalls, openModal,
 }: {
   names: string[];
   messages: Record<string, SoulMessage>;
   collisions: CollisionEvent[];
+  toolCalls: ToolCallEvent[];
   openModal: (name: string) => void;
 }) {
   const judge = names.find(n => n === "仲裁法官");
@@ -133,7 +134,7 @@ function CourtLayout({
       {judge && (
         <div className="flex justify-center">
           <div className="w-full max-w-2xl">
-            <SoulPanelButton name={judge} messages={messages} collisions={collisions} openModal={openModal} />
+            <SoulPanelButton name={judge} messages={messages} collisions={collisions} toolCalls={toolCalls} openModal={openModal} />
           </div>
         </div>
       )}
@@ -145,12 +146,12 @@ function CourtLayout({
           <div className="text-xs text-muted-foreground font-medium px-1">原告方</div>
           {worker && (
             <div className="flex-1 min-h-0">
-              <SoulPanelButton name={worker} messages={messages} collisions={collisions} openModal={openModal} />
+              <SoulPanelButton name={worker} messages={messages} collisions={collisions} toolCalls={toolCalls} openModal={openModal} />
             </div>
           )}
           {plaintiff && (
             <div className="flex-1 min-h-0">
-              <SoulPanelButton name={plaintiff} messages={messages} collisions={collisions} openModal={openModal} />
+              <SoulPanelButton name={plaintiff} messages={messages} collisions={collisions} toolCalls={toolCalls} openModal={openModal} />
             </div>
           )}
         </div>
@@ -160,7 +161,7 @@ function CourtLayout({
           <div className="text-xs text-muted-foreground font-medium px-1">被告方</div>
           {defendant && (
             <div className="flex-1 min-h-0">
-              <SoulPanelButton name={defendant} messages={messages} collisions={collisions} openModal={openModal} />
+              <SoulPanelButton name={defendant} messages={messages} collisions={collisions} toolCalls={toolCalls} openModal={openModal} />
             </div>
           )}
         </div>
@@ -170,7 +171,7 @@ function CourtLayout({
       {expert && (
         <div className="flex justify-center">
           <div className="w-full max-w-xl">
-            <SoulPanelButton name={expert} messages={messages} collisions={collisions} openModal={openModal} />
+            <SoulPanelButton name={expert} messages={messages} collisions={collisions} toolCalls={toolCalls} openModal={openModal} />
           </div>
         </div>
       )}
@@ -179,7 +180,7 @@ function CourtLayout({
       {others.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
           {others.map(name => (
-            <SoulPanelButton key={name} name={name} messages={messages} collisions={collisions} openModal={openModal} />
+            <SoulPanelButton key={name} name={name} messages={messages} collisions={collisions} toolCalls={toolCalls} openModal={openModal} />
           ))}
         </div>
       )}
@@ -189,14 +190,16 @@ function CourtLayout({
 
 /** 魂面板按钮——复用逻辑 */
 function SoulPanelButton({
-  name, messages, collisions, openModal,
+  name, messages, collisions, toolCalls, openModal,
 }: {
   name: string;
   messages: Record<string, SoulMessage>;
   collisions: CollisionEvent[];
+  toolCalls: ToolCallEvent[];
   openModal: (name: string) => void;
 }) {
   const roleLabel = COURT_ROLE_LABELS[name];
+  const soulToolCalls = toolCalls.filter(tc => tc.soulName === name);
   return (
     <button
       type="button"
@@ -217,6 +220,7 @@ function SoulPanelButton({
         ismismCode={messages[name].ismismCode || ""}
         isExpanded={false}
         roleLabel={roleLabel}
+        toolCalls={soulToolCalls}
       />
     </button>
   );
