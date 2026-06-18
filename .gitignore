@@ -25,8 +25,6 @@ node_modules/
 **/apikeys.json
 **/call_records.yaml
 data/lmstudio.json
-data/db/
-rust/data/db/
 *.db
 *.db-shm
 *.db-wal
