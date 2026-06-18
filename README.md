@@ -59,8 +59,8 @@ Agent 会自动处理：
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/Azhu9701/soul-banner-lite.git
-cd soul-banner-lite
+git clone https://github.com/Azhu9701/Mock-Court.git
+cd Mock-Court
 
 # 2. 复制环境变量模板并编辑（填入 API Key 或 LM Studio 配置）
 cp .env.example .env
@@ -336,8 +336,8 @@ cors_origins:
 
 ## 社区与贡献
 
-- 提交 Issue：[GitHub Issues](https://github.com/Azhu9701/soul-banner-lite/issues)
-- 查看 CI 状态：[Actions](https://github.com/Azhu9701/soul-banner-lite/actions)
+- 提交 Issue：[GitHub Issues](https://github.com/Azhu9701/Mock-Court/issues)
+- 查看 CI 状态：[Actions](https://github.com/Azhu9701/Mock-Court/actions)
 - 请阅读 [Issue/PR 模板](.github/) 提交规范反馈
 
 ---
